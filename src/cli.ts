@@ -35,6 +35,7 @@ async function main(): Promise<Record<string, unknown>> {
       start: '[--offline] [--allow-jid JID]', status: '', stop: '',
       'pair qr': '', 'pair code': '--phone INTERNATIONAL_DIGITS',
       chats: '[--limit 100] [--offset 0]', chat: '--jid JID',
+      resolve: '--phone +INTERNATIONAL_DIGITS', contact: '--jid PN_OR_LID_JID',
       messages: '--jid JID [--limit 20] [--offset 0]', search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
       send: '--jid JID --key KEY --text TEXT', 'send-file': '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
       download: '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
@@ -97,7 +98,8 @@ async function main(): Promise<Record<string, unknown>> {
       else throw new Error('Use pair qr or pair code --phone INTERNATIONAL_DIGITS');
       break;
     case 'chats': only('limit', 'offset'); command = { command: 'chats', limit: Number(values.limit ?? 100), offset: Number(values.offset ?? 0) }; break;
-    case 'chat': case 'group': only('jid'); command = { command: action, jid: jid() }; break;
+    case 'chat': case 'group': case 'contact': only('jid'); command = { command: action, jid: jid() }; break;
+    case 'resolve': only('phone'); command = { command: action, phone: required(values.phone, 'phone') }; break;
     case 'messages': only('jid', 'limit', 'offset'); command = { command: action, jid: jid(), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
     case 'search': only('jid', 'query', 'limit', 'offset'); command = { command: action, query: required(values.query, 'query'), ...(values.jid ? { jid: values.jid } : {}), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
     case 'send': only('jid', 'key', 'text'); command = { command: action, jid: jid(), key: key(), text: required(values.text, 'text') }; break;

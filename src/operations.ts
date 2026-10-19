@@ -37,10 +37,11 @@ export async function perform(
   });
   try {
     const message = await invoke(record.messageId);
-    if (['send', 'send-file'].includes(operation.kind) && (!message || message.key.id !== record.messageId)) {
+    if (['send', 'send-file'].includes(operation.kind) && (!message || message.key.id !== record.messageId || message.key.remoteJid !== operation.jid || message.key.fromMe !== true)) {
       throw new Error('SDK did not return the expected message');
     }
-    if (message) store.observeMessage(message);
+    // An SDK return is local outgoing evidence, not an independently observed conversation.
+    if (message) store.observeMessage(message, false);
     const latest = store.request(key) ?? record;
     latest.attempt = 'sdk-returned';
     store.saveRequest(latest);

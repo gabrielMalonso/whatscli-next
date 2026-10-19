@@ -9,7 +9,7 @@ The [real-account feasibility validation](docs/validation.md) passed for pairing
 Requires **Node.js 24.18+ (24.x)** and **pnpm 10.24.0**. Linux was tested; macOS uses the same Unix socket design but has not been run on a Mac.
 
 ```sh
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 pnpm build
 node dist/src/cli.js help
 ```
@@ -59,7 +59,19 @@ For a restricted test session, start with `--allow-jid EXACT_JID`. An existing d
 
 ## Agent commands
 
-All examples below use fictional identifiers. Find the exact JID in stored conversations; sending and chat mutations require an already observed conversation. Display names are not recipients. PN, LID, and group JIDs remain distinct; a LID is never interpreted as a telephone number.
+All examples below use fictional identifiers. Use an exact observed conversation JID, or resolve an explicitly international phone before first contact. Display names are not recipients. PN, LID, and group JIDs remain distinct; a LID is never interpreted as a telephone number.
+
+```sh
+node dist/src/cli.js resolve --phone '+12025550101'
+node dist/src/cli.js contact --jid '12025550101@s.whatsapp.net'
+node dist/src/cli.js contact --jid '123450001@lid'
+```
+
+`resolve` requires an open WhatsApp connection and exactly `+` followed by 8–15 digits; no country/area code, punctuation or local-number interpretation is added. It uses the pinned Baileys `onWhatsApp` API. Only a single affirmative result for the exact requested PN JID yields `status: confirmed` and a usable `jid`. Missing, partial, ambiguous, different-identity or failed SDK responses yield `status: unknown`, with `jid: null`; an explicit negative yields `not-found`. The installed SDK filters out negative entries, so an empty result remains unknown. Inspect `data.status`, not just `ok`.
+
+Verification is persisted separately from chats and authorizes text/document first contact to that exact PN JID. It survives restart and is historical evidence, without an automatic expiry or claim that the phone is still assigned to the same person. A subsequent inconclusive/negative lookup replaces the prior verification. Resolution and an SDK send return do not create an observed conversation; archive/read still require an observed chat and a stored last-message key/timestamp. `--allow-jid` remains an exact restriction, including when a PN/LID association is known. Resolution does not grant authority to send to an unobserved LID alias.
+
+`contact` is a local query and works offline. It returns exact identifiers, `source: local`, `historical: true`, the exact JID's verification, and safe contact metadata (`name`, `notify`, `username`, `verifiedName`, `status`) with per-field source/observation time. Association evidence comes from SDK contact/history/mapping events, alternate message keys and the SDK mapping key store. `mapping.status` is `known`, `unknown` or `conflict`; contradictory associations in either direction are retained. An unknown/conflicting LID has `phone: null`. No association is inferred from names or LID digits. Conflicts block first contact even with a positive phone check. Legacy journal mappings retain their original times; legacy SDK key-store/alternate message-key evidence has `observedAt: null` when the original time is unavailable. Metadata availability and identity coverage remain partial.
 
 ```sh
 node dist/src/cli.js chats --limit 50 --offset 0
@@ -137,7 +149,7 @@ Every command returns one JSON object on stdout; errors return `ok: false` and a
 - `attempt: sdk-returned` means Baileys returned. `uncertain` means completion is unknown. Intent is durable before invocation.
 - `acceptance`, `delivery`, and `read` advance only on matching SDK status evidence; missing evidence remains `unknown`.
 - Group participant receipts remain separate event evidence. One participant's receipt is not proof that every participant received/read the message.
-- PN/LID alias mappings are retained as evidence; this initial CLI does not merge identities or correlate receipts across aliases.
+- PN/LID associations are queryable evidence; requests, history and receipts keep their original identities without alias merging. Repeating a send key uses the original intent without another lookup, even offline or after verification changes.
 - Chat snapshots are local observations, with unknown/pending fields when appropriate. The real test found read-state changes that reached the phone without promptly updating the client.
 - Message output contains text, keys/identifiers, content type and safe media metadata. Raw SDK objects, sender-key distributions, and message secrets stay in private storage.
 
@@ -168,4 +180,4 @@ Automated tests use fictional fixtures, offline daemons, local Unix sockets, and
 
 The [development roadmap](docs/roadmap.md) records the next capabilities and validation checkpoints. Contributions follow the independent-review workflow in [AGENTS.md](AGENTS.md).
 
-This first version covers one account per directory, observed recipients, local history/search, text/documents, media download, archive/read operations and lifecycle. New-recipient discovery, complete-history guarantees, group administration, multiple-account orchestration, plugins and draft workflows are outside its scope.
+This version covers one account per directory, exact recipient resolution, contact identity evidence, local history/search, text/documents, media download, archive/read operations and lifecycle. Complete-history guarantees, group administration, multiple-account orchestration, plugins and draft workflows are outside its scope. Phone resolution and first-contact sending have offline regression coverage; real 1:1/media validation remains a separate checkpoint.

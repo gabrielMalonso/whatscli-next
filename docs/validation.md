@@ -58,6 +58,16 @@ File sending and media downloading were tested with injected SDK/I/O boundaries,
 
 ## Live checkpoints
 
+### Recipient resolution feature — offline evidence
+
+The recipient-resolution change adds 13 offline regression tests (45 total passing), with `pnpm check` passing. Tests inject a partial SDK socket; no private session, real WhatsApp connection, messages or account mutations are used. The real-socket CLI tests use a short OS temporary path to remain below the Unix socket limit in long worktrees.
+
+Inspected the installed `baileys@7.0.0-rc14` code/types: `lib/Socket/socket.js` (`onWhatsApp` and its filtering of negative entries), `lib/Socket/chats.d.ts`, `lib/Types/Contact.d.ts`, `lib/Types/Events.d.ts`, `lib/Signal/lid-mapping.js`, and `lib/Utils/process-message.js`/`history.js`. Exact PN confirmation is separate from contact/mapping observations and from observed conversations. SDK mapping storage uses forward and reverse user-ID entries. Legacy key-store entries and stored alternate message-key identities lack observation times and are reported with null times; migration leaves the original messages/intents unchanged.
+
+Covered strict international input; missing/partial/negative/ambiguous/different-identity responses; unknown and conflicting PN/LID associations in both directions; event/metadata provenance; legacy evidence migration; verification after restart; offline lookup/network refusal; verified versus unverified first text/document contact; exact recipient restrictions; repeated/conflicting immutable keys; unchanged receipt identities; no synthetic chats from lookup/send return; and safe contact projections/error handling. No new SDK, dependency or SDK fork was introduced. Positive resolution and real first-contact text/document/receipt behavior remain unverified until checkpoint 06.
+
+### Baseline live evidence
+
 Account identifiers, conversation names, QR images, message data, and exact event evidence remain in the ignored private session directory. This report contains no account-specific examples.
 
 - QR pairing: the account owner confirmed scanning, and the probe observed an authenticated open connection with signed account credentials.

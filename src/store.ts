@@ -2,8 +2,10 @@ import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdi
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { BufferJSON, proto, toNumber } from 'baileys';
-import type { Chat, ChatUpdate, WAMessage, WAMessageKey } from 'baileys';
+import type { Chat, ChatUpdate, Contact, WAMessage, WAMessageKey } from 'baileys';
 import { chatOutput, messageOutput } from './output.js';
+import { contactJid, isLid, isPn } from './identity.js';
+import type { IdentitySource, RecipientCheck } from './identity.js';
 
 export const encode = (value: unknown): string => JSON.stringify(value, BufferJSON.replacer);
 // SQLite contains objects written by this process using the SDK's binary serializer.
@@ -30,6 +32,11 @@ type PendingChatState = {
   archived?: { key: string; value: boolean };
   unread?: { key: string; value: boolean };
 };
+
+type ContactMetadata = Partial<Record<'name' | 'notify' | 'username' | 'verifiedName' | 'status', {
+  value: string; source: IdentitySource; observedAt: number;
+}>>;
+type ContactRecord = { jid: string; source: IdentitySource; observedAt: number; metadata: ContactMetadata };
 
 function checkPrivate(path: string): void {
   const stat = lstatSync(path);
@@ -75,9 +82,29 @@ export class Store {
         );
         CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS identity_mappings (
+          pn TEXT NOT NULL, lid TEXT NOT NULL, source TEXT NOT NULL, observed_at INTEGER,
+          PRIMARY KEY(pn,lid,source)
+        );
+        CREATE INDEX IF NOT EXISTS identity_mapping_lid ON identity_mappings(lid);
       `);
       this.db.function('search_text', { deterministic: true }, value => typeof value === 'string'
         ? (messageOutput(decode<WAMessage>(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
+      // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
+      // Legacy key-store entries have no observation timestamp; do not invent one.
+      if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
+        for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='lid-mapping'").all()) {
+          const value = decode<{ pn?: unknown; lid?: unknown }>(String(row.json));
+          this.observeMapping(value.pn, value.lid, 'lid-mapping.update', Number(row.at));
+        }
+        for (const row of this.db.prepare("SELECT id,json FROM values_store WHERE category='lid-mapping'").all()) {
+          this.observeSdkMapping(String(row.id), decode<unknown>(String(row.json)), null);
+        }
+        for (const row of this.db.prepare("SELECT json_extract(json,'$.key') AS message_key FROM messages").iterate()) {
+          if (typeof row.message_key === 'string') this.observeMessageIdentities(decode<WAMessageKey>(row.message_key), null);
+        }
+        this.set('migration', 'contact-identity-v1', true);
+      });
     } catch (error) {
       this.lock.close();
       throw error;
@@ -121,6 +148,73 @@ export class Store {
           ? decode<ChatUpdate[]>(String(row.json)).map(chatOutput)
           : decode<unknown>(String(row.json)),
       }));
+  }
+
+  /** Keep every distinct association, including contradictions; never last-write-wins identity. */
+  observeMapping(pn: unknown, lid: unknown, source: IdentitySource, observedAt: number | null = Date.now()): void {
+    if (typeof pn !== 'string' || typeof lid !== 'string' || !isPn(pn) || !isLid(lid)) return;
+    this.db.prepare(`INSERT INTO identity_mappings VALUES (?,?,?,?) ON CONFLICT(pn,lid,source)
+      DO UPDATE SET observed_at=COALESCE(MAX(observed_at,excluded.observed_at),observed_at,excluded.observed_at)`)
+      .run(pn, lid, source, observedAt);
+  }
+
+  observeSdkMapping(id: string, value: unknown, observedAt: number | null = Date.now()): void {
+    // Baileys LIDMappingStore writes PN-user -> LID-user and LID-user_reverse -> PN-user.
+    // Both directions are evidence, so stale/conflicting reverse entries remain visible.
+    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return;
+    if (/^[1-9]\d*$/.test(id)) this.observeMapping(`${id}@s.whatsapp.net`, `${value}@lid`, 'baileys.key-store', observedAt);
+    else if (/^[1-9]\d*_reverse$/.test(id)) this.observeMapping(`${value}@s.whatsapp.net`, `${id.slice(0, -8)}@lid`, 'baileys.key-store', observedAt);
+  }
+
+  observeContact(contact: Partial<Contact>, source: IdentitySource): void {
+    const jid = contact.id;
+    if (!jid || (!isPn(jid) && !isLid(jid))) return;
+    const observedAt = Date.now();
+    const previous = this.get<ContactRecord>('contact', jid);
+    const metadata: ContactMetadata = { ...previous?.metadata };
+    for (const field of ['name', 'notify', 'username', 'verifiedName', 'status'] as const) {
+      if (typeof contact[field] === 'string') metadata[field] = { value: contact[field], source, observedAt };
+    }
+    this.set('contact', jid, { jid, source, observedAt, metadata } satisfies ContactRecord);
+    const pn = isPn(jid) ? jid : contact.phoneNumber;
+    const lid = isLid(jid) ? jid : contact.lid;
+    this.observeMapping(pn, lid, source, observedAt);
+    // Contradictory same-domain fields must be retained too, rather than hidden by id.
+    if (contact.phoneNumber && contact.lid) this.observeMapping(contact.phoneNumber, contact.lid, source, observedAt);
+  }
+
+  recipientCheck(jid: string): RecipientCheck | undefined { return this.get<RecipientCheck>('recipient-check', jid); }
+
+  private observeMessageIdentities(key: WAMessageKey, observedAt: number | null = Date.now()): void {
+    for (const [first, second] of [[key.remoteJid, key.remoteJidAlt], [key.participant, key.participantAlt]]) {
+      if (first && second) {
+        if (isPn(first)) this.observeMapping(first, second, 'message-key', observedAt);
+        else if (isLid(first)) this.observeMapping(second, first, 'message-key', observedAt);
+      }
+    }
+  }
+
+  contactView(jid: string) {
+    contactJid(jid);
+    const direct = this.db.prepare('SELECT pn,lid FROM identity_mappings WHERE pn=? OR lid=?').all(jid, jid);
+    // Include reverse conflicts at the other endpoint (PN -> LID -> another PN, or vice versa).
+    const evidence = this.db.prepare(`SELECT pn,lid,source,observed_at FROM identity_mappings
+      WHERE pn=? OR lid=? OR pn IN (SELECT pn FROM identity_mappings WHERE lid=?)
+      OR lid IN (SELECT lid FROM identity_mappings WHERE pn=?) ORDER BY pn,lid,source`).all(jid, jid, jid, jid)
+      .map(row => ({ pn: String(row.pn), lid: String(row.lid), source: String(row.source), observedAt: row.observed_at }));
+    const pns = new Set(evidence.map(row => row.pn));
+    const lids = new Set(evidence.map(row => row.lid));
+    const status = direct.length === 0 ? 'unknown' : pns.size === 1 && lids.size === 1 ? 'known' : 'conflict';
+    const pn = isPn(jid) ? jid : status === 'known' ? evidence[0]?.pn ?? null : null;
+    const lid = isLid(jid) ? jid : status === 'known' ? evidence[0]?.lid ?? null : null;
+    const identities = new Set([jid, ...(status === 'known' && pn && lid ? [pn, lid] : [])]);
+    return {
+      jid, source: 'local' as const, historical: true,
+      phone: pn ? `+${pn.split('@')[0]}` : null,
+      mapping: { status, pn, lid, evidence },
+      verification: this.recipientCheck(jid) ?? { status: 'unknown', source: null, observedAt: null },
+      contacts: [...identities].flatMap(id => { const record = this.get<ContactRecord>('contact', id); return record ? [record] : []; }),
+    };
   }
 
   chat(jid: string): Chat | undefined {
@@ -170,7 +264,7 @@ export class Store {
     return this.db.prepare('SELECT jid FROM chats ORDER BY observed_at DESC,jid LIMIT ? OFFSET ?').all(limit, offset).map(row => this.chatView(String(row.jid)));
   }
 
-  observeMessage(message: WAMessage): void {
+  observeMessage(message: WAMessage, chatObserved = true): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || !id || typeof fromMe !== 'boolean') { this.event('incomplete-message-key', {}); return; }
     const previous = this.message(message.key);
@@ -189,7 +283,8 @@ export class Store {
       jid, id, Number(fromMe), participantSlot, toNumber(merged.messageTimestamp ?? 0), encode(merged),
     );
     // Seeing a message proves the conversation exists, not its archive/read state.
-    if (!this.chat(jid)) this.observeChat({ id: jid });
+    if (chatObserved && !this.chat(jid)) this.observeChat({ id: jid });
+    this.observeMessageIdentities(message.key);
     const ciphertext = message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
     const unexplainedMissingContent = !message.message && message.messageStubType == null;
     if (ciphertext || unexplainedMissingContent) {

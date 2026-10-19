@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -11,7 +12,8 @@ import type { WAMessage } from 'baileys';
 
 process.umask(0o077);
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = (): string => mkdtempSync(join(process.cwd(), '.tmp', 'cli-'));
+// Keep real Unix socket paths below the platform limit, including in long worktree paths.
+const temporary = (): string => mkdtempSync(join(tmpdir(), 'whatscli-cli-'));
 const runFile = promisify(execFile);
 const jid = '12025550101@s.whatsapp.net';
 
@@ -40,6 +42,15 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
   assert.equal(first.ok, true);
   assert.equal(first.connection, 'offline');
   assert.equal(first.running, true);
+  const contact = await cli(directory, 'contact', '--jid', '123450001@lid');
+  assert.equal(contact.ok, true);
+  assert.equal((contact.data as { phone: unknown }).phone, null);
+  assert.equal((contact.data as { source: string }).source, 'local');
+  const resolution = await cli(directory, 'resolve', '--phone', '+12025550101');
+  assert.equal(resolution.ok, false);
+  assert.match(String(resolution.error), /not open/);
+  assert.equal((await cli(directory, 'resolve')).ok, false);
+  assert.equal((await cli(directory, 'resolve', '--phone', '12025550101')).ok, false);
   const again = await cli(directory, 'start', '--offline');
   assert.equal(again.alreadyRunning, true);
   assert.equal(again.pid, first.pid);

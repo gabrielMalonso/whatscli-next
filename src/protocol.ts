@@ -1,9 +1,11 @@
-import { recipientJid } from './identity.js';
+import { contactJid, internationalPhone, recipientJid } from './identity.js';
 
 export type Command =
   | { command: 'status' | 'resync' | 'reconnect' | 'drop-connection' | 'pair-qr' | 'stop' }
   | { command: 'chats'; limit: number; offset: number }
   | { command: 'chat'; jid: string }
+  | { command: 'contact'; jid: string }
+  | { command: 'resolve'; phone: string }
   | { command: 'messages'; jid: string; limit: number; offset: number }
   | { command: 'search'; query: string; jid?: string; limit: number; offset: number }
   | { command: 'group'; jid: string }
@@ -36,6 +38,8 @@ export function parseCommand(value: Record<string, unknown>): Command {
       return { command: value.command };
     case 'chats': return { command: value.command, limit: integer(value.limit ?? 100, 1, 100), offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER) };
     case 'chat': return { command: value.command, jid: recipientJid(string(value.jid, 'jid')) };
+    case 'contact': return { command: value.command, jid: contactJid(string(value.jid, 'jid')) };
+    case 'resolve': return { command: value.command, phone: internationalPhone(string(value.phone, 'phone')) };
     case 'messages': return { command: value.command, jid: recipientJid(string(value.jid, 'jid')), limit: integer(value.limit ?? 20, 1, 100), offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER) };
     case 'search': return {
       command: value.command, query: string(value.query, 'query'),
