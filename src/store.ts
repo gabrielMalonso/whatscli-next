@@ -124,11 +124,12 @@ export class Store {
       });
       // Old runtimes journaled deletes without applying them. Recover the evidence privately.
       if (!this.get<boolean>('migration', 'message-deletions-v1')) this.transaction(() => {
+        // Snapshot raw provenance before replay can redact a notification itself.
+        const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
+          .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
         for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='messages.delete' ORDER BY sequence").all()) {
           this.applyDeleteEvent(decode<BaileysEventMap['messages.delete']>(String(row.json)), Number(row.at), true);
         }
-        const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
-          .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
         const derivedTargets = new Set<string>();
         for (const { message } of messages) {
           const protocol = normalizeMessageContent(message.message)?.protocolMessage;

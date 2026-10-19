@@ -412,7 +412,7 @@ test('legacy delete journals migrate once without exposing retained audit data',
 });
 
 test('legacy derived administrative stubs cannot override raw direction evidence during migration or later status updates', async () => {
-  for (const participant of [null, pn]) {
+  for (const participant of [null, pn]) for (const deletedNotification of [false, true]) {
     const directory = temporary();
     const store = new Store(directory);
     const incoming = { remoteJid: group, id: 'collision', fromMe: false, participant: pn };
@@ -426,6 +426,7 @@ test('legacy derived administrative stubs cannot override raw direction evidence
     store.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(group, 'notification', 1, '', 1700000000, encode(notification));
     store.db.prepare('UPDATE messages SET json=? WHERE jid=? AND id=? AND from_me=1').run(
       encode({ ...message(own), messageStubType: proto.WebMessageInfo.StubType.REVOKE }), group, 'collision');
+    if (deletedNotification) store.event('messages.delete', { keys: [notification.key] });
     store.set('migration', 'message-deletions-v1', null);
     store.close();
     const reopened = new Store(directory);
@@ -436,7 +437,17 @@ test('legacy derived administrative stubs cannot override raw direction evidence
       reopened.updateMessage({ key: own, update: { status: proto.WebMessageInfo.Status.READ } });
       assert.equal(reopened.message(own)?.message?.conversation, 'Fictional original body');
       assert.equal(reopened.deletion(own), undefined);
+      if (deletedNotification) {
+        assert.equal(reopened.message(notification.key)?.message, null);
+        assert.equal(reopened.deletion(notification.key)?.source, 'messages.delete');
+      }
     } finally { reopened.close(); }
+    const again = new Store(directory);
+    try {
+      assert.equal(again.message(own)?.message?.conversation, 'Fictional original body');
+      assert.equal(again.message(incoming)?.message?.conversation ?? null, participant ? null : 'Fictional original body');
+      if (deletedNotification) assert.equal(again.message(notification.key)?.message, null);
+    } finally { again.close(); }
   }
 });
 
