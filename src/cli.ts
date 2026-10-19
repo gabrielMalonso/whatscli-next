@@ -18,6 +18,7 @@ async function main(): Promise<Record<string, unknown>> {
     mime: { type: 'string' }, caption: { type: 'string' }, out: { type: 'string' }, id: { type: 'string' },
     participant: { type: 'string' }, 'from-me': { type: 'string' }, query: { type: 'string' },
     limit: { type: 'string' }, offset: { type: 'string' }, after: { type: 'string' }, phone: { type: 'string' },
+    unread: { type: 'string' }, archived: { type: 'string' },
   } });
   const action = positionals[0] ?? 'help';
   const directory = dataDirectory(values['data-dir']);
@@ -34,7 +35,7 @@ async function main(): Promise<Record<string, unknown>> {
     commands: {
       start: '[--offline] [--allow-jid JID]', status: '', stop: '',
       'pair qr': '', 'pair code': '--phone INTERNATIONAL_DIGITS',
-      chats: '[--limit 100] [--offset 0]', chat: '--jid JID',
+      chats: '[--unread true|false|unknown] [--archived true|false|unknown] [--limit 100] [--offset 0]', chat: '--jid JID',
       resolve: '--phone +INTERNATIONAL_DIGITS', contact: '--jid PN_OR_LID_JID',
       messages: '--jid JID [--limit 20] [--offset 0]', search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
       send: '--jid JID --key KEY --text TEXT', 'send-file': '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
@@ -97,7 +98,17 @@ async function main(): Promise<Record<string, unknown>> {
       else if (positionals[1] === 'code') { only('phone'); command = { command: 'pair-code', phone: required(values.phone, 'phone') }; }
       else throw new Error('Use pair qr or pair code --phone INTERNATIONAL_DIGITS');
       break;
-    case 'chats': only('limit', 'offset'); command = { command: 'chats', limit: Number(values.limit ?? 100), offset: Number(values.offset ?? 0) }; break;
+    case 'chats': {
+      only('limit', 'offset', 'unread', 'archived');
+      command = { command: 'chats', limit: Number(values.limit ?? 100), offset: Number(values.offset ?? 0) };
+      for (const field of ['unread', 'archived'] as const) {
+        const state = values[field];
+        if (state === undefined) continue;
+        if (!['true', 'false', 'unknown'].includes(state)) throw new Error(`--${field} must be true, false or unknown`);
+        command[field] = state === 'unknown' ? state : state === 'true';
+      }
+      break;
+    }
     case 'chat': case 'group': case 'contact': only('jid'); command = { command: action, jid: jid() }; break;
     case 'resolve': only('phone'); command = { command: action, phone: required(values.phone, 'phone') }; break;
     case 'messages': only('jid', 'limit', 'offset'); command = { command: action, jid: jid(), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;

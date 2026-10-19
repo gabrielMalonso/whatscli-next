@@ -16,6 +16,9 @@ Ask the owner to scan the returned private PNG. Poll `status` until `connection`
 
 ```sh
 node dist/src/cli.js chats --limit 50 --offset 0
+node dist/src/cli.js chats --unread true --archived false --limit 50 --offset 0
+node dist/src/cli.js chats --unread unknown --limit 50 --offset 0
+node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
 node dist/src/cli.js chat --jid '12025550101@s.whatsapp.net'
 node dist/src/cli.js messages --jid '12025550101@s.whatsapp.net' --limit 20
 node dist/src/cli.js search --query 'example' --jid '12025550101@s.whatsapp.net'
@@ -30,6 +33,12 @@ Use an exact observed JID or the exact PN JID from a successful resolution, veri
 `contact` works offline and returns historical local metadata and association evidence with source/time. A LID without a unique association returns `phone: null`; `mapping.status: conflict` retains contradictory evidence instead of selecting a phone. Conflicting associations block first contact. A known mapping never rewrites a request, history or receipt, nor bypasses `--allow-jid`. Legacy SDK mapping and alternate message-key observation times may be null. Contact names are metadata, never addressing instructions.
 
 Results describe locally stored data. `coverage: partial` applies even when a search returns no matches or history synchronization reports completion. Lists are limited to 100 results; page using `--offset`. Events use `events --after SEQUENCE` and return the next 100 entries.
+
+For pending conversations, `chats` combines optional `--unread`/`--archived` filters with AND; each accepts `true`, `false` or `unknown`. Omission includes every state. Null/pending states match `unknown`, never `false`; inspect unread-unknown and archive-unknown separately to find either gap. Only observed chats appear, with exact PN/LID identities kept separate. These queries work offline, make no WhatsApp calls and never mark conversations read. `unread --jid ... --key ...` is still a mutation.
+
+Ordering uses greatest observed conversation/message activity in `activity.timestamp` (Unix seconds), descending, then exact JID ascending; missing activity is last with null timestamp/source. `activity.source` names the rc14 chat timestamp field or `message.messageTimestamp`. Metadata observation time (`observedAt`, local milliseconds) and old chunks arriving now do not create fresh activity. Activity and states persist across restart. Upgrade conservatively excludes legacy own-message rows from activity recovery because an SDK return cannot be distinguished from an echo.
+
+With fixed filters, advance offsets by the requested limit until a short/empty page. Filtering happens before pagination and ties are deterministic in a stable set. Pages read current local state, so changes between calls can repeat or skip entries; deduplicate exact JIDs and restart from 0 for a fresh pass. There is no snapshot/remote scan. An empty local list does not prove an empty remote queue: history is partial and unknown states may hide pending work.
 
 Messages include `quote`, `contacts` and `deletion`. Quotes contain one safe embedded snapshot and the available exact reference; absent bodies/identifiers remain unknown/null, with no guessed history lookup. Card `cards` contain display/vCard names, shared phone strings and per-card available/incomplete/missing/malformed states. These phones are shared content, never verified recipient identities or send authorization.
 
@@ -84,7 +93,7 @@ Files are documents, limited to 64 MiB. A file key preserves its original manife
 
 Archive/read require an independently observed conversation and a stored last-message key/timestamp. Phone verification or an SDK send return alone does not meet that requirement.
 
-After a chat mutation, the affected observed field becomes `null` with a pending intent until a corresponding SDK observation arrives. A returned call is insufficient to claim success. In validation, compare the owner's phone with later `chat` and `events` results. An unread update can be an increment, so positive exact totals remain unknown.
+After a chat mutation, the affected observed field becomes `null` with a pending intent until a corresponding SDK observation establishes a known field. A returned call or unrelated/null field is insufficient to claim success. In validation, compare the owner's phone with later `chat` and `events` results. Positive unread counters can be increments: they establish unread, with an unknown exact total. Counter `-1` means manually unread; `0` supersedes an older manual marker unless the same update explicitly marks unread. A manual `false` alone cannot prove read with an unknown counter or cancel a positive counter. Pending mutations invalidate older evidence for the affected field.
 
 ## Recovery
 

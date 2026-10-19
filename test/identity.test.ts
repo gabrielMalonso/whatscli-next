@@ -178,11 +178,13 @@ test('resolve persists exact verification; first send has no invented chat or al
     const resolved = await f.runtime.execute({ command: 'resolve', phone });
     assert.equal((resolved as { jid: string }).jid, pn);
     assert.equal(await f.runtime.execute({ command: 'chat', jid: pn }), null);
+    assert.deepEqual(await f.runtime.execute({ command: 'chats', limit: 100, offset: 0 }), []);
     f.emit('lid-mapping.update', { pn, lid });
     await assert.rejects(f.runtime.execute({ command: 'send', jid: lid, key: 'lid-send', text: 'Example' }), /verification/);
     const sent = await f.runtime.execute({ command: 'send', jid: pn, key: 'first-send', text: 'Example' });
     assert.equal((sent as { attempt: string }).attempt, 'sdk-returned');
     assert.equal(await f.runtime.execute({ command: 'chat', jid: pn }), null);
+    assert.deepEqual(await f.runtime.execute({ command: 'chats', unread: 'unknown', limit: 100, offset: 0 }), []);
     await assert.rejects(f.runtime.execute({ command: 'archive', jid: pn, key: 'archive', value: true }), /observed conversation/);
     await assert.rejects(f.runtime.execute({ command: 'mark-read', jid: pn, key: 'read', value: true }), /observed conversation/);
     assert.deepEqual(f.counts(), { lookups: 1, sends: 1, patches: 0 });

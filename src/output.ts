@@ -97,15 +97,19 @@ export function messageOutput(message: WAMessage, options: {
   };
 }
 
+export function isUnreadCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1;
+}
+
 /** Chat history may embed full SDK messages; list only the fields the agent can use. */
 export function chatOutput(chat: ChatUpdate) {
-  const count = chat.unreadCount;
+  const count = isUnreadCount(chat.unreadCount) ? chat.unreadCount : null;
   return {
     jid: chat.id ?? null,
     name: chat.name ?? null,
-    archived: chat.archived ?? null,
-    unread: chat.markedAsUnread === true ? true : typeof count === 'number' ? count !== 0 : chat.markedAsUnread ?? null,
+    archived: typeof chat.archived === 'boolean' ? chat.archived : null,
+    unread: chat.markedAsUnread === true ? true : count !== null ? count !== 0 : null,
     // Positive SDK updates can be increments rather than complete counts.
-    unreadCount: typeof count === 'number' && count > 0 ? null : count ?? null,
+    unreadCount: count !== null && count > 0 ? null : count,
   };
 }

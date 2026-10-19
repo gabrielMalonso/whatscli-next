@@ -75,6 +75,9 @@ Verification is persisted separately from chats and authorizes text/document fir
 
 ```sh
 node dist/src/cli.js chats --limit 50 --offset 0
+node dist/src/cli.js chats --unread true --archived false --limit 50 --offset 0
+node dist/src/cli.js chats --unread unknown --limit 50 --offset 0
+node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
 node dist/src/cli.js chat --jid '12025550101@s.whatsapp.net'
 node dist/src/cli.js messages --jid '12025550101@s.whatsapp.net' --limit 20 --offset 0
 node dist/src/cli.js search --query 'example text' --jid '12025550101@s.whatsapp.net'
@@ -82,6 +85,12 @@ node dist/src/cli.js group --jid '120363000000000001@g.us'
 ```
 
 Search examines stored text/captions, not SDK key material. It matches literal substrings with Unicode case normalization; `%` and `_` are literal. Omit `--jid` to search all locally stored conversations. Lists return up to 100 items per request; use `--offset` for the next page. History coverage is always partial.
+
+`chats` accepts independent `--unread true|false|unknown` and `--archived true|false|unknown` filters, combined with AND. Omit a filter to include every state. `unknown` matches a null field, including a pending mutation; it is never included in `false`. Query both kinds of unknown separately when inspecting gaps (the same chat may appear in both). `unread` remains the existing mutation command; listing and `chat --jid EXACT_JID` only read local observations, without marking anything read or contacting WhatsApp. Verified recipients and SDK send returns alone do not enter this list. PN/LID identities remain separate.
+
+Chats are ordered by `activity.timestamp` descending, then exact JID in binary ascending order; missing activity comes last. Activity is the greatest positive, safe Unix timestamp **in seconds** observed from the installed rc14 fields `conversationTimestamp`, `lastMsgTimestamp`, `lastMessageRecvTimestamp`, an exact-chat embedded message, or an independently observed message's `messageTimestamp`. `activity.source` identifies the field (`chat.FIELD` or `message.messageTimestamp`); equal timestamps select the lexically first source. Missing/invalid timestamps stay `{timestamp: null, source: null}`. `observedAt` remains the local observation time in milliseconds, independent of activity. Renames, state updates, receipts/edits and an old history chunk arriving now cannot bump activity by their arrival time. Activity survives deletion of message bodies and contains no preview. Upgrade recovers legacy chat fields and stored incoming timestamps; legacy own-message rows cannot distinguish SDK returns from independent echoes and are conservatively omitted from that recovery.
+
+Filters apply **before** limit/offset. Keep filters fixed and request offsets `0`, `limit`, `2*limit`, … until a short/empty page. A stable local set has no tie-related duplicates or omissions, including chats without activity. Each page reads current local state: new activity, state changes, additions or removal between pages can shift offsets and cause repeats or omissions. Deduplicate by exact JID and restart from offset 0 when a fresh pass is needed. There is no snapshot, remote scan or completeness guarantee. An empty local page/list does **not** prove that WhatsApp has no pending conversations; unavailable history and unknown states remain gaps.
 
 Message results add these fields:
 
@@ -147,7 +156,7 @@ node dist/src/cli.js read      --jid '12025550101@s.whatsapp.net' --key 'example
 node dist/src/cli.js unread    --jid '12025550101@s.whatsapp.net' --key 'example-unread-001'
 ```
 
-These use `chatModify` and a stored last-message key/timestamp. Marking a conversation read does not separately send message read receipts. The affected public field becomes `null` with a `pending` intent until a corresponding fresh SDK observation arrives. Unrelated changes do not make an old read counter current. A positive SDK unread update establishes `unread: true`, but its exact total is unknown and returned as `unreadCount: null`; the SDK can send increments rather than absolute totals.
+These use `chatModify` and a stored last-message key/timestamp. Marking a conversation read does not separately send message read receipts. The affected public field becomes `null` with a `pending` intent until a corresponding fresh SDK observation establishes a known field. Unrelated, missing and neutral/null fields do not confirm it or make an old counter current. A positive SDK unread update establishes `unread: true`, but its exact total is unknown and returned as `unreadCount: null`; the SDK can send increments rather than absolute totals. Counter `-1` means manually unread; `0` means read unless the same update explicitly marks it unread. A fresh `0`/`-1` supersedes an older manual marker. `markedAsUnread: true` establishes unread; `false` clears only that manual marker and cannot erase a positive counter or prove read when the counter is unknown. Fresh evidence after a pending mutation replaces the affected stale evidence. Archive observations never confirm reading, nor do read observations confirm archiving.
 
 Diagnostics and event inspection:
 
