@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
 import { object } from './protocol.js';
+import type { Command } from './protocol.js';
 import { socketPath } from './paths.js';
 
 export class RpcError extends Error {
@@ -8,7 +9,7 @@ export class RpcError extends Error {
 }
 
 /** One command per connection. A timeout never causes an automatic command retry. */
-export function rpc(directory: string, command: Record<string, unknown>, timeoutMs = 120000): Promise<Record<string, unknown>> {
+export function rpc(directory: string, command: Command, timeoutMs = 120000): Promise<Record<string, unknown>> {
   const path = socketPath(directory);
   const id = randomUUID();
   const line = JSON.stringify({ ...command, id }) + '\n';

@@ -416,7 +416,7 @@ test('deleted media cannot reach download/reupload or SDK getMessage, and no fil
       caption: 'Fictional private caption', mediaKey: Buffer.from('PRIVATE_MEDIA_KEY'), directPath: '/private',
     } } }] });
     f.emit('messages.delete', { keys: [message().key] });
-    await assert.rejects(f.runtime.execute({ command: 'download', jid: pn, id: 'same-id', path }), /unavailable after deletion/);
+    await assert.rejects(f.runtime.execute({ command: 'download', jid: pn, messageId: 'same-id', path }), /unavailable after deletion/);
     assert.equal(f.reuploads(), 0);
     assert.equal(existsSync(path), false);
     assert.equal(await f.getMessage(message().key), undefined);

@@ -43,6 +43,8 @@ node dist/src/cli.js stop
 node dist/src/cli.js start
 ```
 
+`stop` keeps the control socket available with `recovery.state: stopping` until SDK cleanup and database closure release the writer lock. A successful stopped result permits the next runtime to start. If shutdown exceeds the CLI's 10-second wait, it returns an error without killing the process; inspect `status` and wait for cleanup before starting again. An older daemon may close its socket before cleanup ends: during an upgrade, confirm that its previously reported PID has exited normally before starting the updated runtime. `start` does not replace or upgrade an already-running daemon.
+
 One data directory holds one account. Default locations:
 
 - Linux: `$XDG_STATE_HOME/whatscli-next`, or `~/.local/state/whatscli-next`.
@@ -226,6 +228,8 @@ agent → CLI → private Unix socket → daemon → Baileys
 ```
 
 Only the daemon owns the WhatsApp connection and writes SQLite. The retained JSONL probe uses the same runtime and must not run against an active daemon's directory. A lifetime SQLite lock enforces one writer and is released by the OS after a crash. Startup recovers an owned private stale socket; it preserves an active socket or an unfamiliar file. Use a shorter data-directory path if the complete Unix socket path exceeds 100 bytes.
+
+The private socket and JSONL probe use a flat request with `id` reserved for request/response correlation. A download requires a separate `messageId`, for example `{"id":"rpc-example","command":"download","jid":"12025550101@s.whatsapp.net","messageId":"EXAMPLE_MESSAGE_ID","path":"/private/example-download.txt","fromMe":true}`. Missing `messageId` is rejected; correlation is never a media target or fallback. CLI `download --id MESSAGE_ID` and public message projection IDs are unchanged. Low-level callers must use the explicit field; rebuild and gracefully restart the daemon alongside the updated CLI, since an older daemon cannot interpret this download request correctly.
 
 The directory must be owned by the current user with private permissions (0700); credentials, databases, logs, socket, QR images, and downloaded files use 0600. Existing insecure state is rejected rather than silently repaired. The database file is `probe.sqlite`, retained from the validation program. Authentication uses the SDK's binary serializer and atomic key batches, with durable SQLite commits.
 

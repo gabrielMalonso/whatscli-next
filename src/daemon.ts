@@ -43,9 +43,9 @@ async function main(): Promise<void> {
       const work = (async () => {
         let id: string | null = null;
         try {
-          if (stopping) throw new Error('Daemon is stopping');
           const request = parseRequest(line);
           id = request.id;
+          if (stopping && request.command.command !== 'status') throw new Error('Daemon is stopping');
           const data = await runtime.execute(request.command);
           respond({ id, ok: true, data, running: true, pid: process.pid, ...runtime.snapshot() });
           if (request.command.command === 'stop') void shutdown();
@@ -58,12 +58,13 @@ async function main(): Promise<void> {
   function shutdown(): Promise<void> {
     if (stopping) return stopping;
     stopping = (async () => {
-      if (server.listening) server.close();
       // Cancel network waits first; their uncertain results are persisted before closing SQLite.
       await runtime.stop();
       await Promise.allSettled([...active]);
-      for (const client of clients) client.destroy();
       await runtime.close();
+      // Keep status reachable until SDK cleanup and the writer lock are both released.
+      if (server.listening) server.close();
+      for (const client of clients) client.destroy();
       try {
         const stat = lstatSync(path);
         if (stat.isSocket() && stat.ino === socketInode && stat.uid === process.getuid?.()) unlinkSync(path);
