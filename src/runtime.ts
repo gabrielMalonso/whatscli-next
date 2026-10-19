@@ -347,6 +347,8 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new Error('Idempotency key already used with different arguments');
           return previous;
         }
+        const preparing = sendPreparation.pending.get(command.key);
+        if (preparing) { await preparing; return execute(command); }
         validateTarget(command.jid, true);
         const { buffer, bytes, sha256 } = await prepareFile(command.path);
         return perform(store, command.key, { kind: 'send-file', jid: command.jid, path: command.path, mime: command.mime, caption: command.caption, bytes, sha256 },

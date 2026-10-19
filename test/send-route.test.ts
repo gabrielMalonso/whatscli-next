@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
@@ -390,11 +390,14 @@ test('concurrent file keys keep the original manifest even if the input path cha
     assert.equal(f.queries(), 1);
     writeFileSync(path, 'Changed bytes');
     const second = f.runtime.execute(input);
+    renameSync(path, path + '.moved');
+    const third = f.runtime.execute(input);
     wait.release();
     const original = await first as RequestRecord;
     const repeated = await second as RequestRecord;
     assert.equal(original.messageId, repeated.messageId);
     assert.deepEqual(original.operation, repeated.operation);
+    assert.deepEqual((await third as RequestRecord).operation, original.operation);
     assert.equal(f.queries(), 1);
     assert.equal(f.sends.length, 1);
     assert.deepEqual(await f.runtime.execute(input), original);
