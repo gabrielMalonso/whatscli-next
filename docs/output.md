@@ -15,6 +15,8 @@ Formatting runs in the CLI after the original response. It cannot re-execute an 
 
 The envelope is unchanged: `ok`, errors/codes, RPC correlation `id`, running/connection state, local source, partial coverage, unknown app state, pending notifications and historical issues. The additive `recovery` and `receiveContinuity` fields are retained verbatim in both modes; see [the recovery contract](../README.md#recovery). Errors are unchanged. A successful command can still describe an uncertain result.
 
+`status.data.build: {fingerprint: "sha256:…" | null}` is retained verbatim in full/compact, including status returned by `start`/`alreadyRunning` and the JSONL probe. It belongs only to status data; message/send/request projections and envelopes gain no repeated build metadata. It is the responding process's embedded build label, never supplied by the client. An absent field from an older daemon stays absent; a missing connection still returns `running: false` without inventing build information. See [provenance limits](release.md#identify-startup-and-upgrade-without-losing-the-session).
+
 | Command | Compact differences from full |
 | --- | --- |
 | `chats`, `chat` | Omit metadata `observedAt`, null `name` and empty `pending`. Keep exact JID, archived/unread states, unread count and activity timestamp/source. Nonempty pending intents retain exact keys and boolean values. |

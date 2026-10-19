@@ -30,6 +30,8 @@ node dist/src/cli.js pair qr
 
 `start` launches the background daemon and returns when its local socket is ready. WhatsApp connects asynchronously. Wait until `status.data.qrAvailable` is true before requesting a QR. `pair qr` returns a private local PNG path; the agent can show that image to the account owner, who scans it under WhatsApp → Linked devices → Link a device. Request another image if it expires. No phone number is needed.
 
+`status.data.build.fingerprint` identifies the daemon's emitted JavaScript build, captured in its loaded code. Compare it with the fingerprint printed by the intended `pnpm build`. A newer CLI/build does not change a running daemon: `start` with `alreadyRunning: true` returns the existing process's identity. `null` means an unstamped build; an absent field means the answering daemon predates this diagnostic. Neither identifies the current checkout. See [build provenance and upgrade limits](docs/release.md#identify-startup-and-upgrade-without-losing-the-session).
+
 Alternatively:
 
 ```sh
@@ -194,14 +196,14 @@ Events are paginated by sequence (100 per request). The diagnostic `drop-connect
 
 `status` and successful daemon/probe responses add `recovery` and `receiveContinuity` to the existing envelope, identically in full and compact output. Existing `connection` retains its coarse connection status; use `recovery.state` for the current runtime decision:
 
-| `recovery.state` | Meaning |
+| `recovery.state` | Meaning and next step |
 | --- | --- |
-| `offline` | Intentionally offline; no network attempts. |
-| `connecting` | Initial connection, automatic retry, or manual replacement/cleanup in progress. |
-| `open` | SDK reported open; this says nothing about complete receiving/decryption. |
-| `waiting-retry` | One retry timer is scheduled. |
-| `intervention-required` | Automatic recovery stopped; inspect `reason` and `code`. |
-| `stopping` | Shutdown has started; no further connections will open. |
+| `offline` | Intentionally offline; local queries work. Network access requires a normal stop and start without `--offline`. |
+| `connecting` | Initial connection, retry, or replacement/cleanup in progress; wait for its outcome. |
+| `open` | SDK reported open; inspect independent observations/receipts for receiving or delivery evidence. |
+| `waiting-retry` | One retry is scheduled at `nextRetryAt`; allow automatic recovery to proceed. |
+| `intervention-required` | Automatic recovery stopped; investigate `reason`/`code` before explicit reconnect or restart. |
+| `stopping` | Cleanup is in progress; wait for successful stop and process exit before starting new code. |
 
 `recovery` always includes `reason`, `code`, `attempt` and `nextRetryAt`. Unknown/inapplicable values are null. `attempt` counts automatic retries since the last open/manual reconnect: while waiting it names the upcoming retry, while connecting it names the retry being made; initial/manual attempts are zero. `nextRetryAt` is a local Unix time in milliseconds, present only while waiting. Opens reset current recovery; `issues` remains historical and may include `connection-stopped-review-required` from a prior failure.
 
