@@ -168,14 +168,21 @@ test('upgrade recovers timestamp fields and incoming history only for observed c
   db.prepare('INSERT INTO chats VALUES (?,?,?)').run(pn, encode(legacy), 999999);
   db.prepare('INSERT INTO chats VALUES (?,?,?)').run(lid, encode({ id: lid }), 999999);
   const legacyLong = proto.Conversation.fromObject({ id: '12025550103@s.whatsapp.net', lastMsgTimestamp: '400' });
-  db.prepare('INSERT INTO chats VALUES (?,?,?)').run(legacyLong.id!, encode(legacyLong), 999999);
+  db.prepare('INSERT INTO chats VALUES (?,?,?)').run('12025550103@s.whatsapp.net', encode(legacyLong), 999999);
+  for (const [jid, timestamp] of [['12025550104@s.whatsapp.net', '2147483648'], ['12025550105@s.whatsapp.net', '4294967496']] as const) {
+    // The old observeChat spread loses the protobuf toJSON method and stores Long words.
+    const legacyPlain = { ...proto.Conversation.fromObject({ id: jid, conversationTimestamp: timestamp }) };
+    db.prepare('INSERT INTO chats VALUES (?,?,?)').run(jid, encode(legacyPlain), 999999);
+  }
   for (const [jid, id, fromMe, timestamp] of [[pn, 'received', false, 300], [pn, 'returned', true, 900], ['12025550102@s.whatsapp.net', 'unobserved', true, 999]] as const) {
     db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(jid, id, Number(fromMe), '', timestamp, encode({ key: { remoteJid: jid, id, fromMe }, messageTimestamp: timestamp, message: null }));
   }
   db.close();
   const store = new Store(directory);
   try {
-    assert.deepEqual(store.chats().map(chat => chat.jid), ['12025550103@s.whatsapp.net', pn, lid]);
+    assert.deepEqual(store.chats().map(chat => chat.jid), ['12025550105@s.whatsapp.net', '12025550104@s.whatsapp.net', '12025550103@s.whatsapp.net', pn, lid]);
+    assert.deepEqual(store.chatView('12025550104@s.whatsapp.net')?.activity, { timestamp: 2147483648, source: 'chat.conversationTimestamp' });
+    assert.deepEqual(store.chatView('12025550105@s.whatsapp.net')?.activity, { timestamp: 4294967496, source: 'chat.conversationTimestamp' });
     assert.deepEqual(store.chatView('12025550103@s.whatsapp.net')?.activity, { timestamp: 400, source: 'chat.lastMsgTimestamp' });
     assert.deepEqual(store.chatView(pn)?.activity, { timestamp: 300, source: 'message.messageTimestamp' });
     assert.deepEqual(store.chatView(lid)?.activity, { timestamp: null, source: null });

@@ -50,8 +50,9 @@ type ActivitySource = 'chat.conversationTimestamp' | 'chat.lastMsgTimestamp' | '
 
 function activityTimestamp(value: Chat['conversationTimestamp']): number | null {
   if (value == null) return null;
-  // Protobuf JSON can encode a Long as decimal text in persisted legacy records.
-  const timestamp = Number(toNumber(value));
+  // Persisted protobuf Longs can be decimal text or plain {low,high,unsigned} objects.
+  // rc14's toNumber alone reads only low from a plain object; restore the full value.
+  const timestamp = toNumber(proto.Conversation.fromObject({ conversationTimestamp: value }).conversationTimestamp ?? 0);
   return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null;
 }
 
