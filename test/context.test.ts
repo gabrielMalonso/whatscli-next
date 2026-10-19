@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { generateWAMessageContent, initAuthCreds, makeEventBuffer, proto } from 'baileys';
 import type { BaileysEventEmitter, BaileysEventMap, SocketConfig, WAMessage, WAMessageKey, WASocket } from 'baileys';
-import processMessage from 'baileys/lib/Utils/process-message.js';
+import processMessage, { cleanMessage } from 'baileys/lib/Utils/process-message.js';
 import { pino } from 'pino';
 import { messageOutput } from '../src/output.js';
 import { perform } from '../src/operations.js';
@@ -258,6 +258,55 @@ test('real SDK administrative revocations preserve exact directions and require 
       assert.equal(reopened.message(incoming)?.message?.conversation ?? null, entry.deleted === 'incoming' ? null : 'Fictional original body');
       assert.equal(reopened.message(own)?.message?.conversation ?? null, entry.deleted === 'own' ? null : 'Fictional original body');
       assert.equal(reopened.message(another)?.message?.conversation, 'Fictional original body');
+    } finally { reopened.close(); }
+  }
+});
+
+test('received 1:1 revocations recognize authenticated self perspective without combining chats or choosing another author', async () => {
+  const selfPn = '12025550199@s.whatsapp.net';
+  const selfLid = '123450099@lid';
+  const selfDevice = '12025550199:7@s.whatsapp.net';
+  const selfLidDevice = '123450099:7@lid';
+  const cases = [
+    { chat: pn, remote: selfPn, participant: null, known: true, deleted: true },
+    { chat: lid, remote: selfLid, participant: lid, known: true, deleted: true },
+    { chat: pn, remote: other, participant: null, known: true, deleted: false },
+    { chat: pn, remote: selfPn, participant: null, known: false, deleted: false },
+    { chat: pn, remote: selfPn, participant: other, known: true, deleted: false },
+    { chat: group, remote: selfPn, participant: pn, known: true, deleted: false },
+  ];
+  for (const mode of ['immediate', 'buffered', 'merged']) for (const entry of cases) {
+    const events = makeEventBuffer(pino({ level: 'silent' }));
+    const f = fixture(temporary(), events);
+    const incoming = { remoteJid: entry.chat, id: 'collision', fromMe: false, participant: entry.chat === group ? pn : null };
+    const own = { remoteJid: entry.chat, id: 'collision', fromMe: true };
+    const alias = { remoteJid: entry.chat === lid ? pn : lid, id: 'collision', fromMe: false };
+    const content = await generateWAMessageContent({ delete: { remoteJid: entry.remote, id: 'collision', fromMe: true, participant: entry.participant } }, {
+      upload: async () => { throw new Error('Unexpected SDK upload'); },
+    });
+    const notification = { ...message({ ...incoming, id: 'notification' }), message: content };
+    cleanMessage(notification, selfDevice, selfLidDevice);
+    try {
+      if (entry.known) f.emit('creds.update', { me: { id: selfDevice, lid: selfLidDevice, name: 'Fictional self' } });
+      f.emit('messages.upsert', { type: 'notify', messages: [message(incoming), message(own), message(alias)] });
+      if (mode !== 'immediate') events.buffer();
+      if (mode === 'merged') f.emit('messages.upsert', { type: 'append', messages: [message(incoming), message(own)] });
+      f.emit('messages.upsert', { type: 'notify', messages: [notification] });
+      await sdkRevocation(events, notification);
+      events.flush();
+      f.emit('messages.upsert', { type: 'append', messages: [message(incoming)] });
+      const output = await f.list(entry.chat);
+      assert.equal(output.find(item => item.id === 'collision' && !item.fromMe)?.text, entry.deleted ? null : 'Fictional original body', `${mode}/${encode(entry)}`);
+      assert.equal(output.find(item => item.id === 'collision' && item.fromMe)?.text, 'Fictional original body');
+      const search = await f.runtime.execute({ command: 'search', jid: entry.chat, query: 'original', limit: 100, offset: 0 }) as ReturnType<typeof messageOutput>[];
+      assert.equal(search.some(item => item.id === 'collision' && !item.fromMe), !entry.deleted);
+      assert.equal((await f.getMessage(incoming))?.conversation ?? null, entry.deleted ? null : 'Fictional original body');
+    } finally { events.destroy(); await f.runtime.close(); }
+    const reopened = new Store(f.directory);
+    try {
+      assert.equal(reopened.message(incoming)?.message?.conversation ?? null, entry.deleted ? null : 'Fictional original body');
+      assert.equal(reopened.message(own)?.message?.conversation, 'Fictional original body');
+      assert.equal(reopened.message(alias)?.message?.conversation, 'Fictional original body');
     } finally { reopened.close(); }
   }
 });

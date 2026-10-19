@@ -1,8 +1,8 @@
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { BufferJSON, normalizeMessageContent, proto, toNumber } from 'baileys';
-import type { BaileysEventMap, Chat, ChatUpdate, Contact, WAMessage, WAMessageKey, WAMessageUpdate } from 'baileys';
+import { BufferJSON, jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
+import type { AuthenticationCreds, BaileysEventMap, Chat, ChatUpdate, Contact, WAMessage, WAMessageKey, WAMessageUpdate } from 'baileys';
 import { chatOutput, messageOutput } from './output.js';
 import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
@@ -468,18 +468,29 @@ export class Store {
       || !message.key.remoteJid || typeof message.key.fromMe !== 'boolean') return undefined;
     const target = protocol.key;
     const id = target.id;
-    if (!id || (target.remoteJid && target.remoteJid !== message.key.remoteJid)) return undefined;
+    if (!id) return undefined;
+    const jid = message.key.remoteJid;
+    const direct = isPn(jid) || isLid(jid);
+    const me = this.get<Pick<AuthenticationCreds, 'me'>>('auth', 'creds')?.me;
+    const self = [me?.id, me?.lid].filter((jid): jid is string => Boolean(jid)).map(jidNormalizedUser);
+    // In an inbound 1:1 the sender's remoteJid can name us. Accept that perspective
+    // only against authenticated self identities; the local target stays in this exact chat.
+    const addressedToSelf = !message.key.fromMe && direct && target.fromMe === true
+      && target.remoteJid != null && self.includes(target.remoteJid);
+    if (target.remoteJid && target.remoteJid !== jid && !addressedToSelf) return undefined;
     // Embedded fromMe is relative to the notification's sender. Only true identifies
     // that same author; another sender's false cannot establish our account's direction.
     if (target.fromMe === true) {
-      if (target.participant && target.participant !== message.key.participant) return undefined;
+      if (target.participant && target.participant !== message.key.participant
+        && !(message.key.fromMe && self.includes(target.participant))
+        && !(!message.key.fromMe && direct && target.participant === jid)) return undefined;
       return { ...message.key, id };
     }
     if (target.fromMe !== false || message.key.fromMe !== true) return undefined;
     // Our own administrative revoke supplies account-relative false. In a group it
     // still needs the original participant, not the administrator on the envelope.
     if ((message.key.remoteJid?.endsWith('@g.us') || message.key.remoteJid?.endsWith('@broadcast')) && !target.participant) return undefined;
-    if (target.participant && target.participant === message.key.participant) return undefined;
+    if (target.participant && (target.participant === message.key.participant || self.includes(target.participant))) return undefined;
     return { remoteJid: message.key.remoteJid, id, fromMe: false, participant: target.participant ?? null };
   }
 
