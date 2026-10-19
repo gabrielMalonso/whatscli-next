@@ -43,6 +43,13 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
   assert.equal(first.ok, true);
   assert.equal(first.connection, 'offline');
   assert.equal(first.running, true);
+  assert.deepEqual(first.recovery, { state: 'offline', reason: null, code: null, attempt: 0, nextRetryAt: null });
+  assert.deepEqual(first.receiveContinuity, { status: 'unproven', lastInterruption: null });
+  for (const mode of ['full', 'compact']) {
+    const status = await cli(directory, 'status', '--output', mode);
+    assert.deepEqual(status.recovery, first.recovery);
+    assert.deepEqual(status.receiveContinuity, first.receiveContinuity);
+  }
   const contact = await cli(directory, 'contact', '--jid', '123450001@lid');
   assert.equal(contact.ok, true);
   assert.equal((contact.data as { phone: unknown }).phone, null);

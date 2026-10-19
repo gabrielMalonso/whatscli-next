@@ -158,6 +158,8 @@ node dist/src/cli.js unread    --jid '12025550101@s.whatsapp.net' --key 'example
 
 These use `chatModify` and a stored last-message key/timestamp. Marking a conversation read does not separately send message read receipts. The affected public field becomes `null` with a `pending` intent until a corresponding fresh SDK observation establishes a known field. Unrelated, missing and neutral/null fields do not confirm it or make an old counter current. A positive SDK unread update establishes `unread: true`, but its exact total is unknown and returned as `unreadCount: null`; the SDK can send increments rather than absolute totals. Counter `-1` means manually unread; `0` means read unless the same update explicitly marks it unread. A fresh `0`/`-1` supersedes an older manual marker. `markedAsUnread: true` establishes unread; `false` clears only that manual marker and cannot erase a positive counter or prove read when the counter is unknown. Fresh evidence after a pending mutation replaces the affected stale evidence. Archive observations never confirm reading, nor do read observations confirm archiving.
 
+## Recovery
+
 Diagnostics and event inspection:
 
 ```sh
@@ -166,7 +168,26 @@ node dist/src/cli.js reconnect
 node dist/src/cli.js resync
 ```
 
-Events are paginated by sequence (100 per request). `reconnect` explicitly reconnects. The diagnostic `drop-connection` command closes only this daemon's WebSocket and lets its normal reconnect handler recover. `resync` returning successfully does not prove complete app state: the SDK can log and skip failed collections.
+Events are paginated by sequence (100 per request). The diagnostic `drop-connection` command closes only this daemon's WebSocket and lets its normal reconnect handler recover. `resync` returning successfully does not prove complete app state: the SDK can log and skip failed collections.
+
+`status` and successful daemon/probe responses add `recovery` and `receiveContinuity` to the existing envelope, identically in full and compact output. Existing `connection` retains its coarse connection status; use `recovery.state` for the current runtime decision:
+
+| `recovery.state` | Meaning |
+| --- | --- |
+| `offline` | Intentionally offline; no network attempts. |
+| `connecting` | Initial connection, automatic retry, or manual replacement/cleanup in progress. |
+| `open` | SDK reported open; this says nothing about complete receiving/decryption. |
+| `waiting-retry` | One retry timer is scheduled. |
+| `intervention-required` | Automatic recovery stopped; inspect `reason` and `code`. |
+| `stopping` | Shutdown has started; no further connections will open. |
+
+`recovery` always includes `reason`, `code`, `attempt` and `nextRetryAt`. Unknown/inapplicable values are null. `attempt` counts automatic retries since the last open/manual reconnect: while waiting it names the upcoming retry, while connecting it names the retry being made; initial/manual attempts are zero. `nextRetryAt` is a local Unix time in milliseconds, present only while waiting. Opens reset current recovery; `issues` remains historical and may include `connection-stopped-review-required` from a prior failure.
+
+For pinned rc14 codes 408 (lost/timed out), 428 (closed), 503 (service unavailable), and 515 (restart required), retry waits are 1, 2, 4, 8, 16, then 30 seconds, capped without an attempt limit. A 515 can complete the SDK's pairing restart; it also waits at least one second to avoid repeated-restart spin. No credentials are reset and no new pairing is automatically requested. Codes 401/403/411/440/500 report `logged-out`, `forbidden`, `multidevice-mismatch`, `session-replaced`, or `bad-session` and stop retries. Unknown/missing codes report `unknown-disconnect` and stop, without assuming a transient cause.
+
+`reconnect` explicitly retries using the same credentials after investigation, or replaces an active connection; concurrent calls share one replacement. It cancels a pending retry and waits for active socket cleanup. It cannot enable an offline or stopping runtime. A synchronous factory exception reports `socket-creation-failed`; since the SDK may have allocated resources without returning a cleanup handle, further reconnects are refused until runtime restart. Failed manual cleanup similarly reports `socket-end-failed` and requires investigation/restart. Persistence failures fail closed instead of entering an outage retry loop. Restart is an explicit new attempt using the same directory; intervention decisions are current-process state, not a persisted lockout. Preserve the directory and diagnose terminal/authentication failures before retrying.
+
+`receiveContinuity: {status: "unproven", lastInterruption: {at, reason} | null}` retains one small local observation across restart. Reasons are `runtime-start`, `runtime-stop`, `connection-closed`, and `manual-reconnect`; `at` is the local observation time in milliseconds, never a remote gap boundary. Each later interruption replaces the previous observation; this is not an interval ledger. A null observation means none was recorded by this version, including a fresh/offline or upgraded directory. Network startup records risk before creating a socket, so even an abrupt exit leaves evidence for an offline restart. An open connection or `receivedPendingNotifications: true` never clears this risk or proves that every message arrived/decrypted. There are no lost-message counts, catch-up verdicts or automatic resync claims. Local queries and existing request keys remain usable during outages; new sends fail their connection precondition and uncertain intents are never resent.
 
 ## JSON and evidence
 

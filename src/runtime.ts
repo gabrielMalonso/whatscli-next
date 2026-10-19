@@ -4,7 +4,8 @@ import { basename } from 'node:path';
 import type { WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
-import { diagnosticIssue, reconnectDelay } from './health.js';
+import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
+import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
@@ -23,7 +24,10 @@ export type RuntimeOptions = {
 };
 
 /** The one Baileys connection and the one database writer shared by both transports. */
-export function createRuntime(options: RuntimeOptions, socketFactory = makeWASocket) {
+export function createRuntime(options: RuntimeOptions, socketFactory = makeWASocket, clock: RecoveryClock = {
+  now: Date.now,
+  schedule(callback, delay) { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); },
+}) {
   const allowedJid = options.allowedJid === undefined ? undefined : recipientJid(options.allowedJid);
   const store = new Store(options.dataDir);
   const auth = sqliteAuth(store);
@@ -32,14 +36,23 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   let receivedPendingNotifications = false;
   let attempts = 0;
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
+  let owner: object | undefined;
+  let cancelTimer: (() => void) | undefined;
+  let retryToken: object | undefined;
+  let replacing: Promise<void> | undefined;
   let ending: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
+  let recovery: Recovery = { state: 'offline', reason: null, code: null, attempt: 0, nextRetryAt: null };
+  let lastInterruption = store.get<ReceiveInterruption>('runtime', 'receive-interruption') ?? null;
   let qr: string | undefined;
   const issues = new Set(store.get<string[]>('probe', 'issues') ?? []);
   const issue = (name: string): void => {
     issues.add(name);
-    store.set('probe', 'issues', [...issues]);
-    store.event('diagnostic', { issue: name });
+    try {
+      store.set('probe', 'issues', [...issues]);
+      store.event('diagnostic', { issue: name });
+    } catch { fatal(); }
   };
   const diagnostics = new Writable({
     write(chunk: Buffer, _encoding, next) {
@@ -55,8 +68,23 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     },
   });
   const logger = pino({ level: 'warn' }, diagnostics);
+  function interrupt(reason: ReceiveInterruption['reason']): void {
+    lastInterruption = { at: clock.now(), reason };
+    try { store.set('runtime', 'receive-interruption', lastInterruption); } catch { fatal(); }
+  }
+  function cancelRetry(): void {
+    retryToken = undefined;
+    cancelTimer?.();
+    cancelTimer = undefined;
+  }
+  function intervention(reason: Extract<Recovery, { state: 'intervention-required' }>['reason'], code: number | null): void {
+    cancelRetry();
+    connection = 'close';
+    recovery = { state: 'intervention-required', reason, code, attempt: attempts, nextRetryAt: null };
+    issue('connection-stopped-review-required');
+  }
   function connected(): WASocket {
-    if (!socket || connection !== 'open') throw new Error('WhatsApp connection is not open');
+    if (stopped || !socket || connection !== 'open') throw new Error('WhatsApp connection is not open');
     return socket;
   }
   function validateTarget(jid: string, sending = false): void {
@@ -68,24 +96,42 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     connected();
   }
   function open(): void {
-    if (stopped) return;
+    if (stopped || socket) return;
     qr = undefined;
     receivedPendingNotifications = false;
     connection = 'connecting';
-    const current = socketFactory({
-      auth: auth.state, logger,
+    const token = {};
+    owner = token;
+    let current: WASocket;
+    try { current = socketFactory({
+      auth: { creds: auth.state.creds, keys: {
+        get(category, ids) {
+          if (stopped || owner !== token) throw new Error('Socket no longer owns authentication storage');
+          try { return auth.state.keys.get(category, ids); } catch { fatal(); }
+        },
+        set(data) {
+          if (stopped || owner !== token) throw new Error('Socket no longer owns authentication storage');
+          try { return auth.state.keys.set(data); } catch { fatal(); }
+        },
+      } }, logger,
       markOnlineOnConnect: false,
       emitOwnEvents: false,
       syncFullHistory: false,
       enableRecentMessageCache: false,
       // The SDK can re-relay outgoing messages on retry receipts. Withhold that content
       // to prevent automatic resend of uncertain requests. Inbound decryption retries remain enabled.
-      getMessage: async key => key.fromMe === true ? undefined : store.message(key)?.message ?? undefined,
-    });
+      getMessage: async key => stopped || owner !== token || key.fromMe === true ? undefined : store.message(key)?.message ?? undefined,
+    }); } catch (error) {
+      // The factory may fail after allocating resources, without returning a handle to end.
+      // Do not retry it or classify configuration/authentication/persistence failures as outages.
+      owner = undefined;
+      intervention('socket-creation-failed', disconnectCode(error) ?? null);
+      return;
+    }
     socket = current;
     const persist = (action: () => void): void => {
       if (socket !== current || stopped) return;
-      try { action(); } catch (error) { fatal(error); }
+      try { action(); } catch { fatal(); }
     };
     current.ev.on('creds.update', update => persist(() => auth.save(update)));
     current.ev.on('connection.update', update => persist(() => {
@@ -96,14 +142,33 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         connection, receivedPendingNotifications,
         disconnectCode: disconnectCode(update.lastDisconnect?.error) ?? null,
       });
-      if (update.connection === 'open') { qr = undefined; attempts = 0; }
+      if (update.connection === 'open') {
+        qr = undefined; attempts = 0;
+        recovery = { state: 'open', reason: null, code: null, attempt: 0, nextRetryAt: null };
+      }
       if (update.connection === 'close') {
         qr = undefined;
-        const delay = reconnectDelay(disconnectCode(update.lastDisconnect?.error), attempts++);
-        if (delay === undefined) issue('connection-stopped-review-required');
+        receivedPendingNotifications = false;
+        // rc14 emits close after end has cleaned up its transport and socket-end handlers.
+        // Invalidate first, so duplicate/late events and old auth callbacks cannot own recovery.
+        socket = undefined;
+        owner = undefined;
+        interrupt('connection-closed');
+        const code = disconnectCode(update.lastDisconnect?.error);
+        const reason = disconnectReason(code);
+        const delay = reconnectDelay(code, attempts);
+        if (delay === undefined || code === undefined) intervention(reason, code ?? null);
         else {
-          clearTimeout(timer);
-          timer = setTimeout(() => { try { open(); } catch (error) { fatal(error); } }, delay);
+          attempts++;
+          recovery = { state: 'waiting-retry', reason, code, attempt: attempts, nextRetryAt: clock.now() + delay };
+          const pending = {};
+          retryToken = pending;
+          cancelTimer = clock.schedule(() => {
+            if (stopped || retryToken !== pending) return;
+            cancelRetry();
+            recovery = { state: 'connecting', reason, code, attempt: attempts, nextRetryAt: null };
+            open();
+          }, delay);
         }
       }
     }));
@@ -224,12 +289,12 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         return { socketClosed: true, recovery: 'automatic-close-handler' };
       case 'reconnect':
         if (!options.connect) throw new Error('Network access is disabled; restart without --offline (probe: use --connect)');
-        clearTimeout(timer);
-        const previous = socket;
-        socket = undefined;
-        await previous?.end(new Error('Probe reconnect requested'));
-        attempts = 0;
-        open();
+        if (stopped) throw new Error('Runtime is stopping');
+        if (recovery.state === 'intervention-required'
+          && (recovery.reason === 'socket-creation-failed' || recovery.reason === 'socket-end-failed')) {
+          throw new Error('Socket creation/cleanup failed; investigate and restart the runtime');
+        }
+        await reconnect();
         return { reconnecting: true };
       case 'send': return perform(store, command.key, { kind: 'send', jid: command.jid, text: command.text },
         () => validateTarget(command.jid, true), async messageId => {
@@ -274,35 +339,77 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       case 'stop': return { stopping: true };
     }
   }
-  function fatal(error: unknown): void {
-    process.stderr.write(encode({ error: error instanceof Error ? error.message : 'Fatal persistence failure' }) + '\n');
+  function fatal(): never {
+    process.stderr.write(encode({ error: 'Fatal persistence failure' }) + '\n');
     // Do not keep operating with failed credential/event persistence.
     process.exit(1);
+  }
+  function reconnect(): Promise<void> {
+    if (replacing) return replacing;
+    cancelRetry();
+    const previous = socket;
+    socket = undefined;
+    owner = undefined;
+    qr = undefined;
+    receivedPendingNotifications = false;
+    attempts = 0;
+    connection = 'connecting';
+    recovery = { state: 'connecting', reason: 'manual-reconnect', code: null, attempt: 0, nextRetryAt: null };
+    interrupt('manual-reconnect');
+    replacing = (async () => {
+      try {
+        await previous?.end(new Error('Reconnect requested'));
+      } catch {
+        socket = previous; // Retain the handle for shutdown, but never authorize another connection.
+        if (!stopped) intervention('socket-end-failed', null);
+        throw new Error('Socket cleanup failed; investigate and restart the runtime');
+      }
+      if (!stopped) open();
+    })().finally(() => { replacing = undefined; });
+    return replacing;
   }
   function shutdown(): Promise<void> {
     if (ending) return ending;
     stopped = true;
-    clearTimeout(timer);
+    cancelRetry();
+    recovery = { state: 'stopping', reason: null, code: null, attempt: 0, nextRetryAt: null };
+    qr = undefined;
+    receivedPendingNotifications = false;
+    if (started && options.connect) interrupt('runtime-stop');
     const current = socket;
     socket = undefined;
-    ending = current?.end(new Error('Probe stopped')) ?? Promise.resolve();
+    owner = undefined;
+    ending = (async () => {
+      await current?.end(new Error('Runtime stopped'));
+      await replacing;
+    })();
     return ending;
   }
-  let closed = false;
   return {
     directory: store.directory,
     execute,
-    start() { if (options.connect) open(); },
+    start() {
+      if (started || stopped) return;
+      started = true;
+      if (options.connect) {
+        interrupt('runtime-start');
+        recovery = { state: 'connecting', reason: 'startup', code: null, attempt: 0, nextRetryAt: null };
+        open();
+      }
+    },
     snapshot() {
-      return { connection, source: 'local' as const, coverage: 'partial' as const, appState: 'unknown' as const, receivedPendingNotifications, issues: [...issues] };
+      return { connection, recovery: { ...recovery },
+        receiveContinuity: { status: 'unproven' as const, lastInterruption: lastInterruption && { ...lastInterruption } },
+        source: 'local' as const, coverage: 'partial' as const, appState: 'unknown' as const, receivedPendingNotifications, issues: [...issues] };
     },
     stop: shutdown,
-    async close() {
-      if (closed) return;
-      await shutdown();
-      auth.save({});
-      store.close();
-      closed = true;
+    close() {
+      closing ??= (async () => {
+        await shutdown();
+        auth.save({});
+        store.close();
+      })();
+      return closing;
     },
   };
 }
@@ -310,5 +417,5 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
 function disconnectCode(error: unknown): number | undefined {
   if (!error || typeof error !== 'object' || !('output' in error)) return undefined;
   const output = object(error.output);
-  return typeof output.statusCode === 'number' ? output.statusCode : undefined;
+  return typeof output.statusCode === 'number' && Number.isSafeInteger(output.statusCode) ? output.statusCode : undefined;
 }
