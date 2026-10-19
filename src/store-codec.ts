@@ -15,4 +15,3 @@ export function decodeMessage(value: string): WAMessage {
   if (protocol?.type != null) protocol.type = proto.Message.ProtocolMessage.fromObject(protocol).type ?? null;
   return message;
 }
-

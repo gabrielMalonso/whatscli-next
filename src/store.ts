@@ -163,19 +163,20 @@ export class Store {
     });
   }
 
-  private indexMessage(rowid: number, message: WAMessage): void {
+  private indexMessage(rowid: number, jid: string, timestamp: number, message: WAMessage): void {
     if (!message.key.remoteJid || message.message == null || this.deletion(message.key)) return;
     const text = (messageText(normalizeMessageContent(message.message)) ?? '').normalize('NFKC').toLowerCase();
     this.db.prepare('INSERT INTO message_text VALUES (?,?,?,?)')
-      .run(rowid, message.key.remoteJid, toNumber(message.messageTimestamp ?? 0), text);
+      .run(rowid, jid, timestamp, text);
   }
 
   private initializeQueries(): void {
     if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) === 1) return;
     this.transaction(() => {
       // Stream the additive backfill after legacy deletion recovery. Never read audit bodies.
-      for (const row of this.db.prepare('SELECT rowid,json FROM messages').iterate()) {
-        this.indexMessage(Number(row.rowid), decodeMessage(String(row.json)));
+      // Ordering metadata is authoritative in SQLite; decoded protobuf Longs can lose high words.
+      for (const row of this.db.prepare('SELECT rowid,jid,timestamp,json FROM messages').iterate()) {
+        this.indexMessage(Number(row.rowid), String(row.jid), Number(row.timestamp), decodeMessage(String(row.json)));
       }
       this.db.exec(`
         CREATE INDEX message_history ON messages(jid,timestamp);
@@ -429,11 +430,12 @@ export class Store {
       merged.message = null;
       delete merged.messageStubParameters;
     }
+    const timestamp = toNumber(merged.messageTimestamp ?? 0);
     const inserted = this.db.prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)').run(
-      jid, id, Number(fromMe), participantSlot, toNumber(merged.messageTimestamp ?? 0), encode(merged),
+      jid, id, Number(fromMe), participantSlot, timestamp, encode(merged),
     );
     if (previousRow) this.db.prepare('DELETE FROM message_text WHERE message_rowid=?').run(Number(previousRow.rowid));
-    this.indexMessage(Number(inserted.lastInsertRowid), merged);
+    this.indexMessage(Number(inserted.lastInsertRowid), jid, timestamp, merged);
     // Seeing a message proves the conversation exists, not its archive/read state.
     if (chatObserved && !this.chat(jid)) this.observeChat({ id: jid });
     if (chatObserved) this.observeActivity(jid, message.messageTimestamp, 'message.messageTimestamp');

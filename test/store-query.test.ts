@@ -209,3 +209,32 @@ test('a failed additive backfill leaves no partial projection/version and can re
     assert.deepEqual(reopened.request('keep'), intent);
   } finally { reopened.close(); }
 });
+
+test('backfill uses persisted timestamps for protobuf Longs, preserving history/search order and pages', () => {
+  const directory = temporary();
+  const seed = new Store(directory);
+  for (const [id, timestamp] of [['earlier', '1700000000'], ['later', '2147483648'], ['post-wrap', '4294967496']] as const) {
+    const key = { remoteJid: pn, id, fromMe: false };
+    seed.observeMessage({ ...proto.WebMessageInfo.fromObject({ key,
+      messageTimestamp: timestamp, message: { conversation: 'Fictional Long timestamp' } }), key });
+  }
+  const order = ['post-wrap', 'later', 'earlier'];
+  assert.deepEqual(seed.messages(pn).map(m => m.key.id), order);
+  assert.deepEqual(seed.search('Long timestamp', 100, 0).map(m => m.key.id), order);
+  const original = seed.db.prepare('SELECT rowid,* FROM messages ORDER BY rowid').all();
+  seed.db.exec('DROP TABLE message_text; DROP INDEX message_history; DROP INDEX request_message_id; PRAGMA user_version=0;');
+  seed.close();
+  const store = new Store(directory);
+  try {
+    assert.deepEqual(store.db.prepare('SELECT rowid,* FROM messages ORDER BY rowid').all(), original);
+    assert.deepEqual(store.messages(pn).map(m => m.key.id), order);
+    for (const jid of [undefined, pn]) {
+      assert.deepEqual(store.search('Long timestamp', 100, 0, jid).map(m => m.key.id), order);
+      for (let offset = 0; offset < order.length; offset++) {
+        assert.equal(store.search('Long timestamp', 1, offset, jid)[0]?.key.id, order[offset]);
+      }
+    }
+  } finally { store.close(); }
+  const reopened = new Store(directory);
+  try { assert.deepEqual(reopened.search('Long timestamp', 100, 0).map(m => m.key.id), order); } finally { reopened.close(); }
+});

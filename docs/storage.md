@@ -21,7 +21,7 @@ Chat filtering retains its existing AND tri-state/pending semantics and maximum 
 
 ## Schema and upgrade
 
-Schema `PRAGMA user_version=1` is an additive upgrade from the version-0 repository schema. Startup under the writer lock runs existing identity/deletion/activity recovery first, streams current message rows into `message_text`, builds query indexes and commits the backfill plus version atomically. It preserves message rowids, requests, IDs, routes, authentication and audit records. A failed query backfill rolls back and fails startup; it does not reset state or start a socket. Subsequent starts skip the completed backfill.
+Schema `PRAGMA user_version=1` is an additive upgrade from the version-0 repository schema. Startup under the writer lock runs existing identity/deletion/activity recovery first, streams current message rows into `message_text`, builds query indexes and commits the backfill plus version atomically. It preserves message rowids, requests, IDs, routes, authentication and audit records. Projection ordering uses the existing SQLite JID/timestamp columns, including full protobuf Long timestamps, rather than recomputing metadata from decoded JSON. A failed query backfill rolls back and fails startup; it does not reset state or start a socket. Subsequent starts skip the completed backfill.
 
 No import/conversion command or complete historical migration guarantee is provided. Do not edit Store tables directly or run an older runtime against an upgraded directory: older writers do not maintain this projection. Upgrade the runtime and CLI together after the existing runtime has exited normally; building alone does not replace a running daemon. Future/unsupported schema versions fail with an instruction to use a compatible executable or a **NEW `--data-dir`**, preserving the old database. No automatic deletion, re-pairing, parallel account session or intent recreation occurs.
 
@@ -126,4 +126,4 @@ The unchanged chat algorithm had a slower 23k full-sequence sample (filtered med
 
 CLI help startup is separate: warm min/median/max, n=6, baseline **119.861 / 121.754 / 130.089 ms**, candidate **115.860 / 129.995 / 139.714 ms**. Its roughly 120–130 ms cost remains. No real daemon/Unix-socket/WhatsApp timing was measured by this benchmark.
 
-All 123 prior tests plus 8 Store regressions passed at this implementation. No account, credentials, private snapshot, real SDK connection, downstream repository or live confirmation was accessed. Real-data offline comparison remains the coordinator’s separate work.
+All 123 prior tests plus 9 Store regressions passed at this implementation. No account, credentials, private snapshot, real SDK connection, downstream repository or live confirmation was accessed. Real-data offline comparison remains the coordinator’s separate work.
