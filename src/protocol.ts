@@ -1,4 +1,5 @@
 import { contactJid, internationalPhone, recipientJid } from './identity.js';
+import { contactName } from './contact-card.js';
 
 export type ChatStateFilter = boolean | 'unknown';
 export type ChatFilters = { unread?: ChatStateFilter; archived?: ChatStateFilter };
@@ -17,6 +18,7 @@ export type Command =
   | { command: 'pair-code'; phone: string }
   | { command: 'send'; key: string; jid: string; text: string }
   | { command: 'send-file'; key: string; jid: string; path: string; mime: string; caption: string }
+  | { command: 'send-contact'; key: string; jid: string; name: string; phone: string }
   | { command: 'download'; jid: string; id: string; path: string; fromMe?: boolean; participant?: string }
   | { command: 'archive' | 'mark-read'; key: string; jid: string; value: boolean };
 
@@ -81,6 +83,10 @@ export function parseCommand(value: Record<string, unknown>): Command {
       command: value.command, jid: recipientJid(string(value.jid, 'jid')), key: string(value.key, 'key'),
       path: string(value.path, 'path'), mime: string(value.mime ?? 'application/octet-stream', 'mime'),
       caption: value.caption === undefined ? '' : typeof value.caption === 'string' ? value.caption : string(value.caption, 'caption'),
+    };
+    case 'send-contact': return {
+      command: value.command, jid: recipientJid(string(value.jid, 'jid')), key: string(value.key, 'key'),
+      name: contactName(string(value.name, 'name')), phone: internationalPhone(string(value.phone, 'phone')),
     };
     case 'download': {
       if (value.fromMe !== undefined && typeof value.fromMe !== 'boolean') throw new Error('fromMe must be a boolean');

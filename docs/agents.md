@@ -72,6 +72,19 @@ Use `request --output full --key KEY` to inspect the complete public intent with
 
 Missing receipt evidence remains `unknown`. Group participant receipts are separate events and cannot establish every participant's outcome. Phone confirmation is independent evidence; it does not rewrite SDK-derived receipt fields.
 
+Share one explicitly supplied contact card with the same durable-key rules:
+
+```sh
+node dist/src/cli.js --output compact send-contact \
+  --jid '12025550101@s.whatsapp.net' --key 'example-card-001' \
+  --name 'Fictional Contact' --phone '+12025550103'
+node dist/src/cli.js --output full request --key 'example-card-001'
+```
+
+The recipient JID is separate from the shared name/phone. Names preserve Unicode and spaces (nonblank, up to 256 UTF-8 bytes); controls, line separators and malformed Unicode are rejected. Phones require explicit `+` and 8–15 international digits, starting nonzero. vCard escaping/folding is automatic; raw cards and batches are unsupported. SQLite persists the exact name/phone/vCard before sending. Same-key content/kind changes fail; retrying the original command returns the recorded intent, including uncertainty, without lookup/resend. Full and compact preserve it identically. Deleted current bodies stay hidden while original intent remains queryable.
+
+Shared content confers no identity verification, WhatsApp membership, phone ownership or send/share permission. Approved contacts and sharing policy belong to the downstream consumer. Only the recipient's exact observed conversation or separately persisted exact-PN verification authorizes sending; aliases never inherit authority. Offline tests cover SDK generation and injected behavior; real phone rendering awaits checkpoint 06.
+
 ## Files and chat state
 
 ```sh

@@ -19,7 +19,7 @@ function options() {
     mime: { type: 'string' }, caption: { type: 'string' }, out: { type: 'string' }, id: { type: 'string' },
     participant: { type: 'string' }, 'from-me': { type: 'string' }, query: { type: 'string' },
     limit: { type: 'string' }, offset: { type: 'string' }, after: { type: 'string' }, phone: { type: 'string' },
-    unread: { type: 'string' }, archived: { type: 'string' }, output: { type: 'string' },
+    unread: { type: 'string' }, archived: { type: 'string' }, output: { type: 'string' }, name: { type: 'string' },
   } });
 }
 
@@ -51,6 +51,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
       resolve: '--phone +INTERNATIONAL_DIGITS', contact: '--jid PN_OR_LID_JID',
       messages: '--jid JID [--limit 20] [--offset 0]', search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
       send: '--jid JID --key KEY --text TEXT', 'send-file': '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
+      'send-contact': '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS',
       download: '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
       archive: '--jid JID --key KEY', unarchive: '--jid JID --key KEY', read: '--jid JID --key KEY', unread: '--jid JID --key KEY',
       request: '--key KEY', events: '[--after SEQUENCE]', group: '--jid GROUP_JID', reconnect: '', resync: '',
@@ -126,6 +127,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
     case 'messages': only('jid', 'limit', 'offset'); command = { command: action, jid: jid(), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
     case 'search': only('jid', 'query', 'limit', 'offset'); command = { command: action, query: required(values.query, 'query'), ...(values.jid ? { jid: values.jid } : {}), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
     case 'send': only('jid', 'key', 'text'); command = { command: action, jid: jid(), key: key(), text: required(values.text, 'text') }; break;
+    case 'send-contact': only('jid', 'key', 'name', 'phone'); command = { command: action, jid: jid(), key: key(), name: required(values.name, 'name'), phone: required(values.phone, 'phone') }; break;
     case 'send-file': only('jid', 'key', 'file', 'mime', 'caption'); command = { command: action, jid: jid(), key: key(), path: resolve(required(values.file, 'file')), mime: values.mime ?? 'application/octet-stream', caption: values.caption ?? '' }; break;
     case 'download':
       only('jid', 'id', 'out', 'from-me', 'participant');
