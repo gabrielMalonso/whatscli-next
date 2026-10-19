@@ -18,6 +18,8 @@ node dist/src/cli.js help
 
 Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. `pnpm-lock.yaml` fixes the dependency graph and integrity hashes. Installation scripts for Baileys (a Node version check) and protobufjs are disabled; the published code is used directly.
 
+For a fixed candidate, use the [source-by-commit installation and local package checks](docs/release.md), including a fresh build and a recorded startup PID. Building or calling `start` does not update an existing daemon. The [supervised pilot runbook](docs/pilot.md) requires a separately approved account and exact conversations; preparation alone does not complete roadmap 08.
+
 ## Start and pair
 
 ```sh
@@ -140,7 +142,7 @@ Files are sent as WhatsApp documents, with their filename preserved. The default
 
 Before invocation, SQLite stores the exact recipient, name, phone, generated vCard and message ID in an immutable `send-contact` operation. A repeated key compares all this content and returns the original record, including while the SDK is pending, offline or after restart/identity changes. Changing recipient/name/phone/kind conflicts. Full, compact and `request` preserve the complete intent and separate attempt/receipt/uncertainty fields. Deleted current message bodies stay hidden; the original request remains intent evidence. SDK return alone establishes no acceptance, delivery, read or observed chat/state.
 
-The card's phone does not verify identity, current WhatsApp membership, ownership or permission to share/send. It never feeds recipient checks, identity mappings or verified contacts. Recipient authorization uses the same exact observed-chat or persisted positive exact-PN rules as other sends; PN/LID aliases and `--allow-jid` remain exact. Sharing permissions and approved-contact choices belong to the downstream consumer. Card generation and behavior have offline fixture coverage only; phone rendering and real-account effects await checkpoint 06.
+The card's phone does not verify identity, current WhatsApp membership, ownership or permission to share/send. It never feeds recipient checks, identity mappings or verified contacts. Recipient authorization uses the same exact observed-chat or persisted positive exact-PN rules as other sends; PN/LID aliases and `--allow-jid` remain exact. Sharing permissions and approved-contact choices belong to the downstream consumer. [Checkpoint 06](docs/validation.md#checkpoint-06--essential-flow-accepted) includes one phone-confirmed card with a fictional number in the approved group, alongside offline generation tests; this does not validate arbitrary card rendering or real first contact.
 
 A key binds one immutable operation. Reusing it returns the recorded result, including uncertainty, without another send. Changed arguments are rejected. Reusing a file key returns its original manifest even if that path's contents have since changed. To inspect an uncertain result:
 
@@ -252,4 +254,4 @@ Automated tests use fictional fixtures, offline daemons, local Unix sockets, and
 
 The [development roadmap](docs/roadmap.md) records the next capabilities and validation checkpoints. Contributions follow the independent-review workflow in [AGENTS.md](AGENTS.md).
 
-This version covers one account per directory, exact recipient resolution, contact identity evidence, local history/search, text/documents, media download, archive/read operations and lifecycle. Complete-history guarantees, group administration, multiple-account orchestration, plugins and draft workflows are outside its scope. Phone resolution and first-contact sending have offline regression coverage; real 1:1/media validation remains a separate checkpoint.
+This version covers one account per directory, exact recipient resolution, contact identity evidence, local history/search, text/documents/contact cards, media download, archive/read operations and lifecycle. Complete-history guarantees, group administration, multiple-account orchestration, plugins and draft workflows are outside its scope. [Checkpoint 06](docs/validation.md#checkpoint-06--essential-flow-accepted) accepted the essential media and existing-1:1 flow, with separate phone and SDK receipt evidence. Real first contact without an observed chat, human-speech transcription, prolonged physical outages, macOS and the downstream pilot remain unverified; partial history and the historical decryption gap remain explicit.
