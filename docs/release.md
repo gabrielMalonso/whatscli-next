@@ -56,7 +56,7 @@ Audit the **actual archive**, not only `package.json.files`. Its only regular fi
 
 Reject any session, credential, database, SQLite WAL/SHM, lock, socket, QR, log, `.env`, test fixture, `dist/test`, `dist/scripts`, `node_modules`, `.private` or `.tmp` content. Exercise exclusions with **fictional canaries only**, in a disposable source copy, including state-like files under `dist/src/` and `docs/`. Never copy private data into a candidate to test exclusions. Keep the listing, per-file sizes/hashes and tarball checksum as the local manifest. No deterministic-tarball claim is made by a single successful pack.
 
-The tarball excludes source, tests, lockfile, workspace configuration and installed dependencies. It is **not a standalone frozen installation**: `pnpm add ./candidate.tgz` can resolve a different transitive graph. Preserve the source commit/lock and toolchain with it. For an isolated payload check, create a new OS temporary directory outside this worktree and all ancestor `node_modules` directories:
+The tarball excludes source, tests, lockfile, workspace configuration and installed dependencies. pnpm also rewrites the packed manifest, including removing `packageManager`; use the separately recorded pnpm version. It is **not a standalone frozen installation**: `pnpm add ./candidate.tgz` can resolve a different transitive graph. Preserve the source commit/lock and toolchain with it. For an isolated payload check, create a new OS temporary directory outside this worktree and all ancestor `node_modules` directories:
 
 ```sh
 # Continue from the fresh source directory above.
