@@ -199,7 +199,7 @@ try {
       baileys: JSON.parse(readFileSync('node_modules/baileys/package.json', 'utf8')).version as string, platform: process.platform, arch: process.arch },
     method: { sequential: true, warmN: WARM, first: 'First process per scenario/variant, not cold disk. OS cache uncontrolled, warmed by build/prior scenarios.',
       cli: 'New Node processes, same exit-metrics preload; elapsed includes startup, RPC, formatting, stdout captured through exit. Alternating variant order.',
-      metrics: 'Each CLI reports own process.resourceUsage at exit: CPU microseconds converted to ms; maxRSS KiB converted to bytes. No sampled heap peak.',
+      metrics: 'Each CLI reports own process.resourceUsage at exit: CPU microseconds converted to ms; maxRSS KiB converted to bytes. On Linux maxRSS may retain a pre-exec floor influenced by parent memory at spawn; it does not isolate post-exec CLI RSS. No sampled heap peak.',
       fake: 'One fictional Unix socket server, authoritative parseRequest, fixed public fixture envelopes. Preencoded body, fresh correlated UUID prefix. No Store, runtime, SDK connection or WhatsApp.',
       raw: 'New process per scenario/variant. RPC time and CPU measured after imports; first + 10 sequential calls. RSS high-water includes imports and prior result hashing. No CLI formatting/stdout body.',
       limits: 'Fake transport isolates response assembly, not daemon/Store/network performance. All RAM effects are transient clients; persistent daemon RAM/disk/ingestion unchanged by this scope.',
