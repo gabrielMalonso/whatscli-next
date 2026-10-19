@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -187,8 +187,7 @@ try {
     }
     startup.push({ name, first: samples[0], warmMs: distribution(samples.slice(1).map(r => r.ms)), samples });
   }
-  assert(!existsSync(join(directory, 'probe.sqlite')));
-  assert(!existsSync(join(directory, 'writer.lock')));
+  assert.deepEqual(readdirSync(directory), ['control.sock'], 'the fake server must create no database or writer lock');
   const report = { baseline: BASE, candidateCommit: (await checked('git', ['rev-parse', 'HEAD'])).trim(),
     candidateDiff: (await checked('git', ['diff', '--stat'])).trim(), recordedAt: new Date().toISOString(),
     sourceHashes: sources.map((source, i) => ({ name: i ? 'candidate' : 'baseline', files: Object.fromEntries(files.map(file => {

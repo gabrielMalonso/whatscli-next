@@ -241,6 +241,8 @@ The private socket and JSONL probe use a flat request with `id` reserved for req
 
 The directory must be owned by the current user with private permissions (0700); credentials, databases, logs, socket, QR images, and downloaded files use 0600. Existing insecure state is rejected rather than silently repaired. The database file is `probe.sqlite`, retained from the validation program. [Store schema, substring search and offline benchmarks](docs/storage.md) describe the additive query projection/index upgrade and its limits. Authentication uses the SDK's binary serializer and atomic key batches, with durable SQLite commits.
 
+[CLI startup and RPC measurements](docs/cli-performance.md) separate process/import cost from local transport and explain the response-assembly improvement for large pages. Use smaller pages when full message bodies dominate; compact output preserves complete text and does not reduce socket payloads.
+
 Credentials and messages are **not encrypted at rest**. Keep the entire directory, WAL/SHM files, QR images, logs, and backups private and out of version control. Stop the daemon before copying a backup. The repository ignores `.private/`, `.tmp/`, databases and logs; the package file allowlist excludes state. No credential deletion, logout, OS service installation or network-wide interruption is performed automatically.
 
 ## Verification and limits
