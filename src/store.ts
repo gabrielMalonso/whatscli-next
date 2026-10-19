@@ -12,6 +12,17 @@ export const encode = (value: unknown): string => JSON.stringify(value, BufferJS
 // SQLite contains objects written by this process using the SDK's binary serializer.
 export const decode = <T>(value: string): T => JSON.parse(value, BufferJSON.reviver) as T;
 
+/** Protobuf toJSON writes enum names. Restore the enum values without dropping extended SDK keys. */
+function decodeMessage(value: string): WAMessage {
+  const message = decode<WAMessage>(value);
+  const enums = proto.WebMessageInfo.fromObject({ messageStubType: message.messageStubType, status: message.status });
+  if (message.messageStubType != null) message.messageStubType = enums.messageStubType ?? null;
+  if (message.status != null) message.status = enums.status ?? null;
+  const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+  if (protocol?.type != null) protocol.type = proto.Message.ProtocolMessage.fromObject(protocol).type ?? null;
+  return message;
+}
+
 export type Operation =
   | { kind: 'send'; jid: string; text: string }
   | { kind: 'send-file'; jid: string; path: string; mime: string; caption: string; bytes: number; sha256: string }
@@ -95,7 +106,7 @@ export class Store {
         CREATE INDEX IF NOT EXISTS identity_mapping_lid ON identity_mappings(lid);
       `);
       this.db.function('search_text', { deterministic: true }, value => typeof value === 'string'
-        ? (messageOutput(decode<WAMessage>(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
+        ? (messageOutput(decodeMessage(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
       // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
       // Legacy key-store entries have no observation timestamp; do not invent one.
       if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
@@ -116,9 +127,26 @@ export class Store {
         for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='messages.delete' ORDER BY sequence").all()) {
           this.applyDeleteEvent(decode<BaileysEventMap['messages.delete']>(String(row.json)), Number(row.at), true);
         }
-        for (const row of this.db.prepare('SELECT json FROM messages').all()) {
-          const message = decode<WAMessage>(String(row.json));
+        const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
+          .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
+        const derivedTargets = new Set<string>();
+        for (const { message } of messages) {
+          const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+          if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) continue;
+          if (protocol.key?.id) derivedTargets.add(encode(this.deletionKey({ ...message.key, id: protocol.key.id })));
           this.observeRevocation(message);
+        }
+        for (const { rowid, message } of messages) {
+          if (message.messageStubType !== proto.WebMessageInfo.StubType.REVOKE
+            || normalizeMessageContent(message.message)?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE) continue;
+          if (!derivedTargets.has(encode(this.deletionKey(message.key)))) this.observeRevocation(message);
+          else if (!this.deletion(message.key)) {
+            // The old runtime saved rc14's lossy derived stub on this envelope identity.
+            // The raw notification was validated above; don't reinstate its wrong direction.
+            delete message.messageStubType;
+            delete message.messageStubParameters;
+            this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), rowid);
+          }
         }
         this.set('migration', 'message-deletions-v1', true);
       });
@@ -325,16 +353,16 @@ export class Store {
     if (!key.remoteJid || !key.id || typeof key.fromMe !== 'boolean') return undefined;
     if (key.fromMe) {
       const own = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=1 ORDER BY rowid LIMIT 1').get(key.remoteJid, key.id);
-      return own ? this.visibleMessage(decode<WAMessage>(String(own.json))) : undefined;
+      return own ? this.visibleMessage(decodeMessage(String(own.json))) : undefined;
     }
     const row = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=? AND participant=?')
       .get(key.remoteJid, key.id, Number(key.fromMe), key.fromMe ? '' : key.participant ?? '');
-    return row ? this.visibleMessage(decode<WAMessage>(String(row.json))) : undefined;
+    return row ? this.visibleMessage(decodeMessage(String(row.json))) : undefined;
   }
 
   messages(jid: string, limit = 20, offset = 0): WAMessage[] {
     return this.db.prepare('SELECT json FROM messages WHERE jid=? ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?')
-      .all(jid, limit, offset).map(row => this.visibleMessage(decode<WAMessage>(String(row.json))));
+      .all(jid, limit, offset).map(row => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
   search(query: string, limit: number, offset: number, jid?: string): WAMessage[] {
@@ -343,7 +371,7 @@ export class Store {
       ? this.db.prepare("SELECT json FROM messages WHERE json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?")
       : this.db.prepare("SELECT json FROM messages WHERE jid=? AND json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?");
     return (jid === undefined ? rows.all(text, limit, offset) : rows.all(jid, text, limit, offset))
-      .map(row => this.visibleMessage(decode<WAMessage>(String(row.json))));
+      .map(row => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
   locateMessage(ref: { jid: string; id: string; fromMe?: boolean; participant?: string }): WAMessage {
@@ -354,7 +382,7 @@ export class Store {
     const rows = this.db.prepare(`SELECT json FROM messages WHERE ${clauses.join(' AND ')} LIMIT 2`).all(...args);
     if (rows.length === 0) throw new Error('Message is not stored for that exact identity');
     if (rows.length > 1) throw new Error('Ambiguous message ID; provide fromMe and participant');
-    const message = decode<WAMessage>(String(rows[0]?.json));
+    const message = decodeMessage(String(rows[0]?.json));
     if (this.deletion(message.key)) throw new Error('Message content is unavailable after deletion or an uncertain chat deletion boundary');
     return message;
   }
@@ -409,7 +437,7 @@ export class Store {
       ? this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=1').all(jid, id)
       : this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=0 AND participant=?').all(jid, id, participant);
     for (const row of rows) {
-      const message = decode<WAMessage>(String(row.json));
+      const message = decodeMessage(String(row.json));
       this.retainAudit(key, message);
       message.message = null;
       delete message.messageStubParameters;
@@ -433,17 +461,38 @@ export class Store {
     }
   }
 
-  private observeRevocation(message: WAMessage): void {
-    if (message.messageStubType === proto.WebMessageInfo.StubType.REVOKE) this.markDeleted(message.key, 'revoke');
+  private revocationTarget(message: WAMessage): WAMessageKey | undefined {
     const protocol = normalizeMessageContent(message.message)?.protocolMessage;
-    if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) return;
-    // rc14 projects the target ID onto the envelope key, whose direction is account-relative.
-    // The embedded key's fromMe is sender-relative; never copy it onto local identity.
-    if (!protocol.key?.id || (protocol.key.remoteJid && protocol.key.remoteJid !== message.key.remoteJid)
-      || (protocol.key.participant && protocol.key.participant !== message.key.participant)) {
+    if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE || !protocol.key
+      || !message.key.remoteJid || typeof message.key.fromMe !== 'boolean') return undefined;
+    const target = protocol.key;
+    const id = target.id;
+    if (!id || (target.remoteJid && target.remoteJid !== message.key.remoteJid)) return undefined;
+    // Embedded fromMe is relative to the notification's sender. Only true identifies
+    // that same author; another sender's false cannot establish our account's direction.
+    if (target.fromMe === true) {
+      if (target.participant && target.participant !== message.key.participant) return undefined;
+      return { ...message.key, id };
+    }
+    if (target.fromMe !== false || message.key.fromMe !== true) return undefined;
+    // Our own administrative revoke supplies account-relative false. In a group it
+    // still needs the original participant, not the administrator on the envelope.
+    if ((message.key.remoteJid?.endsWith('@g.us') || message.key.remoteJid?.endsWith('@broadcast')) && !target.participant) return undefined;
+    if (target.participant && target.participant === message.key.participant) return undefined;
+    return { remoteJid: message.key.remoteJid, id, fromMe: false, participant: target.participant ?? null };
+  }
+
+  private observeRevocation(message: WAMessage): void {
+    const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+    if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) {
+      if (message.messageStubType === proto.WebMessageInfo.StubType.REVOKE) this.markDeleted(message.key, 'revoke');
+      return;
+    }
+    const target = this.revocationTarget(message);
+    if (!target) {
       this.event('message-deletion-unknown', { reason: 'inconsistent-protocol-target' }); return;
     }
-    this.markDeleted({ ...message.key, id: protocol.key.id }, 'revoke');
+    this.markDeleted(target, 'revoke');
   }
 
   updateMessage({ key, update }: WAMessageUpdate): void {
@@ -451,14 +500,10 @@ export class Store {
     if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
       if (update.key) {
         const notification = this.message(update.key);
-        const protocol = normalizeMessageContent(notification?.message)?.protocolMessage;
-        const expected = notification && protocol?.key?.id ? { ...notification.key, id: protocol.key.id } : undefined;
+        const expected = notification ? this.revocationTarget(notification) : undefined;
         // rc14's derived update drops the embedded target's chat/participant. It cannot
         // override the raw notification's rejection, or establish a target without it.
-        if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE || !expected
-          || encode(this.deletionKey(expected)) !== encode(this.deletionKey(key))
-          || (protocol.key?.remoteJid && protocol.key.remoteJid !== expected.remoteJid)
-          || (protocol.key?.participant && protocol.key.participant !== expected.participant)) {
+        if (!expected || encode(this.deletionKey(expected)) !== encode(this.deletionKey(key))) {
           this.event('message-deletion-unknown', { jid: key.remoteJid ?? null, id: key.id ?? null, reason: 'unverified-revoke-notification' });
           if (update.status != null) this.receipt(key, update.status);
           return;
@@ -484,7 +529,7 @@ export class Store {
     if (barrier === undefined) return undefined;
     // An embedded quote has no timestamp. Only an exact newer observation can clear the boundary.
     const known = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=?').all(ref.jid, ref.id)
-      .map(row => decode<WAMessage>(String(row.json))).filter(message => ref.participant &&
+      .map(row => decodeMessage(String(row.json))).filter(message => ref.participant &&
         (message.key.participant === ref.participant || (message.key.fromMe === false && !message.key.participant && ref.participant === ref.jid)));
     return known.length === 1 && toNumber(known[0]?.messageTimestamp ?? 0) * 1000 > barrier ? undefined : 'unknown';
   }

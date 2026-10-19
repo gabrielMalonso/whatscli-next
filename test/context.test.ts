@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { initAuthCreds, makeEventBuffer, proto } from 'baileys';
+import { generateWAMessageContent, initAuthCreds, makeEventBuffer, proto } from 'baileys';
 import type { BaileysEventEmitter, BaileysEventMap, SocketConfig, WAMessage, WAMessageKey, WASocket } from 'baileys';
 import processMessage from 'baileys/lib/Utils/process-message.js';
 import { pino } from 'pino';
@@ -219,6 +219,49 @@ test('real SDK REVOKE processing/buffering cannot override an inconsistent raw c
   }
 });
 
+test('real SDK administrative revocations preserve exact directions and require an identifiable original author', async () => {
+  const self = '12025550199@s.whatsapp.net';
+  const cases: { own: boolean; target: WAMessageKey; deleted: 'incoming' | 'own' | null }[] = [
+    { own: true, target: { fromMe: false }, deleted: null },
+    { own: true, target: { fromMe: false, participant: pn }, deleted: 'incoming' },
+    { own: true, target: { fromMe: true }, deleted: 'own' },
+    { own: false, target: { fromMe: true, participant: pn }, deleted: 'incoming' },
+    { own: false, target: { fromMe: false, participant: other }, deleted: null },
+    { own: true, target: {}, deleted: null },
+    { own: true, target: { fromMe: false, participant: self }, deleted: null },
+  ];
+  for (const mode of ['immediate', 'buffered', 'merged']) for (const entry of cases) {
+    const events = makeEventBuffer(pino({ level: 'silent' }));
+    const f = fixture(temporary(), events);
+    const incoming = { remoteJid: group, id: 'collision', fromMe: false, participant: pn };
+    const own = { ...incoming, fromMe: true, participant: self };
+    const another = { ...incoming, participant: other };
+    const content = await generateWAMessageContent({ delete: { remoteJid: group, id: 'collision', ...entry.target } }, {
+      upload: async () => { throw new Error('Unexpected SDK upload'); },
+    });
+    const notification = { ...message({ remoteJid: group, id: 'notification', fromMe: entry.own, participant: entry.own ? self : pn }), message: content };
+    try {
+      f.emit('messages.upsert', { type: 'notify', messages: [message(incoming), message(own), message(another)] });
+      if (mode !== 'immediate') events.buffer();
+      if (mode === 'merged') f.emit('messages.upsert', { type: 'append', messages: [message(incoming), message(own), message(another)] });
+      f.emit('messages.upsert', { type: 'notify', messages: [notification] });
+      await sdkRevocation(events, notification);
+      events.flush();
+      f.emit('messages.upsert', { type: 'append', messages: [message(incoming), message(own), message(another)] });
+      const output = await f.list(group);
+      assert.equal(output.find(item => item.id === 'collision' && item.fromMe)?.text, entry.deleted === 'own' ? null : 'Fictional original body', `${mode}/${encode(entry)}`);
+      assert.equal(output.find(item => item.id === 'collision' && !item.fromMe && item.participant === pn)?.text, entry.deleted === 'incoming' ? null : 'Fictional original body');
+      assert.equal(output.find(item => item.id === 'collision' && item.participant === other)?.text, 'Fictional original body');
+    } finally { events.destroy(); await f.runtime.close(); }
+    const reopened = new Store(f.directory);
+    try {
+      assert.equal(reopened.message(incoming)?.message?.conversation ?? null, entry.deleted === 'incoming' ? null : 'Fictional original body');
+      assert.equal(reopened.message(own)?.message?.conversation ?? null, entry.deleted === 'own' ? null : 'Fictional original body');
+      assert.equal(reopened.message(another)?.message?.conversation, 'Fictional original body');
+    } finally { reopened.close(); }
+  }
+});
+
 test('a derived REVOKE without its notification cannot guess a target before the original or after restart', async () => {
   const f = fixture();
   const key = message().key;
@@ -366,6 +409,35 @@ test('legacy delete journals migrate once without exposing retained audit data',
     assert.doesNotMatch(encode(reopened.events(0)), /original body/);
     assert.match(String(reopened.db.prepare('SELECT audit_json FROM message_deletions').get()?.audit_json), /original body/);
   } finally { reopened.close(); }
+});
+
+test('legacy derived administrative stubs cannot override raw direction evidence during migration or later status updates', async () => {
+  for (const participant of [null, pn]) {
+    const directory = temporary();
+    const store = new Store(directory);
+    const incoming = { remoteJid: group, id: 'collision', fromMe: false, participant: pn };
+    const own = { remoteJid: group, id: 'collision', fromMe: true };
+    store.observeMessage(message(incoming));
+    store.observeMessage(message(own));
+    const notification = { ...message({ ...own, id: 'notification' }), message: await generateWAMessageContent({ delete: {
+      remoteJid: group, id: 'collision', fromMe: false, participant,
+    } }, { upload: async () => { throw new Error('Unexpected SDK upload'); } }) };
+    // Recreate the previous runtime's persisted snapshot, without running feature logic.
+    store.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(group, 'notification', 1, '', 1700000000, encode(notification));
+    store.db.prepare('UPDATE messages SET json=? WHERE jid=? AND id=? AND from_me=1').run(
+      encode({ ...message(own), messageStubType: proto.WebMessageInfo.StubType.REVOKE }), group, 'collision');
+    store.set('migration', 'message-deletions-v1', null);
+    store.close();
+    const reopened = new Store(directory);
+    try {
+      assert.equal(reopened.message(own)?.message?.conversation, 'Fictional original body');
+      assert.equal(reopened.message(own)?.messageStubType, undefined);
+      assert.equal(reopened.message(incoming)?.message?.conversation ?? null, participant ? null : 'Fictional original body');
+      reopened.updateMessage({ key: own, update: { status: proto.WebMessageInfo.Status.READ } });
+      assert.equal(reopened.message(own)?.message?.conversation, 'Fictional original body');
+      assert.equal(reopened.deletion(own), undefined);
+    } finally { reopened.close(); }
+  }
 });
 
 test('legacy chat deletes preserve newer history and suppress unknown quoted snapshots across restart', () => {
