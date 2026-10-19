@@ -150,6 +150,12 @@ node dist/src/cli.js request --key 'example-message-001'
 
 Do not substitute a new key just because a request timed out. An intentional new message needs a new key. The program never automatically resubmits uncertain intents, including after restart.
 
+For each new direct PN send (text, document or card), the runtime queries the pinned SDK's `executeUSyncQuery` with LIDProtocol, without using the mapping cache as proof. Only one exact PN result with a canonical LID and no known conflict at either endpoint establishes a route. The original PN still controls authorization and `--allow-jid`. The immutable request retains `operation.jid` and its message ID, plus `route: {status, jid, source, observedAt, limit}`. A `proven` route records the LID actually passed to `sendMessage`, with `limit: server-association-at-query-time`; this is a server association at that moment, not permanent ownership, acceptance, delivery or read. `observedAt` is the local query observation time in milliseconds. SDK messages keep their native LID identity without creating or merging PN/LID chats.
+
+Failed, missing, malformed, ambiguous or conflicting route results preserve the original PN send and exact receipt rule. Their `route.status: unproven` records `reason` and `limit: exact-original-destination-only`; it grants no alias authority. Groups and explicit LID sends retain their existing behavior without a PN route lookup. Repeated keys return their original evidence before any lookup/send, including concurrent calls and restart; a file key retains its original byte manifest even if the path changes. Legacy requests have no route and are never backfilled from later mappings or queries. Their unmatched receipts remain available through `events`, without promoting the request.
+
+For a proven route, receipt correlation requires that recorded destination, exact message ID and `fromMe: true`, without a group participant. SDK device normalization preserves the domain and accepts only supported canonical user/device JIDs; it never equates PN and LID digits. The recorded route is immutable: later mappings do not rewrite it or retract observed receipts. Both full and compact preserve all route and receipt evidence.
+
 Download a stored media message:
 
 ```sh

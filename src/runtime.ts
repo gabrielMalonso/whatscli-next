@@ -1,14 +1,16 @@
 import { Writable } from 'node:stream';
-import makeWASocket, { ALL_WA_PATCH_NAMES, areJidsSameUser, assertMediaContent, downloadMediaMessage, normalizeMessageContent, toNumber } from 'baileys';
+import makeWASocket, { ALL_WA_PATCH_NAMES, areJidsSameUser, assertMediaContent, downloadMediaMessage, normalizeMessageContent, toNumber, USyncQuery, USyncUser } from 'baileys';
 import { basename } from 'node:path';
 import type { AuthenticationCreds, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
 import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
-import { internationalPhone, recipientJid } from './identity.js';
+import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
+import { unprovenRoute } from './send-route.js';
+import type { SendRoute } from './send-route.js';
 import { contactCard } from './contact-card.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
@@ -70,6 +72,20 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     },
   });
   const logger = pino({ level: 'warn' }, diagnostics);
+  const sendPreparation = {
+    pending: new Map<string, Promise<void>>(),
+    async route(jid: string): Promise<SendRoute> {
+      const current = connected();
+      let result: Awaited<ReturnType<WASocket['executeUSyncQuery']>>;
+      try {
+        result = await current.executeUSyncQuery(new USyncQuery().withLIDProtocol().withContext('background').withUser(new USyncUser().withId(jid)));
+      } catch { return unprovenRoute(jid, clock.now(), 'query-failed'); }
+      if (current !== socket || stopped || connection !== 'open') throw new Error('Connection changed during route preparation; no send was attempted');
+      const entry = result && Array.isArray(result.list) && result.list.length === 1 ? result.list[0] : undefined;
+      if (entry?.id !== jid || typeof entry.lid !== 'string' || !isLid(entry.lid)) return unprovenRoute(jid, clock.now(), 'invalid-response');
+      return { status: 'proven', jid: entry.lid, source: 'baileys.executeUSyncQuery/lid', observedAt: clock.now(), limit: 'server-association-at-query-time' };
+    },
+  };
   function interrupt(reason: ReceiveInterruption['reason']): void {
     lastInterruption = { at: clock.now(), reason };
     try { store.set('runtime', 'receive-interruption', lastInterruption); } catch { fatal(); }
@@ -312,17 +328,17 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         await reconnect();
         return { reconnecting: true };
       case 'send': return perform(store, command.key, { kind: 'send', jid: command.jid, text: command.text },
-        () => validateTarget(command.jid, true), async messageId => {
+        () => validateTarget(command.jid, true), async (messageId, destination) => {
           if (!messageId) throw new Error('Missing persisted message ID');
-          return connected().sendMessage(command.jid, { text: command.text, linkPreview: null }, { messageId });
-        });
+          return connected().sendMessage(destination, { text: command.text, linkPreview: null }, { messageId });
+        }, sendPreparation);
       case 'send-contact': {
         const card = contactCard(command.name, command.phone);
         return perform(store, command.key, { kind: 'send-contact', jid: command.jid, name: command.name, phone: command.phone, vcard: card.vcard },
-          () => validateTarget(command.jid, true), async messageId => {
+          () => validateTarget(command.jid, true), async (messageId, destination) => {
             if (!messageId) throw new Error('Missing persisted message ID');
-            return connected().sendMessage(command.jid, { contacts: { displayName: card.displayName, contacts: [card] } }, { messageId });
-          });
+            return connected().sendMessage(destination, { contacts: { displayName: card.displayName, contacts: [card] } }, { messageId });
+          }, sendPreparation);
       }
       case 'send-file': {
         const previous = store.request(command.key);
@@ -331,13 +347,15 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new Error('Idempotency key already used with different arguments');
           return previous;
         }
+        const preparing = sendPreparation.pending.get(command.key);
+        if (preparing) { await preparing; return execute(command); }
         validateTarget(command.jid, true);
         const { buffer, bytes, sha256 } = await prepareFile(command.path);
         return perform(store, command.key, { kind: 'send-file', jid: command.jid, path: command.path, mime: command.mime, caption: command.caption, bytes, sha256 },
-          () => validateTarget(command.jid, true), async messageId => {
+          () => validateTarget(command.jid, true), async (messageId, destination) => {
             if (!messageId) throw new Error('Missing persisted message ID');
-            return connected().sendMessage(command.jid, { document: buffer, mimetype: command.mime, fileName: basename(command.path), caption: command.caption }, { messageId });
-          });
+            return connected().sendMessage(destination, { document: buffer, mimetype: command.mime, fileName: basename(command.path), caption: command.caption }, { messageId });
+          }, sendPreparation);
       }
       case 'download': {
         if (!options.connect) throw new Error('Media download requires network access; restart without --offline');
@@ -356,7 +374,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           const lastMessages = store.messages(command.jid, 1).map(({ key, messageTimestamp }) => ({ key, messageTimestamp: toNumber(messageTimestamp ?? 0) }));
           const patch = command.command === 'archive' ? { archive: command.value, lastMessages } : { markRead: command.value, lastMessages };
           await connected().chatModify(patch, command.jid);
-        });
+        }, sendPreparation);
         return { request, verification: 'pending-phone-and-subsequent-client-observation', localChat: store.chatView(command.jid) };
       }
       case 'stop': return { stopping: true };

@@ -8,6 +8,8 @@ import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
 import type { ChatFilters } from './protocol.js';
+import { receiptUserJid } from './send-route.js';
+import type { SendRoute } from './send-route.js';
 
 export const encode = (value: unknown): string => JSON.stringify(value, BufferJSON.replacer);
 // SQLite contains objects written by this process using the SDK's binary serializer.
@@ -39,6 +41,7 @@ export type RequestRecord = {
   key: string;
   operation: Operation;
   messageId: string | null;
+  readonly route?: SendRoute;
   attempt: 'uncertain' | 'sdk-returned';
   acceptance: 'unknown' | 'server-ack';
   delivery: 'unknown' | 'delivered';
@@ -291,6 +294,12 @@ export class Store {
       verification: this.recipientCheck(jid) ?? { status: 'unknown', source: null, observedAt: null },
       contacts: [...identities].flatMap(id => { const record = this.get<ContactRecord>('contact', id); return record ? [record] : []; }),
     };
+  }
+
+  /** A proposed pair must agree with every known edge at either endpoint. */
+  hasMappingConflict(pn: string, lid: string): boolean {
+    return this.db.prepare('SELECT 1 FROM identity_mappings WHERE (pn=? AND lid<>?) OR (lid=? AND pn<>?) LIMIT 1')
+      .get(pn, lid, lid, pn) !== undefined;
   }
 
   chat(jid: string): Chat | undefined {
@@ -642,7 +651,11 @@ export class Store {
     if (!Number.isInteger(status) || status < proto.WebMessageInfo.Status.ERROR || status > proto.WebMessageInfo.Status.PLAYED) return;
     for (const row of this.db.prepare('SELECT json FROM requests').all()) {
       const request = decode<RequestRecord>(String(row.json));
-      if (!isSendOperation(request.operation) || request.messageId !== key.id || request.operation.jid !== key.remoteJid) continue;
+      if (!isSendOperation(request.operation) || request.messageId !== key.id) continue;
+      const destination = request.route?.status === 'proven' ? request.route.jid : request.operation.jid;
+      if (request.route?.status === 'proven') {
+        if (key.participant || receiptUserJid(key.remoteJid) !== destination) continue;
+      } else if (destination !== key.remoteJid) continue;
       // Monotonic evidence: late PENDING/ERROR events cannot erase an observed receipt.
       if (status === proto.WebMessageInfo.Status.ERROR) request.errorObserved = true;
       if (status >= proto.WebMessageInfo.Status.SERVER_ACK) request.acceptance = 'server-ack';
