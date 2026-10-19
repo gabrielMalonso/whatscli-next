@@ -48,7 +48,7 @@ These fixtures expose scaling and tradeoffs, not account-specific performance, l
 
 ## Recorded synthetic results
 
-Run `2026-10-19T20:26:05.909Z`; measured Store implementation `bc300f1eff311e19ea41ffcc581a4a5d45fe71fa` against the exact base above. Node v24.18.0, pnpm 10.24.0, TypeScript 5.9.3, Baileys 7.0.0-rc14, SQLite 3.53.1, Linux x64. A preliminary full run established the same broad search/memory trend; the recorded run below was sequential with no other worker tests/builds running. [Full report](store-query-results.json) includes first-call timings, restart queries, memory snapshots, query plans, fixture/result hashes and per-index bytes. Local scratch paths are omitted in the repository copy.
+Run `2026-10-19T20:34:37.728Z`; measured Store implementation `3deb998cd22bdb4dde9cfdaa7f3121685d9573f5` after the Long-timestamp backfill correction, against the exact base above. Node v24.18.0, pnpm 10.24.0, TypeScript 5.9.3, Baileys 7.0.0-rc14, SQLite 3.53.1, Linux x64. The recorded run was sequential with no other worker tests/builds running. [Full report](store-query-results.json) includes first-call timings, restart queries, memory snapshots, query plans, fixture/result hashes and per-index bytes. Local scratch paths are omitted in the repository copy.
 
 Warm latency cells are **min / median / max milliseconds, n=6**. These are direct Store calls including safe message output.
 
@@ -56,74 +56,74 @@ Warm latency cells are **min / median / max milliseconds, n=6**. These are direc
 
 | Query | Base ms | Candidate ms |
 | --- | ---: | ---: |
-| global-miss | 172.304 / 179.529 / 327.247 | 4.359 / 4.463 / 4.472 |
-| global-result | 213.302 / 215.395 / 289.749 | 0.654 / 0.706 / 0.731 |
-| unicode | 182.783 / 186.518 / 302.041 | 0.628 / 0.638 / 0.756 |
-| short-1 | 187.756 / 188.089 / 189.684 | 0.649 / 0.689 / 0.751 |
-| short-2 | 187.158 / 187.705 / 191.199 | 0.661 / 0.696 / 0.882 |
-| excluded-context | 182.048 / 183.192 / 184.405 | 4.547 / 4.588 / 4.712 |
-| jid-miss | 41.149 / 41.806 / 42.462 | 1.284 / 1.314 / 1.329 |
-| jid-result | 46.570 / 47.255 / 48.175 | 0.530 / 0.586 / 0.670 |
-| history | 8.959 / 9.076 / 9.439 | 0.488 / 0.501 / 0.540 |
-| chats-filtered | 2.412 / 2.416 / 2.508 | 4.670 / 12.457 / 18.857 |
-| chats-unknown | 2.311 / 2.343 / 2.382 | 5.673 / 9.547 / 13.336 |
-| receipt | 23.515 / 29.631 / 85.082 | 2.402 / 2.477 / 2.613 |
+| global-miss | 170.854 / 174.116 / 319.816 | 4.099 / 4.137 / 4.712 |
+| global-result | 210.951 / 211.981 / 213.931 | 0.635 / 0.712 / 2.163 |
+| unicode | 178.465 / 179.474 / 184.499 | 0.606 / 0.631 / 0.685 |
+| short-1 | 177.517 / 180.070 / 301.983 | 0.700 / 0.707 / 0.736 |
+| short-2 | 177.345 / 179.208 / 181.900 | 0.686 / 0.739 / 0.920 |
+| excluded-context | 173.076 / 174.636 / 176.251 | 4.678 / 4.707 / 4.882 |
+| jid-miss | 38.882 / 39.509 / 40.415 | 1.324 / 1.377 / 1.428 |
+| jid-result | 43.861 / 44.826 / 45.757 | 0.590 / 0.628 / 0.680 |
+| history | 8.527 / 8.623 / 8.949 | 0.525 / 0.540 / 0.552 |
+| chats-filtered | 2.275 / 2.340 / 2.386 | 2.436 / 2.534 / 2.558 |
+| chats-unknown | 2.210 / 2.245 / 2.260 | 2.356 / 2.375 / 3.331 |
+| receipt | 21.773 / 28.667 / 76.784 | 1.856 / 1.968 / 2.056 |
 
 | Resource / work | Base | Candidate |
 | --- | ---: | ---: |
-| Query process peak RSS, MiB | 478.668 | 115.367 |
-| Maximum sampled query heap, MiB | 273.725 | 28.810 |
+| Query process peak RSS, MiB | 477.961 | 115.164 |
+| Maximum sampled query heap, MiB | 273.955 | 28.781 |
 | Checkpointed files before mutation, MiB | 29.730 | 35.176 |
 | Checkpointed files after mutation, MiB | 29.730 | 35.176 |
-| Bulk ingest, ms (n=1) | 1291.891 | 1351.305 |
-| Store open before queries, ms (n=1) | 0.637 | 0.756 |
-| Store reopen after mutations, ms (n=1) | 0.949 | 0.727 |
-| 50 edits, ms (min/median/max, n=5) | 13.516 / 14.391 / 23.766 | 10.518 / 14.368 / 15.919 |
-| 50 deletes, ms (min/median/max, n=5) | 5.230 / 8.311 / 13.464 | 4.460 / 6.192 / 8.096 |
-| Standalone insert, ms (min/median/max, n=5) | 4.259 / 4.794 / 5.580 | 2.319 / 2.477 / 2.600 |
+| Bulk ingest, ms (n=1) | 1323.212 | 1495.495 |
+| Store open before queries, ms (n=1) | 0.686 | 1.145 |
+| Store reopen after mutations, ms (n=1) | 0.651 | 0.733 |
+| 50 edits, ms (min/median/max, n=5) | 11.133 / 13.549 / 18.095 | 13.758 / 24.941 / 32.308 |
+| 50 deletes, ms (min/median/max, n=5) | 4.433 / 6.835 / 9.985 | 4.043 / 13.196 / 27.402 |
+| Standalone insert, ms (min/median/max, n=5) | 4.058 / 4.410 / 4.866 | 2.407 / 2.967 / 6.047 |
 
-Candidate additive upgrade: **408.2 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 123.0 MiB. Generated mean/max message JSON: 1007.6 / 448,410 bytes.
+Candidate additive upgrade: **566.3 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 121.2 MiB. Generated mean/max message JSON: 1007.6 / 448,410 bytes.
 
 ### 68,919 messages, 726 chats, 15,000 requests
 
 | Query | Base ms | Candidate ms |
 | --- | ---: | ---: |
-| global-miss | 537.939 / 542.327 / 548.210 | 14.386 / 14.615 / 15.024 |
-| global-result | 632.178 / 651.977 / 796.323 | 0.692 / 0.737 / 0.805 |
-| unicode | 540.475 / 541.456 / 546.151 | 0.667 / 0.685 / 0.755 |
-| short-1 | 541.055 / 543.130 / 556.198 | 0.695 / 0.742 / 0.793 |
-| short-2 | 541.095 / 543.525 / 548.519 | 0.697 / 0.779 / 0.952 |
-| excluded-context | 532.470 / 533.346 / 541.334 | 15.129 / 15.214 / 15.428 |
-| jid-miss | 118.082 / 118.671 / 119.981 | 4.181 / 4.235 / 4.289 |
-| jid-result | 137.670 / 137.785 / 138.958 | 0.592 / 0.631 / 0.688 |
-| history | 33.170 / 33.700 / 33.917 | 0.523 / 0.540 / 0.552 |
-| chats-filtered | 2.305 / 2.340 / 3.494 | 2.551 / 2.604 / 3.763 |
-| chats-unknown | 2.151 / 2.215 / 2.233 | 2.471 / 2.479 / 3.200 |
-| receipt | 64.533 / 65.915 / 132.347 | 1.890 / 2.187 / 2.527 |
+| global-miss | 549.992 / 563.253 / 574.038 | 14.383 / 14.431 / 14.850 |
+| global-result | 662.561 / 670.549 / 815.317 | 0.694 / 0.737 / 2.418 |
+| unicode | 546.477 / 563.821 / 816.876 | 0.651 / 0.673 / 0.725 |
+| short-1 | 538.873 / 552.556 / 573.565 | 0.690 / 0.711 / 0.773 |
+| short-2 | 546.936 / 569.132 / 664.915 | 0.690 / 0.741 / 0.944 |
+| excluded-context | 550.588 / 556.454 / 564.344 | 14.889 / 15.011 / 15.322 |
+| jid-miss | 119.533 / 121.168 / 123.304 | 4.230 / 4.247 / 4.266 |
+| jid-result | 142.624 / 143.063 / 145.176 | 0.586 / 0.631 / 0.692 |
+| history | 34.720 / 35.097 / 35.637 | 0.529 / 0.538 / 0.543 |
+| chats-filtered | 2.362 / 2.465 / 2.499 | 2.544 / 2.606 / 3.723 |
+| chats-unknown | 2.212 / 2.242 / 2.312 | 2.429 / 2.444 / 3.454 |
+| receipt | 67.958 / 69.172 / 69.634 | 1.806 / 1.928 / 2.151 |
 
 | Resource / work | Base | Candidate |
 | --- | ---: | ---: |
-| Query process peak RSS, MiB | 707.773 | 116.574 |
-| Maximum sampled query heap, MiB | 472.219 | 28.747 |
+| Query process peak RSS, MiB | 690.859 | 116.727 |
+| Maximum sampled query heap, MiB | 414.055 | 28.698 |
 | Checkpointed files before mutation, MiB | 88.203 | 104.602 |
 | Checkpointed files after mutation, MiB | 88.203 | 104.602 |
-| Bulk ingest, ms (n=1) | 2967.039 | 4344.348 |
-| Store open before queries, ms (n=1) | 0.646 | 0.800 |
-| Store reopen after mutations, ms (n=1) | 0.667 | 0.769 |
-| 50 edits, ms (min/median/max, n=5) | 12.389 / 14.762 / 20.257 | 12.198 / 14.794 / 17.785 |
-| 50 deletes, ms (min/median/max, n=5) | 5.192 / 7.312 / 11.458 | 5.053 / 7.255 / 9.449 |
-| Standalone insert, ms (min/median/max, n=5) | 4.015 / 4.929 / 5.029 | 2.321 / 2.420 / 2.789 |
+| Bulk ingest, ms (n=1) | 3166.760 | 4286.751 |
+| Store open before queries, ms (n=1) | 0.663 | 0.771 |
+| Store reopen after mutations, ms (n=1) | 2.300 | 0.777 |
+| 50 edits, ms (min/median/max, n=5) | 10.496 / 13.219 / 18.421 | 10.385 / 14.177 / 27.642 |
+| 50 deletes, ms (min/median/max, n=5) | 4.047 / 6.358 / 9.964 | 4.707 / 7.017 / 13.128 |
+| Standalone insert, ms (min/median/max, n=5) | 3.880 / 4.208 / 6.654 | 1.813 / 2.643 / 3.061 |
 
-Candidate additive upgrade: **1194.5 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 156.9 MiB. Generated mean/max message JSON: 995.9 / 448,662 bytes.
+Candidate additive upgrade: **1508.4 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 155.5 MiB. Generated mean/max message JSON: 995.9 / 448,662 bytes.
 
 ### Interpretation and limits
 
-Global misses improved about 40× at 23k and 37× at 69k; the scan remains linear. History no longer uses a temporary B-tree, and receipt candidates use the message-ID index. Matching searches stop at the selected page without decoding unrelated SDK bodies. These gains justify retaining the simple scan instead of adding FTS candidate machinery.
+Global misses improved about 42× at 23k and 39× at 69k; the scan remains linear. History no longer uses a temporary B-tree, and receipt candidates use the message-ID index. Matching searches stop at the selected page without decoding unrelated SDK bodies. These gains justify retaining the simple scan instead of adding FTS candidate machinery.
 
-The tradeoff is about **18.6% more allocated/file space**. Bulk ingestion increased about **4.6% at 23k and 46.4% at 69k** in this run (single samples, not stable throughput estimates). The preliminary run showed roughly 21% / 54% overhead, so do not infer a precise ingestion penalty from one sample. Edit/delete batch medians were similar here; standalone writes also change because the whole observation now commits once rather than using several autocommits.
+The tradeoff is **18.3% / 18.6% more file space** at 23k / 69k. Bulk ingestion increased **13.0% / 35.4%** in this run (single samples, not stable throughput estimates). Earlier same-fixture samples also varied (roughly 5–21% / 46–54% overhead before the backfill correction), so do not infer a precise ingestion penalty from one sample. Edit/delete batch and standalone-write distributions are reported above; an entire observation now commits once rather than using several autocommits.
 
-The unchanged chat algorithm had a slower 23k full-sequence sample (filtered median 12.46 ms versus 2.42 ms). A focused fresh-process follow-up on the same generated DBs, with no preceding message searches and 20 warm calls, measured 2.46 versus 2.41 ms (AND filter), and 2.28 versus 2.25 ms (unknown filter). The 69k sequence measured 2.60 versus 2.34 ms. This does not establish the cause of the isolated variation or a chat speedup; both results are retained in the report.
+The unchanged chat algorithm had a slower 23k sample in the previous run (filtered median 12.46 ms versus 2.42 ms). A focused fresh-process follow-up on those same generated DBs, with no preceding message searches and 20 warm calls, measured 2.46 versus 2.41 ms (AND filter), and 2.28 versus 2.25 ms (unknown filter). The final run above did not reproduce that large variation. This does not establish its cause or a chat speedup; the previous observation and follow-up remain in the report.
 
-CLI help startup is separate: warm min/median/max, n=6, baseline **119.861 / 121.754 / 130.089 ms**, candidate **115.860 / 129.995 / 139.714 ms**. Its roughly 120–130 ms cost remains. No real daemon/Unix-socket/WhatsApp timing was measured by this benchmark.
+CLI help startup is separate: warm min/median/max, n=6, baseline **118.770 / 120.509 / 125.320 ms**, candidate **119.137 / 124.089 / 146.599 ms**. Its roughly 120–130 ms cost remains. No real daemon/Unix-socket/WhatsApp timing was measured by this benchmark.
 
-All 123 prior tests plus 9 Store regressions passed at this implementation. No account, credentials, private snapshot, real SDK connection, downstream repository or live confirmation was accessed. Real-data offline comparison remains the coordinator’s separate work.
+All 123 prior tests plus 9 Store regressions passed, including Long timestamps/ordering/pagination through backfill/restart. Benchmark timestamps use ordinary numeric seconds; the separate regression exercises protobuf Long serialization. No account, credentials, private snapshot, real SDK connection, downstream repository or live confirmation was accessed. Real-data offline comparison remains the coordinator’s separate work.
