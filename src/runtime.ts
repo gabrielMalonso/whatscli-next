@@ -19,6 +19,10 @@ import { decode, encode, Store } from './store.js';
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
 
+// pnpm build stamps this literal into the emitted runtime, never a separate mutable sidecar.
+// Plain tsc/source execution stays unknown; status does no disk or Git inspection.
+const buildFingerprint: string | null = /* @build-fingerprint */ null;
+
 export type RuntimeOptions = {
   dataDir: string;
   connect: boolean;
@@ -256,6 +260,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   async function execute(command: Command): Promise<unknown> {
     switch (command.command) {
       case 'status': return {
+        build: { fingerprint: buildFingerprint },
         hasLinkedCredentials: hasLinkedCredentials(auth.state.creds),
         registered: auth.state.creds.registered,
         accountJid: auth.state.creds.me?.id ?? null, accountLid: auth.state.creds.me?.lid ?? null,

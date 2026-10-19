@@ -4,6 +4,8 @@ Run `node dist/src/cli.js --output compact ...` from the project directory. Each
 
 Use the [fixed-version installation/upgrade procedure](release.md) before deployment and the [supervised pilot runbook](pilot.md) only after the coordinator approves the account and exact targets. Starting an existing daemon does not upgrade its code.
 
+Read `status.data.build.fingerprint` to identify the responding daemon, in either output mode. Compare with the intended build's recorded fingerprint; local help, package version and Git HEAD do not identify a running process. `start`/`alreadyRunning` preserves that existing identity. A null fingerprint is unknown (unstamped); an absent build field is a legacy daemon. Stop normally and confirm the old PID exits before starting new code. The fingerprint describes generated first-party JS, without a Git/clean-tree, dependency-integrity or authenticity claim.
+
 ## Session
 
 ```sh

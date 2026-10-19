@@ -260,4 +260,9 @@ test('CLI compact sends one unchanged command, keeps JSON/exit codes, and valida
   assert.equal(commands.length, count, 'invalid CLI fields never reach I/O');
   const help = await cli(directory, 'help');
   assert.match(String((help.data as { commands: Record<string, string> }).commands['send-contact']), /--name NAME --phone/);
+  for (const output of ['full', 'compact']) {
+    const { stdout } = await invoke('status', '--output', output);
+    const legacy = JSON.parse(stdout) as { data: Record<string, unknown> };
+    assert.equal('build' in legacy.data, false, 'a client cannot invent identity for a legacy daemon');
+  }
 });
