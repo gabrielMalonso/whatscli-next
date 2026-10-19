@@ -27,7 +27,7 @@ if (args.worker) {
       child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
       child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
       child.once('error', reject);
-      child.once('exit', code => code === 0 ? resolveOutput(stdout) : reject(new Error(`${program}: exit ${code}\n${stderr}`)));
+      child.once('close', code => code === 0 ? resolveOutput(stdout) : reject(new Error(`${program}: exit ${code}\n${stderr}`)));
     });
   }
   const baseline = join(scratch, 'baseline');
