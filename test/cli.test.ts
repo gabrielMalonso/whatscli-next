@@ -112,6 +112,46 @@ test('restart recovers a private socket left by process exit and preserves an un
   assert.equal(readFileSync(existing, 'utf8'), 'Preserve this unrelated file');
 });
 
+test('offline CLI chat filters preserve state, exact identity and redaction across daemon restart', async t => {
+  const directory = temporary();
+  const store = new Store(directory);
+  const lid = '123450001@lid';
+  const key = { remoteJid: jid, id: 'deleted', fromMe: false };
+  const message = { key, messageTimestamp: 200, message: { conversation: 'DELETED_CHAT_BODY',
+    messageContextInfo: { messageSecret: Buffer.from('PRIVATE_CHAT_SECRET') } } };
+  store.observeChat({ id: jid, unreadCount: 1, archived: false, conversationTimestamp: 200, messages: [{ message }] });
+  store.observeMessage(message);
+  store.deleteMessages({ keys: [key] });
+  store.observeChat({ id: lid });
+  store.observeMapping(jid, lid, 'lid-mapping.update');
+  store.close();
+  t.after(async () => { await cli(directory, 'stop'); });
+  assert.equal((await cli(directory, 'start', '--offline')).ok, true);
+  const before = await cli(directory, 'chat', '--jid', jid);
+  const events = await cli(directory, 'events');
+  const { stdout } = await runFile(process.execPath, ['dist/src/cli.js', '--data-dir', directory, 'chats', '--unread', 'true', '--archived', 'false', '--limit', '1']);
+  assert.equal(stdout.trim().split('\n').length, 1);
+  const filtered = JSON.parse(stdout) as { data: { jid: string; activity: unknown }[]; source: string; coverage: string; connection: string };
+  assert.equal(filtered.source, 'local');
+  assert.equal(filtered.coverage, 'partial');
+  assert.equal(filtered.connection, 'offline');
+  assert.deepEqual(filtered.data.map(chat => chat.jid), [jid]);
+  assert.deepEqual(filtered.data[0]?.activity, { timestamp: 200, source: 'chat.conversationTimestamp' });
+  assert.doesNotMatch(stdout, /DELETED_CHAT_BODY|PRIVATE_CHAT_SECRET|messageSecret|messages|mediaKey/);
+  assert.deepEqual(((await cli(directory, 'chats', '--unread', 'unknown', '--archived', 'unknown')).data as { jid: string }[]).map(chat => chat.jid), [lid]);
+  assert.deepEqual((await cli(directory, 'chats', '--unread', 'false')).data, []);
+  assert.deepEqual((await cli(directory, 'chats', '--unread', 'true', '--offset', '1')).data, []);
+  for (const args of [['--unread', 'yes'], ['--archived', 'null'], ['--unread'], ['--jid', jid]]) assert.equal((await cli(directory, 'chats', ...args)).ok, false);
+  assert.equal((await cli(directory, 'unread', '--limit', '1')).ok, false);
+  assert.equal((await rpc(directory, { command: 'chats', unread: 'true' })).ok, false);
+  assert.deepEqual((await cli(directory, 'chat', '--jid', jid)).data, before.data);
+  assert.deepEqual((await cli(directory, 'events')).data, events.data);
+  assert.equal((await cli(directory, 'stop')).ok, true);
+  assert.equal((await cli(directory, 'start', '--offline')).ok, true);
+  assert.deepEqual((await cli(directory, 'chat', '--jid', jid)).data, before.data);
+  assert.deepEqual((await cli(directory, 'chats', '--unread', 'true', '--archived', 'false')).data, filtered.data);
+});
+
 test('insecure existing storage is rejected without changing its permissions', async () => {
   const directory = temporary();
   chmodSync(directory, 0o755);

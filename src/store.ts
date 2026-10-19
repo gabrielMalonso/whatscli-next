@@ -3,10 +3,11 @@ import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { BufferJSON, jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
 import type { AuthenticationCreds, BaileysEventMap, Chat, ChatUpdate, Contact, WAMessage, WAMessageKey, WAMessageUpdate } from 'baileys';
-import { chatOutput, messageOutput } from './output.js';
+import { chatOutput, isUnreadCount, messageOutput } from './output.js';
 import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
+import type { ChatFilters } from './protocol.js';
 
 export const encode = (value: unknown): string => JSON.stringify(value, BufferJSON.replacer);
 // SQLite contains objects written by this process using the SDK's binary serializer.
@@ -44,6 +45,16 @@ type PendingChatState = {
   archived?: { key: string; value: boolean };
   unread?: { key: string; value: boolean };
 };
+
+type ActivitySource = 'chat.conversationTimestamp' | 'chat.lastMsgTimestamp' | 'chat.lastMessageRecvTimestamp' | 'message.messageTimestamp';
+
+function activityTimestamp(value: Chat['conversationTimestamp']): number | null {
+  if (value == null) return null;
+  // Persisted protobuf Longs can be decimal text or plain {low,high,unsigned} objects.
+  // rc14's toNumber alone reads only low from a plain object; restore the full value.
+  const timestamp = toNumber(proto.Conversation.fromObject({ conversationTimestamp: value }).conversationTimestamp ?? 0);
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null;
+}
 
 type ContactMetadata = Partial<Record<'name' | 'notify' | 'username' | 'verifiedName' | 'status', {
   value: string; source: IdentitySource; observedAt: number;
@@ -107,6 +118,10 @@ export class Store {
       `);
       this.db.function('search_text', { deterministic: true }, value => typeof value === 'string'
         ? (messageOutput(decodeMessage(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
+      this.db.function('chat_unread', { deterministic: true }, value => {
+        const unread = typeof value === 'string' ? chatOutput(decode<Chat>(value)).unread : null;
+        return unread === null ? null : Number(unread);
+      });
       // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
       // Legacy key-store entries have no observation timestamp; do not invent one.
       if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
@@ -150,6 +165,16 @@ export class Store {
           }
         }
         this.set('migration', 'message-deletions-v1', true);
+      });
+      if (!this.get<boolean>('migration', 'chat-activity-v1')) this.transaction(() => {
+        this.db.exec('ALTER TABLE chats ADD COLUMN activity_timestamp INTEGER; ALTER TABLE chats ADD COLUMN activity_source TEXT;');
+        for (const row of this.db.prepare('SELECT json FROM chats').all()) this.observeChatActivity(decode<Chat>(String(row.json)));
+        // Legacy own-message rows cannot distinguish SDK returns from independent echoes.
+        // Recover only incoming message activity, and only for existing observed chats.
+        for (const row of this.db.prepare('SELECT m.jid,m.timestamp FROM messages m JOIN chats c ON c.jid=m.jid WHERE m.from_me=0 AND m.timestamp>0').iterate()) {
+          this.observeActivity(String(row.jid), Number(row.timestamp), 'message.messageTimestamp');
+        }
+        this.set('migration', 'chat-activity-v1', true);
       });
     } catch (error) {
       this.lock.close();
@@ -269,7 +294,7 @@ export class Store {
   }
 
   chatView(jid: string) {
-    const row = this.db.prepare('SELECT json,observed_at FROM chats WHERE jid=?').get(jid);
+    const row = this.db.prepare('SELECT json,observed_at,activity_timestamp,activity_source FROM chats WHERE jid=?').get(jid);
     if (!row) return null;
     const chat = decode<Chat>(String(row.json));
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
@@ -279,6 +304,7 @@ export class Store {
       ...(pending.unread ? { unread: null, unreadCount: null } : {}),
       pending,
       observedAt: row.observed_at,
+      activity: { timestamp: row.activity_timestamp, source: row.activity_source },
     };
   }
 
@@ -292,22 +318,71 @@ export class Store {
 
   observeChat(chat: ChatUpdate): void {
     if (!chat.id) { this.event('incomplete-chat-key', {}); return; }
-    const merged = { ...this.chat(chat.id), ...chat };
-    // A fresh counter update supersedes an older manual-unread marker.
-    if (typeof chat.unreadCount === 'number' && chat.markedAsUnread === undefined && [0, -1].includes(chat.unreadCount)) {
-      merged.markedAsUnread = chat.unreadCount === -1;
-    }
+    const previous = this.chat(chat.id);
+    const merged = { ...previous, ...chat };
     const pending = this.get<PendingChatState>('pending-chat', chat.id) ?? {};
+    // Null/absent fields are neutral SDK updates, not observations of false.
+    merged.archived = typeof chat.archived === 'boolean' ? chat.archived : previous?.archived ?? null;
+    const freshUnread = isUnreadCount(chat.unreadCount) || typeof chat.markedAsUnread === 'boolean';
+    merged.unreadCount = pending.unread && freshUnread ? null : previous?.unreadCount ?? null;
+    merged.markedAsUnread = pending.unread && freshUnread ? null : previous?.markedAsUnread ?? null;
+    if (isUnreadCount(chat.unreadCount)) {
+      merged.unreadCount = chat.unreadCount;
+      if (chat.unreadCount === 0 || chat.unreadCount === -1) merged.markedAsUnread = chat.unreadCount === -1;
+    }
+    if (typeof chat.markedAsUnread === 'boolean') {
+      merged.markedAsUnread = chat.markedAsUnread;
+      // -1 is a manual-unread marker, not a remaining message count.
+      if (!chat.markedAsUnread && !isUnreadCount(chat.unreadCount) && merged.unreadCount === -1) merged.unreadCount = null;
+    }
     if (typeof chat.archived === 'boolean') delete pending.archived;
-    if (typeof chat.unreadCount === 'number' || typeof chat.markedAsUnread === 'boolean') delete pending.unread;
+    if (freshUnread && chatOutput(merged).unread !== null) delete pending.unread;
     this.set('pending-chat', chat.id, Object.keys(pending).length ? pending : null);
     // SDK event-buffer conditions are functions, not persisted state.
     delete merged.conditional;
-    this.db.prepare('INSERT OR REPLACE INTO chats VALUES (?,?,?)').run(chat.id, encode(merged), Date.now());
+    this.db.prepare(`INSERT INTO chats(jid,json,observed_at) VALUES (?,?,?)
+      ON CONFLICT(jid) DO UPDATE SET json=excluded.json,observed_at=excluded.observed_at`).run(chat.id, encode(merged), Date.now());
+    this.observeChatActivity(chat);
   }
 
-  chats(limit = 100, offset = 0): unknown[] {
-    return this.db.prepare('SELECT jid FROM chats ORDER BY observed_at DESC,jid LIMIT ? OFFSET ?').all(limit, offset).map(row => this.chatView(String(row.jid)));
+  private observeActivity(jid: string, value: Chat['conversationTimestamp'], source: ActivitySource): void {
+    const timestamp = activityTimestamp(value);
+    if (timestamp === null) return;
+    // Preserve the maximum event time; late history and metadata arrival time cannot bump it.
+    // Equal timestamps choose a stable field provenance regardless of observation order.
+    this.db.prepare(`UPDATE chats SET activity_timestamp=?,activity_source=? WHERE jid=? AND
+      (activity_timestamp IS NULL OR activity_timestamp<? OR (activity_timestamp=? AND activity_source>?))`)
+      .run(timestamp, source, jid, timestamp, timestamp, source);
+  }
+
+  private observeChatActivity(chat: ChatUpdate): void {
+    if (!chat.id) return;
+    for (const field of ['conversationTimestamp', 'lastMsgTimestamp', 'lastMessageRecvTimestamp'] as const) {
+      this.observeActivity(chat.id, chat[field], `chat.${field}`);
+    }
+    for (const entry of chat.messages ?? []) {
+      const message = entry.message;
+      if (message?.key?.remoteJid === chat.id) this.observeActivity(chat.id, message.messageTimestamp, 'message.messageTimestamp');
+    }
+  }
+
+  chats(limit = 100, offset = 0, filters: ChatFilters = {}) {
+    const clauses: string[] = [];
+    const states: (number | null)[] = [];
+    for (const field of ['unread', 'archived'] as const) {
+      if (filters[field] === undefined) continue;
+      clauses.push(`${field} IS ?`);
+      states.push(filters[field] === 'unknown' ? null : Number(filters[field]));
+    }
+    return this.db.prepare(`SELECT jid FROM (
+      SELECT c.jid,c.activity_timestamp,
+        CASE WHEN json_type(p.json,'$.unread')='object' THEN NULL ELSE chat_unread(c.json) END AS unread,
+        CASE WHEN json_type(p.json,'$.archived')='object' THEN NULL
+          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived
+      FROM chats c LEFT JOIN values_store p ON p.category='pending-chat' AND p.id=c.jid
+    ) ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      ORDER BY activity_timestamp DESC,jid COLLATE BINARY ASC LIMIT ? OFFSET ?`)
+      .all(...states, limit, offset).map(row => this.chatView(String(row.jid))!);
   }
 
   observeMessage(message: WAMessage, chatObserved = true): void {
@@ -341,6 +416,7 @@ export class Store {
     );
     // Seeing a message proves the conversation exists, not its archive/read state.
     if (chatObserved && !this.chat(jid)) this.observeChat({ id: jid });
+    if (chatObserved) this.observeActivity(jid, message.messageTimestamp, 'message.messageTimestamp');
     this.observeMessageIdentities(message.key);
     const ciphertext = message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
     const unexplainedMissingContent = !message.message && message.messageStubType == null;
@@ -524,7 +600,8 @@ export class Store {
       this.markDeleted(key, 'revoke');
     }
     const previous = this.message(key);
-    if (previous) this.observeMessage({ ...previous, ...update, key });
+    // Status/content edits do not establish a newly active conversation.
+    if (previous) this.observeMessage({ ...previous, ...update, key }, false);
     if (update.status != null) this.receipt(key, update.status);
   }
 

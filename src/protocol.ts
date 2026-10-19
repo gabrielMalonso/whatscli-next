@@ -1,8 +1,11 @@
 import { contactJid, internationalPhone, recipientJid } from './identity.js';
 
+export type ChatStateFilter = boolean | 'unknown';
+export type ChatFilters = { unread?: ChatStateFilter; archived?: ChatStateFilter };
+
 export type Command =
   | { command: 'status' | 'resync' | 'reconnect' | 'drop-connection' | 'pair-qr' | 'stop' }
-  | { command: 'chats'; limit: number; offset: number }
+  | ({ command: 'chats'; limit: number; offset: number } & ChatFilters)
   | { command: 'chat'; jid: string }
   | { command: 'contact'; jid: string }
   | { command: 'resolve'; phone: string }
@@ -32,11 +35,22 @@ function integer(value: unknown, min: number, max: number): number {
   return value;
 }
 
+function chatFilters(value: Record<string, unknown>): ChatFilters {
+  const filters: ChatFilters = {};
+  for (const field of ['unread', 'archived'] as const) {
+    const state = value[field];
+    if (state === undefined) continue;
+    if (typeof state !== 'boolean' && state !== 'unknown') throw new Error(`${field} must be true, false or unknown`);
+    filters[field] = state;
+  }
+  return filters;
+}
+
 export function parseCommand(value: Record<string, unknown>): Command {
   switch (value.command) {
     case 'status': case 'resync': case 'reconnect': case 'drop-connection': case 'pair-qr': case 'stop':
       return { command: value.command };
-    case 'chats': return { command: value.command, limit: integer(value.limit ?? 100, 1, 100), offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER) };
+    case 'chats': return { command: value.command, limit: integer(value.limit ?? 100, 1, 100), offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER), ...chatFilters(value) };
     case 'chat': return { command: value.command, jid: recipientJid(string(value.jid, 'jid')) };
     case 'contact': return { command: value.command, jid: contactJid(string(value.jid, 'jid')) };
     case 'resolve': return { command: value.command, phone: internationalPhone(string(value.phone, 'phone')) };

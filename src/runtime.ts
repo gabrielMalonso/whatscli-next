@@ -165,7 +165,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         accountJid: auth.state.creds.me?.id ?? null, accountLid: auth.state.creds.me?.lid ?? null,
         allowedJid: allowedJid ?? null, networkEnabled: options.connect, qrAvailable: qr !== undefined,
       };
-      case 'chats': return store.chats(command.limit, command.offset);
+      case 'chats': return store.chats(command.limit, command.offset, command);
       case 'chat': return store.chatView(command.jid);
       case 'contact': return store.contactView(command.jid);
       case 'resolve': {
