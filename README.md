@@ -83,6 +83,24 @@ node dist/src/cli.js group --jid '120363000000000001@g.us'
 
 Search examines stored text/captions, not SDK key material. It matches literal substrings with Unicode case normalization; `%` and `_` are literal. Omit `--jid` to search all locally stored conversations. Lists return up to 100 items per request; use `--offset` for the next page. History coverage is always partial.
 
+Message results add these fields:
+
+| Field | Contract |
+| --- | --- |
+| `quote` | `null` without quote evidence; otherwise an exact available `reference` (`jid`, `id`, `participant`, `fromMe: null`), `source: embedded` or `null`, `state: available/unknown/deleted`, `text` and `contentType`. Missing identifiers stay null. The enclosing chat supplies the JID only when the quote has no explicit remote JID. |
+| `contacts` | `null` without card content; otherwise `source: shared-content`, `state: available/missing` and `cards`. Each card has `displayName`, vCard `name`, shared `phones` and `state: available/incomplete/missing/malformed`. |
+| `deletion` | `status: deleted/unknown`, `source: messages.delete/revoke/chat-delete-boundary/null`, and `observedAt` (local milliseconds or null). `unknown` with a null source means no deletion was observed, not proof that a message still exists remotely. |
+
+Quotes expose only one embedded level, after the SDK's bounded wrapper normalization. They are received snapshots, not a fetch of the original or proof of its author/current content. There is no fallback lookup of a missing quoted body. A known deleted quoted target hides its embedded text/type; an incomplete reference that could match a deletion stays unknown with hidden content. Different exact chats/authors are kept separate. No display-name addressing, raw context object, thumbnails, URLs, nested quotes or cryptographic fields are returned.
+
+Card parsing handles plain vCard `FN` and `TEL` fields, unfolding continued lines and unescaping text. Shared telephone spelling is preserved, including local numbers; unsupported encodings or broken content may remain incomplete/malformed. Extra fields and raw vCards are omitted. Shared numbers and `waid` parameters never create contact mappings, recipient verification or permission to send. Use `resolve` independently.
+
+Exact deletion/revocation evidence leaves a history row with null `text`, `contentType`, `media`, `quote` and `contacts`. Search considers only the message's current text/caption, excluding deleted bodies, quote text, cards and private audit evidence. Downloads and the SDK content callback also withhold deleted content. A partial update (including `message: null` alone) preserves earlier content; an explicit REVOKE stub or protocol revocation is separate evidence. Persistent markers prevent status, duplicate history and edits from restoring hidden content after restart. The first retained body is stored privately with the deletion marker; it has no public audit command.
+
+Keys are matched by exact chat, message ID, direction and incoming participant when required. Own group messages retain their existing single-author identity when an echo adds a participant. An incomplete incoming group/broadcast deletion cannot select an author; it emits `message-deletion-unknown`, leaves other rows untouched and does not establish a deletion verdict. PN/LID aliases are never combined. Revocations use the account-relative target key supplied by rc14; inconsistent embedded protocol targets remain unknown rather than being reassigned to another chat/author.
+
+The SDK also types `{jid, all: true}` with no server time or message range. On that observation, known rows in the exact chat are deleted; a persisted local time boundary conservatively withholds later old/undated arrivals as `status: unknown, source: chat-delete-boundary`. A newly observed message timestamped after that boundary is allowed. Clock skew and missing timestamps cannot establish membership in the cleared range; unknown quotes across that boundary are withheld too. Legacy delete journals are recovered on upgrade; the same range uncertainty applies to old chat-wide events. This is local, partial evidence, not a remote retention guarantee. Previously exported files/responses are not recalled, and immutable outbound request intents retain the originally supplied text/caption as intent evidence.
+
 Send text or a local file:
 
 ```sh

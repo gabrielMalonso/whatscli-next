@@ -58,6 +58,16 @@ File sending and media downloading were tested with injected SDK/I/O boundaries,
 
 ## Live checkpoints
 
+### Message context and deletion consistency — offline evidence
+
+Inspected the installed, pinned `baileys@7.0.0-rc14`, without an SDK fork: `WAProto/index.d.ts` (`IContextInfo`, `IContactMessage`, `IContactsArrayMessage`, `IProtocolMessage`), `lib/Types/Events.d.ts`, `lib/Utils/messages.js` (five-level normalization of ephemeral/view-once/document-caption/edited and related wrappers), `process-message.js`, `chat-utils.js` and `event-buffer.js`.
+
+`messages.delete` types a key list or `{jid, all: true}`. The app-state delete-for-me path emits direction and chat/ID without participant; incoming group identity may therefore be incomplete. REVOKE processing emits `messages.update` with the target ID on the envelope's account-relative key, `message: null`, `messageStubType: REVOKE`, and a separate notification key inside the update. A null body alone has no deletion semantics. The raw protocol path follows the same target projection, refusing inconsistent embedded chat/participant identities. MESSAGE_EDIT uses an edited-message wrapper; edits cannot remove a persisted deletion marker. The buffer can combine updates with upserts and drop deleted buffered entries, so coverage remains partial.
+
+The feature suite adds 15 offline tests (60 total) with `pnpm check` passing. Fixtures cover safe one-level quoted text/captions and bounded SDK wrappers; missing quote origins/bodies; single/multiple/missing/malformed shared cards without identity authority; partial updates; revocation and deletion before/after originals; duplicates, late status/edit/history and restart; exact chat/direction/participant and PN/LID separation; own-group participant enrichment; immutable intent/receipt preservation; private first-body audit evidence; search, download and SDK callback suppression; quoted-target deletion; and migration of legacy key/chat delete journals. The prior 45 tests remain passing, including embedded-secret exclusions and short-path Unix-socket CLI tests.
+
+All new SDK events and I/O are injected. No real socket, private session, credentials, account messages, download or send was used. Chat-wide deletion has no SDK server range/time: known rows are deleted; late old/undated arrivals use an explicit unknown local boundary. Incomplete group keys cannot identify an author. Plain vCard display fields are projected rather than implementing the full vCard standard. Real quote/card/deletion propagation, phone effects, upstream omissions and clock skew remain live checkpoint limits. Compact-response modes and roadmap tasks after 02 are unchanged.
+
 ### Recipient resolution feature — offline evidence
 
 The recipient-resolution change adds 13 offline regression tests (45 total passing), with `pnpm check` passing. Tests inject a partial SDK socket; no private session, real WhatsApp connection, messages or account mutations are used. The real-socket CLI tests use a short OS temporary path to remain below the Unix socket limit in long worktrees.
