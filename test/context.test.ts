@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { proto } from 'baileys';
-import type { BaileysEventMap, SocketConfig, WAMessage, WAMessageKey, WASocket } from 'baileys';
+import { initAuthCreds, makeEventBuffer, proto } from 'baileys';
+import type { BaileysEventEmitter, BaileysEventMap, SocketConfig, WAMessage, WAMessageKey, WASocket } from 'baileys';
+import processMessage from 'baileys/lib/Utils/process-message.js';
+import { pino } from 'pino';
 import { messageOutput } from '../src/output.js';
 import { perform } from '../src/operations.js';
 import { createRuntime } from '../src/runtime.js';
@@ -22,8 +24,7 @@ const message = (key: WAMessageKey = { remoteJid: pn, id: 'same-id', fromMe: fal
 });
 const vcard = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Fictional Contact\r\nTEL;waid=12025550102:+1 (202) 555-0102\r\nEND:VCARD\r\n';
 
-function fixture(directory = temporary()) {
-  const events = new EventEmitter();
+function fixture(directory = temporary(), events: BaileysEventEmitter = new EventEmitter()) {
   let getMessage: SocketConfig['getMessage'] | undefined;
   let reuploads = 0;
   const fake = { ev: events, end: async () => {}, updateMediaMessage: async () => { reuploads++; throw new Error('Unexpected media I/O'); } };
@@ -36,6 +37,17 @@ function fixture(directory = temporary()) {
   const list = async (jid = pn) => await runtime.execute({ command: 'messages', jid, limit: 100, offset: 0 }) as ReturnType<typeof messageOutput>[];
   emit('connection.update', { connection: 'open' });
   return { runtime, emit, list, directory, getMessage: (key: WAMessageKey) => getMessage?.(key), reuploads: () => reuploads };
+}
+
+async function sdkRevocation(events: BaileysEventEmitter, notification: WAMessage) {
+  const creds = initAuthCreds();
+  creds.me = { id: '12025550199@s.whatsapp.net', name: 'Fictional self' };
+  // REVOKE only needs creds and events. Fail if the real SDK touches any I/O service.
+  const unused = new Proxy({}, { get() { throw new Error('Unexpected SDK I/O'); } });
+  const context = { creds, ev: events, shouldProcessHistoryMsg: false, options: {},
+    keyStore: unused, signalRepository: unused, getMessage: async () => undefined,
+  } as unknown as Parameters<typeof processMessage>[1];
+  await processMessage(notification, context);
 }
 
 test('quotes expose only one embedded text/caption level through SDK wrappers, without nested secrets', () => {
@@ -117,9 +129,7 @@ test('legitimate null/status updates preserve content; SDK REVOKE hides it and k
     f.emit('messages.upsert', { type: 'notify', messages: [message()] });
     f.emit('messages.update', [{ key: message().key, update: { message: null, status: proto.WebMessageInfo.Status.DELIVERY_ACK } }]);
     assert.equal((await f.list())[0]?.text, 'Fictional original body');
-    f.emit('messages.update', [{ key: message().key, update: {
-      message: null, messageStubType: proto.WebMessageInfo.StubType.REVOKE, key: { ...message().key, id: 'revoke-notification' },
-    } }]);
+    f.emit('messages.update', [{ key: message().key, update: { message: null, messageStubType: proto.WebMessageInfo.StubType.REVOKE } }]);
     const output = (await f.list())[0];
     assert.equal(output?.id, 'same-id');
     assert.equal(output?.deletion.status, 'deleted');
@@ -174,6 +184,55 @@ test('revocation before the original, including protocol wrappers, targets the S
       assert.equal((await f.list()).find(item => item.id === 'same-id')?.deletion.source, 'revoke');
     } finally { await f.runtime.close(); }
   }
+});
+
+test('real SDK REVOKE processing/buffering cannot override an inconsistent raw chat or participant target', async () => {
+  for (const mode of ['immediate', 'buffered', 'merged']) for (const conflict of ['participant', 'chat', 'none']) {
+    const events = makeEventBuffer(pino({ level: 'silent' }));
+    const f = fixture(temporary(), events);
+    const actorKey = { remoteJid: group, id: 'collision', fromMe: false, participant: pn };
+    const otherKey = { ...actorKey, participant: other };
+    const chatKey = { ...actorKey, remoteJid: '120363000000000002@g.us' };
+    const notification: WAMessage = { ...message({ ...actorKey, id: 'notification' }), message: { protocolMessage: {
+      type: proto.Message.ProtocolMessage.Type.REVOKE,
+      key: { id: 'collision', fromMe: true, remoteJid: conflict === 'chat' ? chatKey.remoteJid : group,
+        participant: conflict === 'participant' ? other : pn },
+    } } };
+    try {
+      f.emit('messages.upsert', { type: 'notify', messages: [message(actorKey), message(otherKey), message(chatKey)] });
+      if (mode !== 'immediate') events.buffer();
+      if (mode === 'merged') f.emit('messages.upsert', { type: 'append', messages: [message(actorKey), message(otherKey), message(chatKey)] });
+      f.emit('messages.upsert', { type: 'notify', messages: [notification] });
+      await sdkRevocation(events, notification);
+      events.flush();
+      const output = await f.list(group);
+      assert.equal(output.find(item => item.id === 'collision' && item.participant === pn)?.text, conflict === 'none' ? null : 'Fictional original body', `${mode}/${conflict}`);
+      assert.equal(output.find(item => item.id === 'collision' && item.participant === other)?.text, 'Fictional original body');
+      assert.equal((await f.list(chatKey.remoteJid))[0]?.text, 'Fictional original body');
+    } finally { events.destroy(); await f.runtime.close(); }
+    const reopened = new Store(f.directory);
+    try {
+      assert.equal(reopened.message(actorKey)?.message?.conversation ?? null, conflict === 'none' ? null : 'Fictional original body');
+      assert.equal(reopened.message(otherKey)?.message?.conversation, 'Fictional original body');
+      assert.equal(reopened.message(chatKey)?.message?.conversation, 'Fictional original body');
+    } finally { reopened.close(); }
+  }
+});
+
+test('a derived REVOKE without its notification cannot guess a target before the original or after restart', async () => {
+  const f = fixture();
+  const key = message().key;
+  try {
+    f.emit('messages.update', [{ key, update: { message: null, messageStubType: proto.WebMessageInfo.StubType.REVOKE,
+      key: { ...key, id: 'missing-notification' },
+    } }]);
+    f.emit('messages.upsert', { type: 'notify', messages: [message()] });
+    assert.equal((await f.list())[0]?.text, 'Fictional original body');
+    assert.match(encode(await f.runtime.execute({ command: 'events', after: 0 })), /unverified-revoke-notification/);
+  } finally { await f.runtime.close(); }
+  const reopened = new Store(f.directory);
+  try { assert.equal(reopened.message(key)?.message?.conversation, 'Fictional original body'); }
+  finally { reopened.close(); }
 });
 
 test('exact deletion keys isolate colliding chats, directions, participants and PN/LID histories', () => {
@@ -327,5 +386,29 @@ test('legacy chat deletes preserve newer history and suppress unknown quoted sna
     assert.equal(reopened.messageView(reply('same-id')).quote?.state, 'unknown');
     assert.equal(reopened.messageView(reply('not-seen')).quote?.text, null);
     assert.equal(reopened.messageView(reply('new')).quote?.text, 'Embedded snapshot');
+  } finally { reopened.close(); }
+});
+
+test('a new reply with no quote ID cannot expose a cleared chat snapshot through history or after restart', async () => {
+  const f = fixture();
+  const reply: WAMessage = { ...message({ ...message().key, id: 'new-reply' }), messageTimestamp: Math.floor(Date.now() / 1000) + 60,
+    message: { extendedTextMessage: { text: 'New reply', contextInfo: {
+      participant: pn, quotedMessage: { imageMessage: { caption: 'Cleared caption' } },
+    } } },
+  };
+  try {
+    f.emit('messages.upsert', { type: 'notify', messages: [message()] });
+    f.emit('messages.delete', { jid: pn, all: true });
+    f.emit('messages.upsert', { type: 'notify', messages: [reply] });
+    const quote = (await f.list()).find(item => item.id === 'new-reply')?.quote;
+    assert.equal(quote?.state, 'unknown');
+    assert.equal(quote?.text, null);
+    assert.equal(quote?.contentType, null);
+  } finally { await f.runtime.close(); }
+  const reopened = new Store(f.directory);
+  try {
+    const output = reopened.messages(pn).map(item => reopened.messageView(item));
+    assert.doesNotMatch(encode(output), /Cleared caption/);
+    assert.equal(output.find(item => item.id === 'new-reply')?.quote?.state, 'unknown');
   } finally { reopened.close(); }
 });

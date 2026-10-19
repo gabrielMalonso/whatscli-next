@@ -448,14 +448,32 @@ export class Store {
 
   updateMessage({ key, update }: WAMessageUpdate): void {
     // update.key in a REVOKE is the notification key, not the target key.
-    if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) this.markDeleted(key, 'revoke');
+    if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
+      if (update.key) {
+        const notification = this.message(update.key);
+        const protocol = normalizeMessageContent(notification?.message)?.protocolMessage;
+        const expected = notification && protocol?.key?.id ? { ...notification.key, id: protocol.key.id } : undefined;
+        // rc14's derived update drops the embedded target's chat/participant. It cannot
+        // override the raw notification's rejection, or establish a target without it.
+        if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE || !expected
+          || encode(this.deletionKey(expected)) !== encode(this.deletionKey(key))
+          || (protocol.key?.remoteJid && protocol.key.remoteJid !== expected.remoteJid)
+          || (protocol.key?.participant && protocol.key.participant !== expected.participant)) {
+          this.event('message-deletion-unknown', { jid: key.remoteJid ?? null, id: key.id ?? null, reason: 'unverified-revoke-notification' });
+          if (update.status != null) this.receipt(key, update.status);
+          return;
+        }
+      }
+      this.markDeleted(key, 'revoke');
+    }
     const previous = this.message(key);
     if (previous) this.observeMessage({ ...previous, ...update, key });
     if (update.status != null) this.receipt(key, update.status);
   }
 
   private quoteVisibility(ref: QuoteReference): 'deleted' | 'unknown' | undefined {
-    if (!ref.jid || !ref.id) return undefined;
+    if (!ref.jid) return undefined;
+    if (!ref.id) return this.get<number>('chat-delete-boundary', ref.jid) === undefined ? undefined : 'unknown';
     const rows = this.db.prepare('SELECT from_me,participant,source FROM message_deletions WHERE jid=? AND id=?').all(ref.jid, ref.id);
     if (rows.length && !ref.participant) return 'unknown';
     const matches = rows.filter(row => row.participant === ref.participant || (row.from_me === 0 && row.participant === '' && ref.participant === ref.jid));
