@@ -27,7 +27,7 @@ const vcard = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Fictional Contact\r\nTEL;waid=12
 function fixture(directory = temporary(), events: BaileysEventEmitter = new EventEmitter()) {
   let getMessage: SocketConfig['getMessage'] | undefined;
   let reuploads = 0;
-  const fake = { ev: events, end: async () => {}, updateMediaMessage: async () => { reuploads++; throw new Error('Unexpected media I/O'); } };
+  const fake = { ev: events, end: async () => { events.emit('connection.update', { connection: 'close' }); }, updateMediaMessage: async () => { reuploads++; throw new Error('Unexpected media I/O'); } };
   const runtime = createRuntime({ dataDir: directory, connect: true }, config => {
     getMessage = config.getMessage;
     return fake as unknown as WASocket;
@@ -209,7 +209,7 @@ test('real SDK REVOKE processing/buffering cannot override an inconsistent raw c
       assert.equal(output.find(item => item.id === 'collision' && item.participant === pn)?.text, conflict === 'none' ? null : 'Fictional original body', `${mode}/${conflict}`);
       assert.equal(output.find(item => item.id === 'collision' && item.participant === other)?.text, 'Fictional original body');
       assert.equal((await f.list(chatKey.remoteJid))[0]?.text, 'Fictional original body');
-    } finally { events.destroy(); await f.runtime.close(); }
+    } finally { await f.runtime.close(); events.destroy(); }
     const reopened = new Store(f.directory);
     try {
       assert.equal(reopened.message(actorKey)?.message?.conversation ?? null, conflict === 'none' ? null : 'Fictional original body');
@@ -252,7 +252,7 @@ test('real SDK administrative revocations preserve exact directions and require 
       assert.equal(output.find(item => item.id === 'collision' && item.fromMe)?.text, entry.deleted === 'own' ? null : 'Fictional original body', `${mode}/${encode(entry)}`);
       assert.equal(output.find(item => item.id === 'collision' && !item.fromMe && item.participant === pn)?.text, entry.deleted === 'incoming' ? null : 'Fictional original body');
       assert.equal(output.find(item => item.id === 'collision' && item.participant === other)?.text, 'Fictional original body');
-    } finally { events.destroy(); await f.runtime.close(); }
+    } finally { await f.runtime.close(); events.destroy(); }
     const reopened = new Store(f.directory);
     try {
       assert.equal(reopened.message(incoming)?.message?.conversation ?? null, entry.deleted === 'incoming' ? null : 'Fictional original body');
@@ -301,7 +301,7 @@ test('received 1:1 revocations recognize authenticated self perspective without 
       const search = await f.runtime.execute({ command: 'search', jid: entry.chat, query: 'original', limit: 100, offset: 0 }) as ReturnType<typeof messageOutput>[];
       assert.equal(search.some(item => item.id === 'collision' && !item.fromMe), !entry.deleted);
       assert.equal((await f.getMessage(incoming))?.conversation ?? null, entry.deleted ? null : 'Fictional original body');
-    } finally { events.destroy(); await f.runtime.close(); }
+    } finally { await f.runtime.close(); events.destroy(); }
     const reopened = new Store(f.directory);
     try {
       assert.equal(reopened.message(incoming)?.message?.conversation ?? null, entry.deleted ? null : 'Fictional original body');

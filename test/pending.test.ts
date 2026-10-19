@@ -191,7 +191,7 @@ test('upgrade recovers timestamp fields and incoming history only for observed c
 
 test('runtime event queries isolate exact PN/LID identities and perform no SDK I/O or read-state mutation', async () => {
   const events = new EventEmitter();
-  const runtime = createRuntime({ dataDir: temporary(), connect: true }, () => new Proxy({ ev: events, end: async () => {} }, {
+  const runtime = createRuntime({ dataDir: temporary(), connect: true }, () => new Proxy({ ev: events, end: async () => { events.emit('connection.update', { connection: 'close' }); } }, {
     get(target, property, receiver) {
       if (!(property in target)) throw new Error(`Unexpected SDK I/O: ${String(property)}`);
       return Reflect.get(target, property, receiver);

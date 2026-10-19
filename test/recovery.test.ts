@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import { proto } from 'baileys';
 import type { BaileysEventMap, WAMessage, WASocket } from 'baileys';
 import type { RecoveryClock } from '../src/health.js';
@@ -295,11 +296,80 @@ test('failed socket cleanup never authorizes an overlapping replacement', async 
     f.runtime.start(); f.failEnd(true);
     await assert.rejects(f.runtime.execute({ command: 'reconnect' }), /cleanup failed/);
     assert.equal(f.runtime.snapshot().recovery.reason, 'socket-end-failed');
+    const failed = f.runtime.snapshot();
+    f.emit('connection.update', { connection: 'open', receivedPendingNotifications: true });
+    f.emit('creds.update', { me: { id: 'STALE_ACCOUNT' } });
+    f.emit('messages.upsert', { messages: [incoming], type: 'notify' });
+    assert.deepEqual(f.runtime.snapshot(), failed);
+    assert.equal((await f.runtime.execute({ command: 'status' }) as { accountJid: string | null }).accountJid, null);
+    assert.deepEqual(await f.runtime.execute({ command: 'messages', jid: pn, limit: 10, offset: 0 }), []);
+    assert.throws(() => f.latest().config.auth!.keys.set({ session: { stale: Buffer.from('stale') } }), /no longer owns/);
     await assert.rejects(f.runtime.execute({ command: 'reconnect' }), /investigate and restart/);
     assert.equal(f.counts().creations, 1);
     f.failEnd(false);
   } finally { await f.runtime.close(); }
   assert.equal(f.latest().active, false);
+});
+
+test('manual reconnect and shutdown await rc14 cleanup already started internally by the SDK', async () => {
+  // Run only the installed end closure with fictional dependencies, never makeWASocket.
+  // rc14 marks closed before awaiting transport cleanup; a second end returns immediately.
+  const source = readFileSync(new URL(import.meta.resolve('baileys/lib/Socket/socket.js')), 'utf8');
+  const start = source.indexOf('    const end = async (error) => {');
+  const finish = source.indexOf('    const waitForSocketOpen', start);
+  assert.ok(start > 0 && finish > start);
+  const endBody = source.slice(start, finish);
+  for (const action of ['reconnect', 'stop'] as const) {
+    const transport = gate();
+    const handlers = gate();
+    let creations = 0;
+    let active = 0;
+    let internalEnd: WASocket['end'] | undefined;
+    const runtime = createRuntime({ dataDir: temporary(), connect: true }, () => {
+      creations++;
+      assert.equal(active, 0, 'transport and socket-end handlers must both finish before replacement');
+      active++;
+      const events = new EventEmitter();
+      const end = runInNewContext(`(() => {
+        let closed = false; let keepAliveReq; let qrTimer;
+        ${endBody}
+        return end;
+      })()`, {
+        ws: { isClosed: false, isClosing: false, removeAllListeners() {}, close: async () => { await transport.promise; } },
+        ev: { emit: events.emit.bind(events), removeAllListeners: events.removeAllListeners.bind(events), destroy() {} },
+        logger: { trace() {}, info() {}, error() {} },
+        signalRepository: { close() {} },
+        socketEndHandlers: [async () => { await handlers.promise; active--; }],
+        clearInterval() {}, clearTimeout() {},
+      }) as WASocket['end'];
+      internalEnd ??= end;
+      return { ev: events, end } as unknown as WASocket;
+    });
+    try {
+      runtime.start();
+      assert.ok(internalEnd);
+      const sdkEnding = internalEnd(new Error('Fictional internally initiated SDK shutdown'));
+      let completed = false;
+      const changing = (action === 'reconnect' ? runtime.execute({ command: 'reconnect' }) : runtime.stop())
+        .then(() => { completed = true; });
+      await Promise.resolve(); await Promise.resolve();
+      assert.equal(completed, false);
+      assert.equal(creations, 1);
+      transport.release();
+      await Promise.resolve(); await Promise.resolve();
+      assert.equal(completed, false, 'transport closure alone is not socket-end completion');
+      assert.equal(creations, 1);
+      handlers.release();
+      await Promise.all([sdkEnding, changing]);
+      assert.equal(completed, true);
+      assert.equal(creations, action === 'reconnect' ? 2 : 1);
+      assert.equal(active, action === 'reconnect' ? 1 : 0);
+    } finally {
+      transport.release(); handlers.release();
+      await runtime.close();
+      assert.equal(active, 0);
+    }
+  }
 });
 
 test('same-directory restart retains linked credentials, local observations and unproven receive continuity', async () => {
