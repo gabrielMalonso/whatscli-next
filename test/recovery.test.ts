@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { proto } from 'baileys';
-import type { BaileysEventMap, WAMessage, WASocket } from 'baileys';
+import type { AuthenticationCreds, BaileysEventMap, WAMessage, WASocket } from 'baileys';
 import type { RecoveryClock } from '../src/health.js';
 import { createRuntime } from '../src/runtime.js';
 import { formatResponse } from '../src/response.js';
@@ -32,18 +32,19 @@ class Clock implements RecoveryClock {
     return () => { task.cancelled = true; };
   }
   pending() { return this.tasks.filter(task => !task.cancelled); }
-  tick() {
+  async tick() {
     assert.equal(this.pending().length, 1, 'exactly one retry timer');
     const task = this.pending()[0]!;
     this.time += task.delay;
     task.cancelled = true;
     task.callback();
+    await new Promise<void>(resolve => setImmediate(resolve));
   }
 }
 
 function fixture(directory = temporary(), factoryError?: unknown) {
   const clock = new Clock();
-  const sockets: { events: EventEmitter; config: SocketOptions; active: boolean; ends: number }[] = [];
+  const sockets: { events: EventEmitter; config: SocketOptions; ws: EventEmitter & { isClosed: boolean }; active: boolean; ends: number }[] = [];
   let creations = 0;
   let endWait: Promise<void> | undefined;
   let endError = false;
@@ -55,16 +56,19 @@ function fixture(directory = temporary(), factoryError?: unknown) {
     assert.ok(!sockets.some(socket => socket.active), 'no overlapping live sockets');
     if (factoryError) throw factoryError;
     const events = new EventEmitter();
-    const entry = { events, config, active: true, ends: 0 };
+    const ws = Object.assign(new EventEmitter(), { isClosed: false });
+    events.on('creds.update', update => { Object.assign(config.auth!.creds, update); });
+    const entry = { events, config, ws, active: true, ends: 0 };
     sockets.push(entry);
     // The only assertion is at the deliberately partial, injected SDK boundary.
     return {
-      ev: events,
+      ev: events, ws,
       end: async () => {
         entry.ends++;
         await endWait;
         if (endError) throw new Error('PRIVATE_END_ERROR');
         entry.active = false;
+        ws.isClosed = true; ws.emit('close');
         events.emit('connection.update', { connection: 'close' });
       },
       requestPairingCode: async () => { pairing++; return 'FICTIONAL_CODE'; },
@@ -81,7 +85,8 @@ function fixture(directory = temporary(), factoryError?: unknown) {
   const latest = () => sockets.at(-1)!;
   const emit = <K extends keyof BaileysEventMap>(name: K, value: BaileysEventMap[K]) => { latest().events.emit(name, value); };
   const drop = (code?: number) => {
-    latest().active = false; // rc14 emits close after transport/socket-end cleanup.
+    latest().active = false;
+    latest().ws.isClosed = true; latest().ws.emit('close');
     emit('connection.update', { connection: 'close', lastDisconnect: {
       error: Object.assign(new Error('PRIVATE_DISCONNECT_ERROR'), { output: { statusCode: code }, data: { secret: 'PRIVATE_ERROR_DATA' } }),
       date: new Date(clock.time),
@@ -104,6 +109,34 @@ const gate = () => {
   return { promise, release };
 };
 
+const socketSource = readFileSync(new URL(import.meta.resolve('baileys/lib/Socket/socket.js')), 'utf8');
+
+function installedEnd(events: EventEmitter, ws: Pick<WASocket['ws'], 'isClosed' | 'isClosing' | 'close'> & { removeAllListeners(event: string): unknown },
+  handlers: (() => Promise<void>)[] = []): WASocket['end'] {
+  const start = socketSource.indexOf('    const end = async (error) => {');
+  const finish = socketSource.indexOf('    const waitForSocketOpen', start);
+  assert.ok(start > 0 && finish > start);
+  return runInNewContext(`(() => {
+    let closed = false; let keepAliveReq; let qrTimer;
+    ${socketSource.slice(start, finish)}
+    return end;
+  })()`, {
+    ws,
+    ev: { emit: events.emit.bind(events), removeAllListeners: events.removeAllListeners.bind(events), destroy() {} },
+    logger: { trace() {}, info() {}, error() {} }, signalRepository: { close() {} },
+    socketEndHandlers: handlers, clearInterval() {}, clearTimeout() {},
+  }) as WASocket['end'];
+}
+
+function installedCredentialListener(events: EventEmitter, creds: AuthenticationCreds): void {
+  const start = socketSource.indexOf("    ev.on('creds.update', update => {");
+  const finish = socketSource.indexOf('    const updateServerTimeOffset', start);
+  assert.ok(start > 0 && finish > start);
+  runInNewContext(socketSource.slice(start, finish), {
+    ev: events, creds, logger: { debug() {}, warn() {} }, sendNode: async () => {},
+  });
+}
+
 const incoming: WAMessage = { key: { id: 'INCOMING', remoteJid: pn, fromMe: false }, messageTimestamp: 1700000000,
   message: { conversation: 'Fictional incoming text', messageContextInfo: { messageSecret: Buffer.from('PRIVATE_MESSAGE_SECRET') } } };
 
@@ -123,9 +156,10 @@ test('runtime recovers after over an hour and 160 offline failures using the sam
       assert.equal(state.nextRetryAt, f.clock.time + delay);
       assert.equal(f.clock.pending()[0]?.delay, delay);
       assert.deepEqual(await f.runtime.execute({ command: 'chats', limit: 10, offset: 0 }), []);
-      f.clock.tick();
+      await f.clock.tick();
       assert.equal(f.runtime.snapshot().recovery.state, 'connecting');
-      assert.equal(f.latest().config.auth?.creds, auth.creds);
+      assert.notEqual(f.latest().config.auth?.creds, auth.creds);
+      assert.deepEqual(f.latest().config.auth?.creds, auth.creds);
     }
     assert.ok(f.clock.time - began > 3600000);
     f.emit('connection.update', { connection: 'open', receivedPendingNotifications: true });
@@ -147,7 +181,7 @@ test('515 supports linked pairing restart and repeated restarts always wait, inc
       f.drop(515);
       assert.equal(f.runtime.snapshot().recovery.reason, 'restart-required');
       assert.ok(f.clock.pending()[0]!.delay >= 1000);
-      f.clock.tick();
+      await f.clock.tick();
       if (i >= 10) f.emit('connection.update', { connection: 'open' });
     }
     assert.deepEqual(f.counts(), { creations: 21, sends: 0, pairing: 0 });
@@ -193,7 +227,7 @@ test('duplicates and stale socket events cannot reschedule, persist credentials 
   old.events.emit('messages.upsert', { messages: [incoming], type: 'notify' });
   assert.deepEqual(f.runtime.snapshot(), snapshot);
   assert.throws(() => old.config.auth!.keys.set({ session: { stale: Buffer.from('stale') } }), /no longer owns/);
-  f.clock.tick();
+  await f.clock.tick();
   old.events.emit('connection.update', { connection: 'close' });
   assert.equal(f.clock.pending().length, 0);
   assert.equal(f.counts().creations, 2);
@@ -279,11 +313,11 @@ test('synchronous factory errors require intervention, including failures on an 
   let calls = 0;
   const runtime = createRuntime({ dataDir: temporary(), connect: true }, () => {
     if (++calls > 1) throw new Error('PRIVATE_FACTORY_ERROR');
-    return { ev: events, end: async () => {} } as unknown as WASocket;
+    return { ev: events, ws: { isClosed: true }, end: async () => {} } as unknown as WASocket;
   }, clock);
   try {
     runtime.start(); events.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
-    clock.tick();
+    await clock.tick();
     assert.equal(runtime.snapshot().recovery.reason, 'socket-creation-failed');
     assert.equal(runtime.snapshot().recovery.attempt, 1);
     assert.equal(clock.pending().length, 0);
@@ -314,11 +348,6 @@ test('failed socket cleanup never authorizes an overlapping replacement', async 
 test('manual reconnect and shutdown await rc14 cleanup already started internally by the SDK', async () => {
   // Run only the installed end closure with fictional dependencies, never makeWASocket.
   // rc14 marks closed before awaiting transport cleanup; a second end returns immediately.
-  const source = readFileSync(new URL(import.meta.resolve('baileys/lib/Socket/socket.js')), 'utf8');
-  const start = source.indexOf('    const end = async (error) => {');
-  const finish = source.indexOf('    const waitForSocketOpen', start);
-  assert.ok(start > 0 && finish > start);
-  const endBody = source.slice(start, finish);
   for (const action of ['reconnect', 'stop'] as const) {
     const transport = gate();
     const handlers = gate();
@@ -330,20 +359,12 @@ test('manual reconnect and shutdown await rc14 cleanup already started internall
       assert.equal(active, 0, 'transport and socket-end handlers must both finish before replacement');
       active++;
       const events = new EventEmitter();
-      const end = runInNewContext(`(() => {
-        let closed = false; let keepAliveReq; let qrTimer;
-        ${endBody}
-        return end;
-      })()`, {
-        ws: { isClosed: false, isClosing: false, removeAllListeners() {}, close: async () => { await transport.promise; } },
-        ev: { emit: events.emit.bind(events), removeAllListeners: events.removeAllListeners.bind(events), destroy() {} },
-        logger: { trace() {}, info() {}, error() {} },
-        signalRepository: { close() {} },
-        socketEndHandlers: [async () => { await handlers.promise; active--; }],
-        clearInterval() {}, clearTimeout() {},
-      }) as WASocket['end'];
+      const ws = Object.assign(new EventEmitter(), { isClosed: false, isClosing: false,
+        close: async () => { await transport.promise; ws.isClosed = true; ws.emit('close'); },
+      });
+      const end = installedEnd(events, ws, [async () => { await handlers.promise; active--; }]);
       internalEnd ??= end;
-      return { ev: events, end } as unknown as WASocket;
+      return { ev: events, end, ws } as unknown as WASocket;
     });
     try {
       runtime.start();
@@ -370,6 +391,122 @@ test('manual reconnect and shutdown await rc14 cleanup already started internall
       assert.equal(active, 0);
     }
   }
+});
+
+test('closing transport blocks manual/automatic replacement and stop even when rc14 emits close early', async () => {
+  const source = readFileSync(new URL(import.meta.resolve('baileys/lib/Socket/Client/websocket.js')), 'utf8');
+  const start = source.indexOf('    async close() {');
+  const finish = source.indexOf('    send(str', start);
+  assert.ok(start > 0 && finish > start);
+  for (const action of ['manual', 'automatic', 'stop'] as const) {
+    const clock = new Clock();
+    let active = 0;
+    const sockets: { events: EventEmitter; end: WASocket['end']; finish: () => void }[] = [];
+    const runtime = createRuntime({ dataDir: temporary(), connect: true }, () => {
+      assert.equal(active, 0, 'never overlap transport in CLOSING');
+      active++;
+      const events = new EventEmitter();
+      const raw = Object.assign(new EventEmitter(), { readyState: 1, close() { raw.readyState = 2; } });
+      class Transport extends EventEmitter {
+        socket: typeof raw | null = raw;
+        get isClosed() { return this.socket === null || this.socket.readyState === 3; }
+        get isClosing() { return this.socket === null || this.socket.readyState === 2; }
+        close: () => Promise<void> = async () => { assert.fail('Installed close body must be injected'); };
+      }
+      const ws = new Transport();
+      // Installed WebSocketClient.close() with an EventEmitter instead of a network WebSocket.
+      const close = runInNewContext(`({${source.slice(start, finish)}}).close`) as (this: Transport) => Promise<void>;
+      ws.close = close.bind(ws);
+      const end = installedEnd(events, ws);
+      sockets.push({ events, end, finish() {
+        if (raw.readyState === 3) return;
+        raw.readyState = 3; active--;
+        raw.emit('close'); ws.emit('close');
+      } });
+      return { ev: events, ws, end } as unknown as WASocket;
+    }, clock);
+    try {
+      runtime.start();
+      const first = sockets[0]!;
+      first.events.emit('connection.update', { connection: 'open' });
+      const dropping = runtime.execute({ command: 'drop-connection' });
+      let completed = false;
+      let changing: Promise<unknown>;
+      if (action === 'automatic') {
+        await first.end(Object.assign(new Error('Fictional outage'), { output: { statusCode: 408 } }));
+        assert.equal(runtime.snapshot().recovery.state, 'waiting-retry');
+        await clock.tick();
+        assert.equal(runtime.snapshot().recovery.state, 'connecting');
+        changing = Promise.resolve();
+      } else {
+        changing = (action === 'manual' ? runtime.execute({ command: 'reconnect' }) : runtime.stop())
+          .then(() => { completed = true; });
+      }
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(completed, false);
+      assert.equal(sockets.length, 1);
+      assert.equal(active, 1, 'SDK close has not completed the transport');
+      first.finish();
+      await Promise.all([dropping, changing]);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(sockets.length, action === 'stop' ? 1 : 2);
+      assert.equal(active, action === 'stop' ? 0 : 1);
+    } finally {
+      for (const socket of sockets) socket.finish();
+      await runtime.close();
+      assert.equal(active, 0);
+    }
+  }
+});
+
+test('installed SDK credential listener cannot mutate authoritative auth after its owner is retired', async () => {
+  const directory = temporary();
+  const cleanup = gate();
+  const sockets: { events: EventEmitter; config: SocketOptions }[] = [];
+  const runtime = createRuntime({ dataDir: directory, connect: true }, config => {
+    const events = new EventEmitter();
+    assert.ok(config.auth);
+    installedCredentialListener(events, config.auth.creds);
+    sockets.push({ events, config });
+    const ws = Object.assign(new EventEmitter(), { isClosed: false, isClosing: false,
+      close: async () => { await cleanup.promise; ws.isClosed = true; ws.emit('close'); },
+    });
+    return { ev: events, ws, end: installedEnd(events, ws) } as unknown as WASocket;
+  });
+  try {
+    runtime.start();
+    const old = sockets[0]!;
+    const details = Buffer.from('FICTIONAL_LINKED_DEVICE');
+    old.events.emit('creds.update', { me: { id: me }, account: { details }, registered: false });
+    old.events.emit('creds.update', { pairingCode: 'FICTIONAL_PENDING_CODE' });
+    old.events.emit('creds.update', { pairingCode: undefined });
+    old.events.emit('connection.update', { connection: 'open' });
+    const replacing = runtime.execute({ command: 'reconnect' });
+    // The real SDK listener runs before the runtime guard; even nested mutable values
+    // in an earlier accepted update must not be shared with authoritative storage.
+    details.fill(0);
+    old.config.auth!.creds.me!.id = 'STALE_DIRECT_MUTATION';
+    old.events.emit('creds.update', { me: { id: 'STALE_INTERNAL_LISTENER' }, registered: true });
+    assert.equal(old.config.auth!.creds.me?.id, 'STALE_INTERNAL_LISTENER');
+    const status = await runtime.execute({ command: 'status' }) as { accountJid: string; registered: boolean };
+    assert.equal(status.accountJid, me);
+    assert.equal(status.registered, false);
+    cleanup.release();
+    await replacing;
+    assert.equal(sockets[1]!.config.auth!.creds.me?.id, me);
+    assert.equal(sockets[1]!.config.auth!.creds.registered, false);
+    assert.equal(sockets[1]!.config.auth!.creds.pairingCode, undefined);
+    assert.deepEqual(sockets[1]!.config.auth!.creds.account?.details, Buffer.from('FICTIONAL_LINKED_DEVICE'));
+    assert.notEqual(sockets[1]!.config.auth!.creds, old.config.auth!.creds);
+  } finally { cleanup.release(); await runtime.close(); }
+  const reopened = new Store(directory);
+  try {
+    const creds = reopened.get<AuthenticationCreds>('auth', 'creds');
+    assert.equal(creds?.me?.id, me);
+    assert.equal(creds?.registered, false);
+    assert.equal(creds?.pairingCode, undefined);
+    assert.deepEqual(creds?.account?.details, Buffer.from('FICTIONAL_LINKED_DEVICE'));
+  } finally { reopened.close(); }
 });
 
 test('same-directory restart retains linked credentials, local observations and unproven receive continuity', async () => {
@@ -436,7 +573,7 @@ test('uncertain concurrent intents survive outage/restart with exact late receip
   assert.deepEqual(await f.runtime.execute(command), duplicate);
   await assert.rejects(f.runtime.execute({ ...command, key: 'new-offline-key' }), /not open/);
   assert.equal(await f.runtime.execute({ command: 'request', key: 'new-offline-key' }), null);
-  f.clock.tick(); f.emit('connection.update', { connection: 'open' });
+  await f.clock.tick(); f.emit('connection.update', { connection: 'open' });
   wait.release();
   const result = await sending as RequestRecord;
   assert.equal(result.attempt, 'uncertain');

@@ -30,7 +30,7 @@ function fixture(directory = temporary(), allowedJid?: string) {
   let failSend = false;
   let returnJid = pn;
   const fake = {
-    ev: events,
+    ev: events, ws: { isClosed: true },
     end: async () => { events.emit('connection.update', { connection: 'close' }); },
     onWhatsApp: async (...numbers: string[]) => {
       lookups++;

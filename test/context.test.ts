@@ -27,7 +27,7 @@ const vcard = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Fictional Contact\r\nTEL;waid=12
 function fixture(directory = temporary(), events: BaileysEventEmitter = new EventEmitter()) {
   let getMessage: SocketConfig['getMessage'] | undefined;
   let reuploads = 0;
-  const fake = { ev: events, end: async () => { events.emit('connection.update', { connection: 'close' }); }, updateMediaMessage: async () => { reuploads++; throw new Error('Unexpected media I/O'); } };
+  const fake = { ev: events, ws: { isClosed: true }, end: async () => { events.emit('connection.update', { connection: 'close' }); }, updateMediaMessage: async () => { reuploads++; throw new Error('Unexpected media I/O'); } };
   const runtime = createRuntime({ dataDir: directory, connect: true }, config => {
     getMessage = config.getMessage;
     return fake as unknown as WASocket;

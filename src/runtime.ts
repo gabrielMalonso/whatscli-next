@@ -1,7 +1,7 @@
 import { Writable } from 'node:stream';
 import makeWASocket, { ALL_WA_PATCH_NAMES, areJidsSameUser, assertMediaContent, downloadMediaMessage, normalizeMessageContent, toNumber } from 'baileys';
 import { basename } from 'node:path';
-import type { WASocket } from 'baileys';
+import type { AuthenticationCreds, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
@@ -105,7 +105,9 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     owner = token;
     let current: WASocket;
     try { current = socketFactory({
-      auth: { creds: auth.state.creds, keys: {
+      // rc14 mutates its creds object before emitting/handling updates. Isolate each
+      // socket, and copy only updates from the current owner into durable auth state.
+      auth: { creds: decode<AuthenticationCreds>(encode(auth.state.creds)), keys: {
         get(category, ids) {
           if (stopped || owner !== token) throw new Error('Socket no longer owns authentication storage');
           try { return auth.state.keys.get(category, ids); } catch { fatal(); }
@@ -136,10 +138,13 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       if (socket !== current || owner !== token || stopped) return;
       try { action(); } catch { fatal(); }
     };
-    current.ev.on('creds.update', update => persist(() => auth.save(update)));
+    current.ev.on('creds.update', update => persist(() => {
+      // Keep explicit undefined clears while detaching every mutable field from the SDK.
+      auth.save({ ...update, ...decode<Partial<AuthenticationCreds>>(encode(update)) });
+    }));
     current.ev.on('connection.update', update => {
-      // rc14's end() returns early when another end is already running. Only its close
-      // event proves transport and socket-end cleanup completed, even after ownership ends.
+      // Observe SDK cleanup separately from the transport: rc14 can emit this while
+      // ws.isClosing, or return early from end() while another end is still running.
       if (update.connection === 'close') closed();
       persist(() => {
         if ('qr' in update) qr = update.qr;
@@ -156,10 +161,8 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         if (update.connection === 'close') {
           qr = undefined;
           receivedPendingNotifications = false;
-          // rc14 emits close after end has cleaned up its transport and socket-end handlers.
-          // Invalidate first, so duplicate/late events and old auth callbacks cannot own recovery.
-          socket = undefined;
-          socketClosed = undefined;
+          // Retain the handle until replacement/shutdown proves transport closure too.
+          // Invalidating ownership prevents duplicate/late events from owning recovery.
           owner = undefined;
           interrupt('connection-closed');
           const code = disconnectCode(update.lastDisconnect?.error);
@@ -175,7 +178,9 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
               if (stopped || retryToken !== pending) return;
               cancelRetry();
               recovery = { state: 'connecting', reason, code, attempt: attempts, nextRetryAt: null };
-              open();
+              void reconnect(false).catch(() => {
+                process.stderr.write(encode({ error: 'Socket cleanup failed; recovery requires intervention' }) + '\n');
+              });
             }, delay);
           }
         }
@@ -353,7 +358,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     // Do not keep operating with failed credential/event persistence.
     process.exit(1);
   }
-  function reconnect(): Promise<void> {
+  function reconnect(manual = true): Promise<void> {
     if (replacing) return replacing;
     cancelRetry();
     const previous = socket;
@@ -363,14 +368,17 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     owner = undefined;
     qr = undefined;
     receivedPendingNotifications = false;
-    attempts = 0;
     connection = 'connecting';
-    recovery = { state: 'connecting', reason: 'manual-reconnect', code: null, attempt: 0, nextRetryAt: null };
-    interrupt('manual-reconnect');
+    if (manual) {
+      attempts = 0;
+      recovery = { state: 'connecting', reason: 'manual-reconnect', code: null, attempt: 0, nextRetryAt: null };
+      interrupt('manual-reconnect');
+    }
     replacing = (async () => {
       try {
-        await previous?.end(new Error('Reconnect requested'));
-        await previousClosed;
+        // end() removes transport listeners synchronously, so subscribe after invoking it.
+        const sdkEnd = previous?.end(new Error('Reconnect requested'));
+        await Promise.all([sdkEnd, previousClosed, previous && transportClosed(previous.ws)]);
       } catch {
         socket = previous; // Retain the handle for shutdown, but never authorize another connection.
         socketClosed = previousClosed;
@@ -395,8 +403,8 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     socketClosed = undefined;
     owner = undefined;
     ending = (async () => {
-      await current?.end(new Error('Runtime stopped'));
-      await currentClosed;
+      const sdkEnd = current?.end(new Error('Runtime stopped'));
+      await Promise.all([sdkEnd, currentClosed, current && transportClosed(current.ws)]);
       await replacing;
     })();
     return ending;
@@ -428,6 +436,11 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       return closing;
     },
   };
+}
+
+function transportClosed(ws: WASocket['ws']): Promise<void> {
+  if (ws.isClosed) return Promise.resolve();
+  return new Promise<void>(resolve => { ws.once('close', resolve); });
 }
 
 function disconnectCode(error: unknown): number | undefined {
