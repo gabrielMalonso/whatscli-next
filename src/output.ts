@@ -8,7 +8,8 @@ export type Deletion = {
 };
 export type QuoteReference = { jid: string | null; id: string | null; participant: string | null };
 
-function textContent(content: proto.IMessage | undefined) {
+/** Current top-level text/caption only; quotes, cards and SDK context are excluded. */
+export function messageText(content: proto.IMessage | undefined) {
   return content?.conversation ?? content?.extendedTextMessage?.text
     ?? content?.imageMessage?.caption ?? content?.videoMessage?.caption ?? content?.documentMessage?.caption ?? null;
 }
@@ -64,7 +65,7 @@ function quoteOutput(content: proto.IMessage | undefined, jid: string | null, vi
     reference: { ...reference, fromMe: null },
     source: context.quotedMessage ? 'embedded' : null,
     state: hidden ?? (getContentType(quoted) ? 'available' : 'unknown'),
-    text: textContent(quoted), contentType: getContentType(quoted) ?? null,
+    text: messageText(quoted), contentType: getContentType(quoted) ?? null,
   };
 }
 
@@ -83,7 +84,7 @@ export function messageOutput(message: WAMessage, options: {
     participant: message.key.participant ?? null,
     timestamp: message.messageTimestamp == null ? null : toNumber(message.messageTimestamp),
     deletion,
-    text: textContent(content),
+    text: messageText(content),
     contentType: getContentType(content) ?? null,
     stubType: message.messageStubType ?? null,
     status: message.status ?? null,

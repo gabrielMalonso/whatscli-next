@@ -1,30 +1,19 @@
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { BufferJSON, jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
+import { jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
 import type { AuthenticationCreds, BaileysEventMap, Chat, ChatUpdate, Contact, WAMessage, WAMessageKey, WAMessageUpdate } from 'baileys';
-import { chatOutput, isUnreadCount, messageOutput } from './output.js';
+import { chatOutput, isUnreadCount, messageOutput, messageText } from './output.js';
 import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
 import type { ChatFilters } from './protocol.js';
+import { decode, decodeMessage, encode } from './store-codec.js';
+import { createSchema } from './store-schema.js';
 import { receiptUserJid } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 
-export const encode = (value: unknown): string => JSON.stringify(value, BufferJSON.replacer);
-// SQLite contains objects written by this process using the SDK's binary serializer.
-export const decode = <T>(value: string): T => JSON.parse(value, BufferJSON.reviver) as T;
-
-/** Protobuf toJSON writes enum names. Restore the enum values without dropping extended SDK keys. */
-function decodeMessage(value: string): WAMessage {
-  const message = decode<WAMessage>(value);
-  const enums = proto.WebMessageInfo.fromObject({ messageStubType: message.messageStubType, status: message.status });
-  if (message.messageStubType != null) message.messageStubType = enums.messageStubType ?? null;
-  if (message.status != null) message.status = enums.status ?? null;
-  const protocol = normalizeMessageContent(message.message)?.protocolMessage;
-  if (protocol?.type != null) protocol.type = proto.Message.ProtocolMessage.fromObject(protocol).type ?? null;
-  return message;
-}
+export { decode, encode } from './store-codec.js';
 
 export type Operation =
   | { kind: 'send'; jid: string; text: string }
@@ -99,100 +88,111 @@ export class Store {
       return new DatabaseSync(path);
     };
     this.lock = openDatabase('writer-lock.sqlite');
+    let opened: DatabaseSync | undefined;
     try {
       this.lock.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner (id INTEGER);');
-      this.db = openDatabase('probe.sqlite');
-      this.db.exec(`
-        PRAGMA journal_mode=WAL;
-        PRAGMA synchronous=FULL;
-        CREATE TABLE IF NOT EXISTS values_store (category TEXT, id TEXT, json TEXT NOT NULL, PRIMARY KEY(category,id));
-        CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, json TEXT NOT NULL, observed_at INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS messages (
-          jid TEXT, id TEXT, from_me INTEGER, participant TEXT, timestamp INTEGER NOT NULL, json TEXT NOT NULL,
-          PRIMARY KEY(jid,id,from_me,participant)
-        );
-        CREATE TABLE IF NOT EXISTS message_deletions (
-          jid TEXT, id TEXT, from_me INTEGER, participant TEXT, at INTEGER NOT NULL,
-          source TEXT NOT NULL, audit_json TEXT,
-          PRIMARY KEY(jid,id,from_me,participant)
-        );
-        CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS identity_mappings (
-          pn TEXT NOT NULL, lid TEXT NOT NULL, source TEXT NOT NULL, observed_at INTEGER,
-          PRIMARY KEY(pn,lid,source)
-        );
-        CREATE INDEX IF NOT EXISTS identity_mapping_lid ON identity_mappings(lid);
-      `);
-      this.db.function('search_text', { deterministic: true }, value => typeof value === 'string'
-        ? (messageOutput(decodeMessage(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
+      this.db = opened = openDatabase('probe.sqlite');
+      createSchema(this.db);
       this.db.function('chat_unread', { deterministic: true }, value => {
         const unread = typeof value === 'string' ? chatOutput(decode<Chat>(value)).unread : null;
         return unread === null ? null : Number(unread);
       });
-      // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
-      // Legacy key-store entries have no observation timestamp; do not invent one.
-      if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
-        for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='lid-mapping'").all()) {
-          const value = decode<{ pn?: unknown; lid?: unknown }>(String(row.json));
-          this.observeMapping(value.pn, value.lid, 'lid-mapping.update', Number(row.at));
-        }
-        for (const row of this.db.prepare("SELECT id,json FROM values_store WHERE category='lid-mapping'").all()) {
-          this.observeSdkMapping(String(row.id), decode<unknown>(String(row.json)), null);
-        }
-        for (const row of this.db.prepare("SELECT json_extract(json,'$.key') AS message_key FROM messages").iterate()) {
-          if (typeof row.message_key === 'string') this.observeMessageIdentities(decode<WAMessageKey>(row.message_key), null);
-        }
-        this.set('migration', 'contact-identity-v1', true);
-      });
-      // Old runtimes journaled deletes without applying them. Recover the evidence privately.
-      if (!this.get<boolean>('migration', 'message-deletions-v1')) this.transaction(() => {
-        // Snapshot raw provenance before replay can redact a notification itself.
-        const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
-          .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
-        for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='messages.delete' ORDER BY sequence").all()) {
-          this.applyDeleteEvent(decode<BaileysEventMap['messages.delete']>(String(row.json)), Number(row.at), true);
-        }
-        const derivedTargets = new Set<string>();
-        for (const { message } of messages) {
-          const protocol = normalizeMessageContent(message.message)?.protocolMessage;
-          if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) continue;
-          if (protocol.key?.id) derivedTargets.add(encode(this.deletionKey({ ...message.key, id: protocol.key.id })));
-          this.observeRevocation(message);
-        }
-        for (const { rowid, message } of messages) {
-          if (message.messageStubType !== proto.WebMessageInfo.StubType.REVOKE
-            || normalizeMessageContent(message.message)?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE) continue;
-          if (!derivedTargets.has(encode(this.deletionKey(message.key)))) this.observeRevocation(message);
-          else if (!this.deletion(message.key)) {
-            // The old runtime saved rc14's lossy derived stub on this envelope identity.
-            // The raw notification was validated above; don't reinstate its wrong direction.
-            delete message.messageStubType;
-            delete message.messageStubParameters;
-            this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), rowid);
-          }
-        }
-        this.set('migration', 'message-deletions-v1', true);
-      });
-      if (!this.get<boolean>('migration', 'chat-activity-v1')) this.transaction(() => {
-        this.db.exec('ALTER TABLE chats ADD COLUMN activity_timestamp INTEGER; ALTER TABLE chats ADD COLUMN activity_source TEXT;');
-        for (const row of this.db.prepare('SELECT json FROM chats').all()) this.observeChatActivity(decode<Chat>(String(row.json)));
-        // Legacy own-message rows cannot distinguish SDK returns from independent echoes.
-        // Recover only incoming message activity, and only for existing observed chats.
-        for (const row of this.db.prepare('SELECT m.jid,m.timestamp FROM messages m JOIN chats c ON c.jid=m.jid WHERE m.from_me=0 AND m.timestamp>0').iterate()) {
-          this.observeActivity(String(row.jid), Number(row.timestamp), 'message.messageTimestamp');
-        }
-        this.set('migration', 'chat-activity-v1', true);
-      });
+      this.recoverLegacy();
+      this.initializeQueries();
     } catch (error) {
+      opened?.close();
       this.lock.close();
       throw error;
     }
   }
 
+  private recoverLegacy(): void {
+    // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
+    // Legacy key-store entries have no observation timestamp; do not invent one.
+    if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
+      for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='lid-mapping'").all()) {
+        const value = decode<{ pn?: unknown; lid?: unknown }>(String(row.json));
+        this.observeMapping(value.pn, value.lid, 'lid-mapping.update', Number(row.at));
+      }
+      for (const row of this.db.prepare("SELECT id,json FROM values_store WHERE category='lid-mapping'").all()) {
+        this.observeSdkMapping(String(row.id), decode<unknown>(String(row.json)), null);
+      }
+      for (const row of this.db.prepare("SELECT json_extract(json,'$.key') AS message_key FROM messages").iterate()) {
+        if (typeof row.message_key === 'string') this.observeMessageIdentities(decode<WAMessageKey>(row.message_key), null);
+      }
+      this.set('migration', 'contact-identity-v1', true);
+    });
+    // Old runtimes journaled deletes without applying them. Recover the evidence privately.
+    if (!this.get<boolean>('migration', 'message-deletions-v1')) this.transaction(() => {
+      // Snapshot raw provenance before replay can redact a notification itself.
+      const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
+        .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
+      for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='messages.delete' ORDER BY sequence").all()) {
+        this.applyDeleteEvent(decode<BaileysEventMap['messages.delete']>(String(row.json)), Number(row.at), true);
+      }
+      const derivedTargets = new Set<string>();
+      for (const { message } of messages) {
+        const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+        if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) continue;
+        if (protocol.key?.id) derivedTargets.add(encode(this.deletionKey({ ...message.key, id: protocol.key.id })));
+        this.observeRevocation(message);
+      }
+      for (const { rowid, message } of messages) {
+        if (message.messageStubType !== proto.WebMessageInfo.StubType.REVOKE
+          || normalizeMessageContent(message.message)?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE) continue;
+        if (!derivedTargets.has(encode(this.deletionKey(message.key)))) this.observeRevocation(message);
+        else if (!this.deletion(message.key)) {
+          // The old runtime saved rc14's lossy derived stub on this envelope identity.
+          // The raw notification was validated above; don't reinstate its wrong direction.
+          delete message.messageStubType;
+          delete message.messageStubParameters;
+          this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), rowid);
+        }
+      }
+      this.set('migration', 'message-deletions-v1', true);
+    });
+    if (!this.get<boolean>('migration', 'chat-activity-v1')) this.transaction(() => {
+      this.db.exec('ALTER TABLE chats ADD COLUMN activity_timestamp INTEGER; ALTER TABLE chats ADD COLUMN activity_source TEXT;');
+      for (const row of this.db.prepare('SELECT json FROM chats').all()) this.observeChatActivity(decode<Chat>(String(row.json)));
+      // Legacy own-message rows cannot distinguish SDK returns from independent echoes.
+      // Recover only incoming message activity, and only for existing observed chats.
+      for (const row of this.db.prepare('SELECT m.jid,m.timestamp FROM messages m JOIN chats c ON c.jid=m.jid WHERE m.from_me=0 AND m.timestamp>0').iterate()) {
+        this.observeActivity(String(row.jid), Number(row.timestamp), 'message.messageTimestamp');
+      }
+      this.set('migration', 'chat-activity-v1', true);
+    });
+  }
+
+  private indexMessage(rowid: number, jid: string, timestamp: number, message: WAMessage): void {
+    if (!message.key.remoteJid || message.message == null || this.deletion(message.key)) return;
+    const text = (messageText(normalizeMessageContent(message.message)) ?? '').normalize('NFKC').toLowerCase();
+    this.db.prepare('INSERT INTO message_text VALUES (?,?,?,?)')
+      .run(rowid, jid, timestamp, text);
+  }
+
+  private initializeQueries(): void {
+    if (Number(this.db.prepare('PRAGMA user_version').get()?.user_version) === 1) return;
+    this.transaction(() => {
+      // Stream the additive backfill after legacy deletion recovery. Never read audit bodies.
+      // Ordering metadata is authoritative in SQLite; decoded protobuf Longs can lose high words.
+      for (const row of this.db.prepare('SELECT rowid,jid,timestamp,json FROM messages').iterate()) {
+        this.indexMessage(Number(row.rowid), String(row.jid), Number(row.timestamp), decodeMessage(String(row.json)));
+      }
+      this.db.exec(`
+        CREATE INDEX message_history ON messages(jid,timestamp);
+        CREATE INDEX message_text_order ON message_text(timestamp);
+        CREATE INDEX message_text_jid_order ON message_text(jid,timestamp);
+        CREATE INDEX request_message_id ON requests(json_extract(json,'$.messageId'));
+        PRAGMA user_version=1;
+      `);
+    });
+  }
+
   close(): void { this.db.close(); this.lock.close(); }
 
+  /** Synchronous mutations join the runtime's surrounding event transaction. */
   transaction<T>(action: () => T): T {
+    if (this.db.isTransaction) return action();
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = action();
@@ -400,10 +400,15 @@ export class Store {
   }
 
   observeMessage(message: WAMessage, chatObserved = true): void {
+    this.transaction(() => this.writeObservedMessage(message, chatObserved));
+  }
+
+  private writeObservedMessage(message: WAMessage, chatObserved: boolean): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || !id || typeof fromMe !== 'boolean') { this.event('incomplete-message-key', {}); return; }
     this.observeRevocation(message);
-    const previous = this.message(message.key);
+    const previousRow = this.messageRow(message.key);
+    const previous = previousRow ? this.visibleMessage(decodeMessage(String(previousRow.json))) : undefined;
     const merged = { ...previous, ...message, key: { ...previous?.key, ...message.key } };
     if (previous?.message && !message.message) merged.message = previous.message;
     if (message.message && message.messageStubType === undefined && previous?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
@@ -425,9 +430,12 @@ export class Store {
       merged.message = null;
       delete merged.messageStubParameters;
     }
-    this.db.prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)').run(
-      jid, id, Number(fromMe), participantSlot, toNumber(merged.messageTimestamp ?? 0), encode(merged),
+    const timestamp = toNumber(merged.messageTimestamp ?? 0);
+    const inserted = this.db.prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)').run(
+      jid, id, Number(fromMe), participantSlot, timestamp, encode(merged),
     );
+    if (previousRow) this.db.prepare('DELETE FROM message_text WHERE message_rowid=?').run(Number(previousRow.rowid));
+    this.indexMessage(Number(inserted.lastInsertRowid), jid, timestamp, merged);
     // Seeing a message proves the conversation exists, not its archive/read state.
     if (chatObserved && !this.chat(jid)) this.observeChat({ id: jid });
     if (chatObserved) this.observeActivity(jid, message.messageTimestamp, 'message.messageTimestamp');
@@ -440,14 +448,16 @@ export class Store {
     if (message.status !== null && message.status !== undefined) this.receipt(message.key, message.status);
   }
 
-  message(key: WAMessageKey): WAMessage | undefined {
+  private messageRow(key: WAMessageKey) {
     if (!key.remoteJid || !key.id || typeof key.fromMe !== 'boolean') return undefined;
-    if (key.fromMe) {
-      const own = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=1 ORDER BY rowid LIMIT 1').get(key.remoteJid, key.id);
-      return own ? this.visibleMessage(decodeMessage(String(own.json))) : undefined;
-    }
-    const row = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=? AND participant=?')
-      .get(key.remoteJid, key.id, Number(key.fromMe), key.fromMe ? '' : key.participant ?? '');
+    return key.fromMe
+      ? this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=1 ORDER BY rowid LIMIT 1').get(key.remoteJid, key.id)
+      : this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=0 AND participant=?')
+        .get(key.remoteJid, key.id, key.participant ?? '');
+  }
+
+  message(key: WAMessageKey): WAMessage | undefined {
+    const row = this.messageRow(key);
     return row ? this.visibleMessage(decodeMessage(String(row.json))) : undefined;
   }
 
@@ -458,11 +468,16 @@ export class Store {
 
   search(query: string, limit: number, offset: number, jid?: string): WAMessage[] {
     const text = query.normalize('NFKC').toLowerCase();
+    // SQLite scans normalized text only. Fetch SDK bodies only for the selected page.
     const rows = jid === undefined
-      ? this.db.prepare("SELECT json FROM messages WHERE json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?")
-      : this.db.prepare("SELECT json FROM messages WHERE jid=? AND json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?");
-    return (jid === undefined ? rows.all(text, limit, offset) : rows.all(jid, text, limit, offset))
-      .map(row => this.visibleMessage(decodeMessage(String(row.json))));
+      ? this.db.prepare('SELECT message_rowid FROM message_text WHERE instr(text,?)>0 ORDER BY timestamp DESC,message_rowid DESC LIMIT ? OFFSET ?').all(text, limit, offset)
+      : this.db.prepare('SELECT message_rowid FROM message_text WHERE jid=? AND instr(text,?)>0 ORDER BY timestamp DESC,message_rowid DESC LIMIT ? OFFSET ?').all(jid, text, limit, offset);
+    const body = this.db.prepare('SELECT json FROM messages WHERE rowid=?');
+    return rows.map(row => {
+      const stored = body.get(Number(row.message_rowid));
+      if (!stored) throw new Error('Search projection references a missing message');
+      return this.visibleMessage(decodeMessage(String(stored.json)));
+    });
   }
 
   locateMessage(ref: { jid: string; id: string; fromMe?: boolean; participant?: string }): WAMessage {
@@ -533,6 +548,7 @@ export class Store {
       message.message = null;
       delete message.messageStubParameters;
       this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), Number(row.rowid));
+      this.db.prepare('DELETE FROM message_text WHERE message_rowid=?').run(Number(row.rowid));
     }
   }
 
@@ -597,7 +613,11 @@ export class Store {
     this.markDeleted(target, 'revoke');
   }
 
-  updateMessage({ key, update }: WAMessageUpdate): void {
+  updateMessage(change: WAMessageUpdate): void {
+    this.transaction(() => this.writeMessageUpdate(change));
+  }
+
+  private writeMessageUpdate({ key, update }: WAMessageUpdate): void {
     // update.key in a REVOKE is the notification key, not the target key.
     if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
       if (update.key) {
@@ -649,7 +669,7 @@ export class Store {
   receipt(key: WAMessageKey, status: number): void {
     if (key.fromMe !== true || !key.id || !key.remoteJid) return;
     if (!Number.isInteger(status) || status < proto.WebMessageInfo.Status.ERROR || status > proto.WebMessageInfo.Status.PLAYED) return;
-    for (const row of this.db.prepare('SELECT json FROM requests').all()) {
+    for (const row of this.db.prepare("SELECT json FROM requests WHERE json_extract(json,'$.messageId')=?").all(key.id)) {
       const request = decode<RequestRecord>(String(row.json));
       if (!isSendOperation(request.operation) || request.messageId !== key.id) continue;
       const destination = request.route?.status === 'proven' ? request.route.jid : request.operation.jid;
