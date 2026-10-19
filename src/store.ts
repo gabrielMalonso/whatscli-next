@@ -1,15 +1,27 @@
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { BufferJSON, proto, toNumber } from 'baileys';
-import type { Chat, ChatUpdate, Contact, WAMessage, WAMessageKey } from 'baileys';
+import { BufferJSON, jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
+import type { AuthenticationCreds, BaileysEventMap, Chat, ChatUpdate, Contact, WAMessage, WAMessageKey, WAMessageUpdate } from 'baileys';
 import { chatOutput, messageOutput } from './output.js';
+import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
 
 export const encode = (value: unknown): string => JSON.stringify(value, BufferJSON.replacer);
 // SQLite contains objects written by this process using the SDK's binary serializer.
 export const decode = <T>(value: string): T => JSON.parse(value, BufferJSON.reviver) as T;
+
+/** Protobuf toJSON writes enum names. Restore the enum values without dropping extended SDK keys. */
+function decodeMessage(value: string): WAMessage {
+  const message = decode<WAMessage>(value);
+  const enums = proto.WebMessageInfo.fromObject({ messageStubType: message.messageStubType, status: message.status });
+  if (message.messageStubType != null) message.messageStubType = enums.messageStubType ?? null;
+  if (message.status != null) message.status = enums.status ?? null;
+  const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+  if (protocol?.type != null) protocol.type = proto.Message.ProtocolMessage.fromObject(protocol).type ?? null;
+  return message;
+}
 
 export type Operation =
   | { kind: 'send'; jid: string; text: string }
@@ -80,6 +92,11 @@ export class Store {
           jid TEXT, id TEXT, from_me INTEGER, participant TEXT, timestamp INTEGER NOT NULL, json TEXT NOT NULL,
           PRIMARY KEY(jid,id,from_me,participant)
         );
+        CREATE TABLE IF NOT EXISTS message_deletions (
+          jid TEXT, id TEXT, from_me INTEGER, participant TEXT, at INTEGER NOT NULL,
+          source TEXT NOT NULL, audit_json TEXT,
+          PRIMARY KEY(jid,id,from_me,participant)
+        );
         CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS identity_mappings (
@@ -89,7 +106,7 @@ export class Store {
         CREATE INDEX IF NOT EXISTS identity_mapping_lid ON identity_mappings(lid);
       `);
       this.db.function('search_text', { deterministic: true }, value => typeof value === 'string'
-        ? (messageOutput(decode<WAMessage>(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
+        ? (messageOutput(decodeMessage(value)).text ?? '').normalize('NFKC').toLowerCase() : '');
       // Preserve old journal evidence and the SDK's explicitly typed mapping storage.
       // Legacy key-store entries have no observation timestamp; do not invent one.
       if (!this.get<boolean>('migration', 'contact-identity-v1')) this.transaction(() => {
@@ -104,6 +121,35 @@ export class Store {
           if (typeof row.message_key === 'string') this.observeMessageIdentities(decode<WAMessageKey>(row.message_key), null);
         }
         this.set('migration', 'contact-identity-v1', true);
+      });
+      // Old runtimes journaled deletes without applying them. Recover the evidence privately.
+      if (!this.get<boolean>('migration', 'message-deletions-v1')) this.transaction(() => {
+        // Snapshot raw provenance before replay can redact a notification itself.
+        const messages = this.db.prepare('SELECT rowid,json FROM messages').all()
+          .map(row => ({ rowid: Number(row.rowid), message: decodeMessage(String(row.json)) }));
+        for (const row of this.db.prepare("SELECT at,json FROM events WHERE kind='messages.delete' ORDER BY sequence").all()) {
+          this.applyDeleteEvent(decode<BaileysEventMap['messages.delete']>(String(row.json)), Number(row.at), true);
+        }
+        const derivedTargets = new Set<string>();
+        for (const { message } of messages) {
+          const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+          if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) continue;
+          if (protocol.key?.id) derivedTargets.add(encode(this.deletionKey({ ...message.key, id: protocol.key.id })));
+          this.observeRevocation(message);
+        }
+        for (const { rowid, message } of messages) {
+          if (message.messageStubType !== proto.WebMessageInfo.StubType.REVOKE
+            || normalizeMessageContent(message.message)?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE) continue;
+          if (!derivedTargets.has(encode(this.deletionKey(message.key)))) this.observeRevocation(message);
+          else if (!this.deletion(message.key)) {
+            // The old runtime saved rc14's lossy derived stub on this envelope identity.
+            // The raw notification was validated above; don't reinstate its wrong direction.
+            delete message.messageStubType;
+            delete message.messageStubParameters;
+            this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), rowid);
+          }
+        }
+        this.set('migration', 'message-deletions-v1', true);
       });
     } catch (error) {
       this.lock.close();
@@ -267,6 +313,7 @@ export class Store {
   observeMessage(message: WAMessage, chatObserved = true): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || !id || typeof fromMe !== 'boolean') { this.event('incomplete-message-key', {}); return; }
+    this.observeRevocation(message);
     const previous = this.message(message.key);
     const merged = { ...previous, ...message, key: { ...previous?.key, ...message.key } };
     if (previous?.message && !message.message) merged.message = previous.message;
@@ -279,6 +326,16 @@ export class Store {
     const participantSlot = fromMe
       ? String(this.db.prepare('SELECT participant FROM messages WHERE jid=? AND id=? AND from_me=1 ORDER BY rowid LIMIT 1').get(jid, id)?.participant ?? '')
       : participant ?? '';
+    const barrier = this.get<number>('chat-delete-boundary', jid);
+    if (barrier !== undefined && toNumber(merged.messageTimestamp ?? 0) * 1000 <= barrier && !this.deletion(message.key)) {
+      // The all:true event carries no server time/range. A late old/undated arrival is uncertain.
+      this.markDeleted(message.key, 'chat-delete-boundary', barrier);
+    }
+    if (this.deletion(message.key)) {
+      this.retainAudit(message.key, merged);
+      merged.message = null;
+      delete merged.messageStubParameters;
+    }
     this.db.prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)').run(
       jid, id, Number(fromMe), participantSlot, toNumber(merged.messageTimestamp ?? 0), encode(merged),
     );
@@ -297,24 +354,25 @@ export class Store {
     if (!key.remoteJid || !key.id || typeof key.fromMe !== 'boolean') return undefined;
     if (key.fromMe) {
       const own = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=1 ORDER BY rowid LIMIT 1').get(key.remoteJid, key.id);
-      return own ? decode<WAMessage>(String(own.json)) : undefined;
+      return own ? this.visibleMessage(decodeMessage(String(own.json))) : undefined;
     }
     const row = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=? AND from_me=? AND participant=?')
       .get(key.remoteJid, key.id, Number(key.fromMe), key.fromMe ? '' : key.participant ?? '');
-    return row ? decode<WAMessage>(String(row.json)) : undefined;
+    return row ? this.visibleMessage(decodeMessage(String(row.json))) : undefined;
   }
 
   messages(jid: string, limit = 20, offset = 0): WAMessage[] {
     return this.db.prepare('SELECT json FROM messages WHERE jid=? ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?')
-      .all(jid, limit, offset).map(row => decode<WAMessage>(String(row.json)));
+      .all(jid, limit, offset).map(row => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
   search(query: string, limit: number, offset: number, jid?: string): WAMessage[] {
     const text = query.normalize('NFKC').toLowerCase();
     const rows = jid === undefined
-      ? this.db.prepare('SELECT json FROM messages WHERE instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?').all(text, limit, offset)
-      : this.db.prepare('SELECT json FROM messages WHERE jid=? AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?').all(jid, text, limit, offset);
-    return rows.map(row => decode<WAMessage>(String(row.json)));
+      ? this.db.prepare("SELECT json FROM messages WHERE json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?")
+      : this.db.prepare("SELECT json FROM messages WHERE jid=? AND json_extract(json,'$.message') IS NOT NULL AND instr(search_text(json),?)>0 ORDER BY timestamp DESC,rowid DESC LIMIT ? OFFSET ?");
+    return (jid === undefined ? rows.all(text, limit, offset) : rows.all(jid, text, limit, offset))
+      .map(row => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
   locateMessage(ref: { jid: string; id: string; fromMe?: boolean; participant?: string }): WAMessage {
@@ -325,7 +383,167 @@ export class Store {
     const rows = this.db.prepare(`SELECT json FROM messages WHERE ${clauses.join(' AND ')} LIMIT 2`).all(...args);
     if (rows.length === 0) throw new Error('Message is not stored for that exact identity');
     if (rows.length > 1) throw new Error('Ambiguous message ID; provide fromMe and participant');
-    return decode<WAMessage>(String(rows[0]?.json));
+    const message = decodeMessage(String(rows[0]?.json));
+    if (this.deletion(message.key)) throw new Error('Message content is unavailable after deletion or an uncertain chat deletion boundary');
+    return message;
+  }
+
+  messageView(message: WAMessage) {
+    const deletion = this.deletion(message.key);
+    return messageOutput(message, {
+      ...(deletion ? { deletion } : {}),
+      quoteVisibility: ref => this.quoteVisibility(ref),
+    });
+  }
+
+  private deletionKey(key: WAMessageKey): [string, string, number, string] | undefined {
+    if (!key.remoteJid || !key.id || typeof key.fromMe !== 'boolean') return undefined;
+    return [key.remoteJid, key.id, Number(key.fromMe), key.fromMe ? '' : key.participant ?? ''];
+  }
+
+  deletion(key: WAMessageKey): Deletion | undefined {
+    const identity = this.deletionKey(key);
+    if (!identity) return undefined;
+    const row = this.db.prepare('SELECT at,source FROM message_deletions WHERE jid=? AND id=? AND from_me=? AND participant=?').get(...identity);
+    if (!row) return undefined;
+    const source = row.source === 'revoke' ? 'revoke' : row.source === 'messages.delete' ? 'messages.delete' : 'chat-delete-boundary';
+    return { status: source === 'chat-delete-boundary' ? 'unknown' : 'deleted', source, observedAt: Number(row.at) };
+  }
+
+  private visibleMessage(message: WAMessage): WAMessage {
+    if (!this.deletion(message.key)) return message;
+    const visible = { ...message, message: null };
+    delete visible.messageStubParameters;
+    return visible;
+  }
+
+  private retainAudit(key: WAMessageKey, message: WAMessage): void {
+    const identity = this.deletionKey(key);
+    if (!identity || !message.message) return;
+    this.db.prepare('UPDATE message_deletions SET audit_json=COALESCE(audit_json,?) WHERE jid=? AND id=? AND from_me=? AND participant=?')
+      .run(encode(message), ...identity);
+  }
+
+  private markDeleted(key: WAMessageKey, source: Exclude<Deletion['source'], null>, at = Date.now(), entireChat = false): void {
+    const identity = this.deletionKey(key);
+    const missingAuthor = !key.fromMe && (key.remoteJid?.endsWith('@g.us') || key.remoteJid?.endsWith('@broadcast')) && !key.participant;
+    if (!identity || (missingAuthor && source !== 'chat-delete-boundary' && !entireChat)) {
+      this.event('message-deletion-unknown', { jid: key.remoteJid ?? null, id: key.id ?? null, reason: 'incomplete-target-identity' }); return;
+    }
+    this.db.prepare(`INSERT INTO message_deletions VALUES (?,?,?,?,?,?,NULL) ON CONFLICT(jid,id,from_me,participant)
+      DO UPDATE SET at=CASE WHEN source='chat-delete-boundary' THEN excluded.at ELSE at END,
+      source=CASE WHEN source='chat-delete-boundary' THEN excluded.source ELSE source END`).run(...identity, at, source);
+    const [jid, id, fromMe, participant] = identity;
+    const rows = fromMe
+      ? this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=1').all(jid, id)
+      : this.db.prepare('SELECT rowid,json FROM messages WHERE jid=? AND id=? AND from_me=0 AND participant=?').all(jid, id, participant);
+    for (const row of rows) {
+      const message = decodeMessage(String(row.json));
+      this.retainAudit(key, message);
+      message.message = null;
+      delete message.messageStubParameters;
+      this.db.prepare('UPDATE messages SET json=? WHERE rowid=?').run(encode(message), Number(row.rowid));
+    }
+  }
+
+  deleteMessages(event: BaileysEventMap['messages.delete']): void {
+    this.transaction(() => {
+      this.applyDeleteEvent(event, Date.now());
+      this.event('messages.delete', 'keys' in event ? { keys: event.keys.map(({ remoteJid, id, fromMe, participant }) => ({ remoteJid, id, fromMe, participant })) } : { jid: event.jid, all: true });
+    });
+  }
+
+  private applyDeleteEvent(event: BaileysEventMap['messages.delete'], at: number, recovering = false): void {
+    if ('keys' in event) { for (const key of event.keys) this.markDeleted(key, 'messages.delete', at); return; }
+    this.set('chat-delete-boundary', event.jid, Math.max(this.get<number>('chat-delete-boundary', event.jid) ?? 0, at));
+    for (const message of this.messages(event.jid, -1)) {
+      if (!recovering) this.markDeleted(message.key, 'messages.delete', at, true);
+      else if (toNumber(message.messageTimestamp ?? 0) * 1000 <= at) this.markDeleted(message.key, 'chat-delete-boundary', at);
+    }
+  }
+
+  private revocationTarget(message: WAMessage): WAMessageKey | undefined {
+    const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+    if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE || !protocol.key
+      || !message.key.remoteJid || typeof message.key.fromMe !== 'boolean') return undefined;
+    const target = protocol.key;
+    const id = target.id;
+    if (!id) return undefined;
+    const jid = message.key.remoteJid;
+    const direct = isPn(jid) || isLid(jid);
+    const me = this.get<Pick<AuthenticationCreds, 'me'>>('auth', 'creds')?.me;
+    const self = [me?.id, me?.lid].filter((jid): jid is string => Boolean(jid)).map(jidNormalizedUser);
+    // In an inbound 1:1 the sender's remoteJid can name us. Accept that perspective
+    // only against authenticated self identities; the local target stays in this exact chat.
+    const addressedToSelf = !message.key.fromMe && direct && target.fromMe === true
+      && target.remoteJid != null && self.includes(target.remoteJid);
+    if (target.remoteJid && target.remoteJid !== jid && !addressedToSelf) return undefined;
+    // Embedded fromMe is relative to the notification's sender. Only true identifies
+    // that same author; another sender's false cannot establish our account's direction.
+    if (target.fromMe === true) {
+      if (target.participant && target.participant !== message.key.participant
+        && !(message.key.fromMe && self.includes(target.participant))
+        && !(!message.key.fromMe && direct && target.participant === jid)) return undefined;
+      return { ...message.key, id };
+    }
+    if (target.fromMe !== false || message.key.fromMe !== true) return undefined;
+    // Our own administrative revoke supplies account-relative false. In a group it
+    // still needs the original participant, not the administrator on the envelope.
+    if ((message.key.remoteJid?.endsWith('@g.us') || message.key.remoteJid?.endsWith('@broadcast')) && !target.participant) return undefined;
+    if (target.participant && (target.participant === message.key.participant || self.includes(target.participant))) return undefined;
+    return { remoteJid: message.key.remoteJid, id, fromMe: false, participant: target.participant ?? null };
+  }
+
+  private observeRevocation(message: WAMessage): void {
+    const protocol = normalizeMessageContent(message.message)?.protocolMessage;
+    if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) {
+      if (message.messageStubType === proto.WebMessageInfo.StubType.REVOKE) this.markDeleted(message.key, 'revoke');
+      return;
+    }
+    const target = this.revocationTarget(message);
+    if (!target) {
+      this.event('message-deletion-unknown', { reason: 'inconsistent-protocol-target' }); return;
+    }
+    this.markDeleted(target, 'revoke');
+  }
+
+  updateMessage({ key, update }: WAMessageUpdate): void {
+    // update.key in a REVOKE is the notification key, not the target key.
+    if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
+      if (update.key) {
+        const notification = this.message(update.key);
+        const expected = notification ? this.revocationTarget(notification) : undefined;
+        // rc14's derived update drops the embedded target's chat/participant. It cannot
+        // override the raw notification's rejection, or establish a target without it.
+        if (!expected || encode(this.deletionKey(expected)) !== encode(this.deletionKey(key))) {
+          this.event('message-deletion-unknown', { jid: key.remoteJid ?? null, id: key.id ?? null, reason: 'unverified-revoke-notification' });
+          if (update.status != null) this.receipt(key, update.status);
+          return;
+        }
+      }
+      this.markDeleted(key, 'revoke');
+    }
+    const previous = this.message(key);
+    if (previous) this.observeMessage({ ...previous, ...update, key });
+    if (update.status != null) this.receipt(key, update.status);
+  }
+
+  private quoteVisibility(ref: QuoteReference): 'deleted' | 'unknown' | undefined {
+    if (!ref.jid) return undefined;
+    if (!ref.id) return this.get<number>('chat-delete-boundary', ref.jid) === undefined ? undefined : 'unknown';
+    const rows = this.db.prepare('SELECT from_me,participant,source FROM message_deletions WHERE jid=? AND id=?').all(ref.jid, ref.id);
+    if (rows.length && !ref.participant) return 'unknown';
+    const matches = rows.filter(row => row.participant === ref.participant || (row.from_me === 0 && row.participant === '' && ref.participant === ref.jid));
+    if (matches.length) return matches.some(row => row.source !== 'chat-delete-boundary') ? 'deleted' : 'unknown';
+    // An own message may have no stored participant. Do not attribute it by guesswork.
+    if (rows.some(row => row.from_me === 1)) return 'unknown';
+    const barrier = this.get<number>('chat-delete-boundary', ref.jid);
+    if (barrier === undefined) return undefined;
+    // An embedded quote has no timestamp. Only an exact newer observation can clear the boundary.
+    const known = this.db.prepare('SELECT json FROM messages WHERE jid=? AND id=?').all(ref.jid, ref.id)
+      .map(row => decodeMessage(String(row.json))).filter(message => ref.participant &&
+        (message.key.participant === ref.participant || (message.key.fromMe === false && !message.key.participant && ref.participant === ref.jid)));
+    return known.length === 1 && toNumber(known[0]?.messageTimestamp ?? 0) * 1000 > barrier ? undefined : 'unknown';
   }
 
   request(key: string): RequestRecord | undefined {

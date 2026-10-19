@@ -31,6 +31,10 @@ Use an exact observed JID or the exact PN JID from a successful resolution, veri
 
 Results describe locally stored data. `coverage: partial` applies even when a search returns no matches or history synchronization reports completion. Lists are limited to 100 results; page using `--offset`. Events use `events --after SEQUENCE` and return the next 100 entries.
 
+Messages include `quote`, `contacts` and `deletion`. Quotes contain one safe embedded snapshot and the available exact reference; absent bodies/identifiers remain unknown/null, with no guessed history lookup. Card `cards` contain display/vCard names, shared phone strings and per-card available/incomplete/missing/malformed states. These phones are shared content, never verified recipient identities or send authorization.
+
+`deletion.status: deleted` hides current text/type/quote/cards/media and excludes the body from search/download. `status: unknown, source: null` means no deletion observation. `unknown` with `source: chat-delete-boundary` withholds an old/undated arrival after a chat-wide deletion whose exact range is unavailable. Exact markers survive duplicates and restart. Incomplete group deletion keys emit `message-deletion-unknown` without choosing an author. Inspect these evidence gaps; do not equate local content with current remote availability. Search covers current top-level text/captions, excluding quoted text, cards and private audit bodies. See [the public contract](../README.md#agent-commands) for details and observable limits.
+
 ## Send once
 
 Choose a stable, unique key for the intended action before invoking a send:

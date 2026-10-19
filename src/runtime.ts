@@ -9,7 +9,6 @@ import { internationalPhone, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
-import { messageOutput } from './output.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
 
@@ -141,9 +140,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     })));
     current.ev.on('messages.update', updates => persist(() => store.transaction(() => {
       for (const { key, update } of updates) {
-        const previous = store.message(key);
-        if (previous) store.observeMessage({ ...previous, ...update, key });
-        if (update.status !== undefined && update.status !== null) store.receipt(key, update.status);
+        store.updateMessage({ key, update });
       }
       store.event('messages.update', updates.map(({ key, update }) => ({ key, status: update.status ?? null })));
     })));
@@ -158,7 +155,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       store.event('lid-mapping', { pn: mapping.pn, lid: mapping.lid });
     })));
     current.ev.on('message-receipt.update', receipts => persist(() => store.event('participant-receipts', receipts)));
-    current.ev.on('messages.delete', event => persist(() => { store.event('messages.delete', event); issue('stored-messages-may-have-been-deleted'); }));
+    current.ev.on('messages.delete', event => persist(() => store.deleteMessages(event)));
   }
   async function execute(command: Command): Promise<unknown> {
     switch (command.command) {
@@ -196,8 +193,8 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           source: 'whatsapp', observedAt: check.observedAt, contact,
         };
       }
-      case 'messages': return store.messages(command.jid, command.limit, command.offset).map(messageOutput);
-      case 'search': return store.search(command.query, command.limit, command.offset, command.jid).map(messageOutput);
+      case 'messages': return store.messages(command.jid, command.limit, command.offset).map(message => store.messageView(message));
+      case 'search': return store.search(command.query, command.limit, command.offset, command.jid).map(message => store.messageView(message));
       case 'group': {
         const metadata = await connected().groupMetadata(command.jid);
         const self = [auth.state.creds.me?.id, auth.state.creds.me?.lid].filter(id => id !== undefined);
