@@ -16,7 +16,8 @@ export function rpc(directory: string, command: Command, timeoutMs = 120000): Pr
   if (Buffer.byteLength(line) > 131072) throw new Error('Request exceeds 128 KiB');
   return new Promise((resolve, reject) => {
     const socket = connect(path);
-    let buffer = '';
+    const chunks: string[] = [];
+    let bytes = 0;
     let completed = false;
     const finish = (error?: Error, response?: Record<string, unknown>): void => {
       if (completed) return;
@@ -27,13 +28,16 @@ export function rpc(directory: string, command: Command, timeoutMs = 120000): Pr
     socket.setEncoding('utf8');
     socket.setTimeout(timeoutMs, () => finish(new RpcError('TIMEOUT', 'Daemon response timed out; query the idempotency key before considering another send')));
     socket.once('connect', () => socket.write(line));
-    socket.on('data', chunk => {
-      buffer += chunk;
-      if (Buffer.byteLength(buffer) > 8 * 1024 * 1024) return finish(new RpcError('PROTOCOL', 'Response exceeds 8 MiB; request fewer results'));
-      const end = buffer.indexOf('\n');
-      if (end < 0) return;
+    socket.on('data', (chunk: string) => {
+      if (completed) return;
+      // Inspect each decoded fragment once; flatten the response only when its line is complete.
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 8 * 1024 * 1024) return finish(new RpcError('PROTOCOL', 'Response exceeds 8 MiB; request fewer results'));
+      const end = chunk.indexOf('\n');
+      if (end < 0) { chunks.push(chunk); return; }
+      chunks.push(chunk.slice(0, end));
       try {
-        const response = object(JSON.parse(buffer.slice(0, end)));
+        const response = object(JSON.parse(chunks.join('')));
         if (response.id !== id || typeof response.ok !== 'boolean') throw new Error('Unexpected daemon response');
         finish(undefined, response);
       } catch { finish(new RpcError('PROTOCOL', 'Invalid daemon response')); }
