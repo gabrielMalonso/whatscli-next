@@ -166,4 +166,6 @@ pnpm check
 
 Automated tests use fictional fixtures, offline daemons, local Unix sockets, and injected I/O failures; they never connect to real WhatsApp. See [the validation report](docs/validation.md) for real-account evidence and [the agent quick reference](docs/agents.md) for a compact workflow.
 
+The [development roadmap](docs/roadmap.md) records the next capabilities and validation checkpoints. Contributions follow the independent-review workflow in [AGENTS.md](AGENTS.md).
+
 This first version covers one account per directory, observed recipients, local history/search, text/documents, media download, archive/read operations and lifecycle. New-recipient discovery, complete-history guarantees, group administration, multiple-account orchestration, plugins and draft workflows are outside its scope.
