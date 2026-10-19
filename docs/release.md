@@ -47,7 +47,7 @@ After the fresh build, keep generated evidence under ignored `.tmp/`. Packing do
 ```sh
 mkdir -p .tmp
 candidate_dir="$(mktemp -d "$PWD/.tmp/candidate.XXXXXX")"
-pnpm --ignore-scripts pack --pack-destination "$candidate_dir"
+pnpm --config.ignore-scripts=true pack --pack-destination "$candidate_dir"
 tar -tzvf "$candidate_dir/whatscli-next-0.1.0.tgz"
 sha256sum "$candidate_dir/whatscli-next-0.1.0.tgz"
 ```
