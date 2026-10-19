@@ -8,18 +8,30 @@ import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { rpc, RpcError } from './rpc.js';
 import { object } from './protocol.js';
+import { formatResponse } from './response.js';
 
 process.umask(0o077);
 
-async function main(): Promise<Record<string, unknown>> {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+function options() {
+  return parseArgs({ allowPositionals: true, options: {
     'data-dir': { type: 'string' }, offline: { type: 'boolean' }, 'allow-jid': { type: 'string' },
     jid: { type: 'string' }, key: { type: 'string' }, text: { type: 'string' }, file: { type: 'string' },
     mime: { type: 'string' }, caption: { type: 'string' }, out: { type: 'string' }, id: { type: 'string' },
     participant: { type: 'string' }, 'from-me': { type: 'string' }, query: { type: 'string' },
     limit: { type: 'string' }, offset: { type: 'string' }, after: { type: 'string' }, phone: { type: 'string' },
-    unread: { type: 'string' }, archived: { type: 'string' },
+    unread: { type: 'string' }, archived: { type: 'string' }, output: { type: 'string' },
   } });
+}
+
+async function main(): Promise<Record<string, unknown>> {
+  const { values, positionals } = options();
+  const mode = values.output ?? 'full';
+  if (mode !== 'full' && mode !== 'compact') throw new Error('--output must be compact or full');
+  const response = await execute(values, positionals);
+  return formatResponse(positionals[0] ?? 'help', response, mode, values.jid);
+}
+
+async function execute(values: ReturnType<typeof options>['values'], positionals: string[]): Promise<Record<string, unknown>> {
   const action = positionals[0] ?? 'help';
   const directory = dataDirectory(values['data-dir']);
   const required = (value: string | undefined, name: string): string => {
@@ -27,7 +39,7 @@ async function main(): Promise<Record<string, unknown>> {
     return value;
   };
   const only = (...allowed: string[]): void => {
-    for (const key of Object.keys(values)) if (key !== 'data-dir' && !allowed.includes(key)) throw new Error(`--${key} is not valid for ${action}`);
+    for (const key of Object.keys(values)) if (key !== 'data-dir' && key !== 'output' && !allowed.includes(key)) throw new Error(`--${key} is not valid for ${action}`);
   };
   if (positionals.length > (action === 'pair' ? 2 : 1)) throw new Error('Unexpected positional arguments; use named options');
   if (action === 'help') return { ok: true, data: {
@@ -42,7 +54,7 @@ async function main(): Promise<Record<string, unknown>> {
       download: '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
       archive: '--jid JID --key KEY', unarchive: '--jid JID --key KEY', read: '--jid JID --key KEY', unread: '--jid JID --key KEY',
       request: '--key KEY', events: '[--after SEQUENCE]', group: '--jid GROUP_JID', reconnect: '', resync: '',
-    }, globalOption: '--data-dir PATH',
+    }, globalOption: '--data-dir PATH', outputOption: '--output compact|full (default: full)',
   } };
   if (action === 'start') {
     only('offline', 'allow-jid');

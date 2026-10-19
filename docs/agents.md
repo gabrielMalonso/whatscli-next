@@ -1,13 +1,13 @@
 # Agent quick reference
 
-Run `node dist/src/cli.js ...` from the project directory. Each invocation writes one JSON response to stdout. Use the same `--data-dir PATH` on every command when selecting a session. All identifiers below are fictional.
+Run `node dist/src/cli.js --output compact ...` from the project directory. Each invocation writes one JSON response to stdout. Use the same `--data-dir PATH` on every command when selecting a session. All identifiers below are fictional. The default remains full for compatibility; these examples select compact explicitly. See the [compact JSON contract and benchmark](output.md) for documented defaults and full inspection.
 
 ## Session
 
 ```sh
-node dist/src/cli.js start
-node dist/src/cli.js status
-node dist/src/cli.js pair qr
+node dist/src/cli.js --output compact start
+node dist/src/cli.js --output compact status
+node dist/src/cli.js --output compact pair qr
 ```
 
 Ask the owner to scan the returned private PNG. Poll `status` until `connection` is `open`, and verify the account JID with the owner. Pairing images/codes are sensitive. Restarting with the same directory preserves the session; `stop` does not log out. For an existing linked session, no new pairing is normally needed.
@@ -15,15 +15,15 @@ Ask the owner to scan the returned private PNG. Poll `status` until `connection`
 ## Identify and inspect
 
 ```sh
-node dist/src/cli.js chats --limit 50 --offset 0
-node dist/src/cli.js chats --unread true --archived false --limit 50 --offset 0
-node dist/src/cli.js chats --unread unknown --limit 50 --offset 0
-node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
-node dist/src/cli.js chat --jid '12025550101@s.whatsapp.net'
-node dist/src/cli.js messages --jid '12025550101@s.whatsapp.net' --limit 20
-node dist/src/cli.js search --query 'example' --jid '12025550101@s.whatsapp.net'
-node dist/src/cli.js resolve --phone '+12025550101'
-node dist/src/cli.js contact --jid '123450001@lid'
+node dist/src/cli.js --output compact chats --limit 50 --offset 0
+node dist/src/cli.js --output compact chats --unread true --archived false --limit 50 --offset 0
+node dist/src/cli.js --output compact chats --unread unknown --limit 50 --offset 0
+node dist/src/cli.js --output compact chats --archived unknown --limit 50 --offset 0
+node dist/src/cli.js --output compact chat --jid '12025550101@s.whatsapp.net'
+node dist/src/cli.js --output compact messages --jid '12025550101@s.whatsapp.net' --limit 20
+node dist/src/cli.js --output compact search --query 'example' --jid '12025550101@s.whatsapp.net'
+node dist/src/cli.js --output compact resolve --phone '+12025550101'
+node dist/src/cli.js --output compact contact --jid '123450001@lid'
 ```
 
 Use an exact observed JID or the exact PN JID from a successful resolution, verified with the owner before real test operations. Never send to a display name or derive a telephone number from a LID. PN (`@s.whatsapp.net`), LID (`@lid`), and group (`@g.us`) identities remain distinct. Use `group --jid EXACT_GROUP_JID` to inspect a group's current metadata.
@@ -40,7 +40,7 @@ Ordering uses greatest observed conversation/message activity in `activity.times
 
 With fixed filters, advance offsets by the requested limit until a short/empty page. Filtering happens before pagination and ties are deterministic in a stable set. Pages read current local state, so changes between calls can repeat or skip entries; deduplicate exact JIDs and restart from 0 for a fresh pass. There is no snapshot/remote scan. An empty local list does not prove an empty remote queue: history is partial and unknown states may hide pending work.
 
-Messages include `quote`, `contacts` and `deletion`. Quotes contain one safe embedded snapshot and the available exact reference; absent bodies/identifiers remain unknown/null, with no guessed history lookup. Card `cards` contain display/vCard names, shared phone strings and per-card available/incomplete/missing/malformed states. These phones are shared content, never verified recipient identities or send authorization.
+Compact `messages` returns `data: {jid, messages: [...]}`; each row inherits that exact JID. Search remains an array with an exact JID on each row. Null quote/card/media/stub components are omitted; present quotes/cards and all unknown/deletion evidence remain intact. Messages include `deletion` and any available `quote`/`contacts`. Quotes contain one safe embedded snapshot and the available exact reference; absent bodies/identifiers remain unknown/null, with no guessed history lookup. Card `cards` contain display/vCard names, shared phone strings and per-card available/incomplete/missing/malformed states. These phones are shared content, never verified recipient identities or send authorization.
 
 `deletion.status: deleted` hides current text/type/quote/cards/media and excludes the body from search/download. `status: unknown, source: null` means no deletion observation. `unknown` with `source: chat-delete-boundary` withholds an old/undated arrival after a chat-wide deletion whose exact range is unavailable. Exact markers survive duplicates and restart. Incomplete group deletion keys emit `message-deletion-unknown` without choosing an author. Inspect these evidence gaps; do not equate local content with current remote availability. Search covers current top-level text/captions, excluding quoted text, cards and private audit bodies. See [the public contract](../README.md#agent-commands) for details and observable limits.
 
@@ -49,17 +49,17 @@ Messages include `quote`, `contacts` and `deletion`. Quotes contain one safe emb
 Choose a stable, unique key for the intended action before invoking a send:
 
 ```sh
-node dist/src/cli.js send \
+node dist/src/cli.js --output compact send \
   --jid '12025550101@s.whatsapp.net' \
   --key 'example-message-001' \
   --text 'A fictional example message.'
 
-node dist/src/cli.js request --key 'example-message-001'
+node dist/src/cli.js --output compact request --key 'example-message-001'
 ```
 
 Reusing the same key and arguments returns its stored result without another resolution/send, even offline or after identity evidence changes. Conflicting arguments (including PN/LID substitution) fail. A new key authorizes another operation, so do not create one merely because a command failed or timed out. Query the original key first. `data: null` from `request` means no intent has yet been recorded; a transport timeout does not cancel an in-flight command.
 
-Interpret a request record using separate evidence fields:
+Use `request --output full --key KEY` to inspect the complete public intent without repeating an operation. Full is also useful for chat metadata observation times and the original history array shape. Neither mode truncates text. Interpret a request record using separate evidence fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -75,18 +75,18 @@ Missing receipt evidence remains `unknown`. Group participant receipts are separ
 ## Files and chat state
 
 ```sh
-node dist/src/cli.js send-file \
+node dist/src/cli.js --output compact send-file \
   --jid '12025550101@s.whatsapp.net' --key 'example-file-001' \
   --file ./example.txt --mime text/plain --caption 'Fictional attachment'
 
-node dist/src/cli.js download \
+node dist/src/cli.js --output compact download \
   --jid '12025550101@s.whatsapp.net' --id 'EXAMPLE_MESSAGE_ID' \
   --out ./example-download.txt
 
-node dist/src/cli.js archive --jid '12025550101@s.whatsapp.net' --key 'example-archive-001'
-node dist/src/cli.js unarchive --jid '12025550101@s.whatsapp.net' --key 'example-unarchive-001'
-node dist/src/cli.js read --jid '12025550101@s.whatsapp.net' --key 'example-read-001'
-node dist/src/cli.js unread --jid '12025550101@s.whatsapp.net' --key 'example-unread-001'
+node dist/src/cli.js --output compact archive --jid '12025550101@s.whatsapp.net' --key 'example-archive-001'
+node dist/src/cli.js --output compact unarchive --jid '12025550101@s.whatsapp.net' --key 'example-unarchive-001'
+node dist/src/cli.js --output compact read --jid '12025550101@s.whatsapp.net' --key 'example-read-001'
+node dist/src/cli.js --output compact unread --jid '12025550101@s.whatsapp.net' --key 'example-unread-001'
 ```
 
 Files are documents, limited to 64 MiB. A file key preserves its original manifest even if that path later changes. Downloads never overwrite existing files; failures preserve a private partial file. Use `--from-me true|false` and `--participant EXACT_JID` if a media ID is ambiguous.

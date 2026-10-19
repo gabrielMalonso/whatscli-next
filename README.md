@@ -170,6 +170,8 @@ Events are paginated by sequence (100 per request). `reconnect` explicitly recon
 
 ## JSON and evidence
 
+Use `--output compact` to reduce agent input, or `--output full` (the default) for the original safe public projection. Both are minified JSON. Compact uses command-specific omissions and exact-context inheritance; it never truncates text or changes pagination, evidence, errors or exit codes. See the [compact contract and reproducible token/byte benchmark](docs/output.md) before consuming its different history shape and documented optional fields. Use `request --output full --key KEY` to inspect an existing intent without repeating an operation.
+
 Every command returns one JSON object on stdout; errors return `ok: false` and a nonzero exit code. SDK diagnostics go to the daemon's private `daemon.log` through stderr. Responses include connection state and `source: local`, `coverage: partial`, and `appState: unknown`.
 
 - `ok` means the command was processed. It is not a delivery verdict.
