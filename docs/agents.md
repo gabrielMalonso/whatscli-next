@@ -2,6 +2,8 @@
 
 Run `node dist/src/cli.js --output compact ...` from the project directory. Each invocation writes one JSON response to stdout. Use the same `--data-dir PATH` on every command when selecting a session. All identifiers below are fictional. The default remains full for compatibility; these examples select compact explicitly. See the [compact JSON contract and benchmark](output.md) for documented defaults and full inspection.
 
+Use the [fixed-version installation/upgrade procedure](release.md) before deployment and the [supervised pilot runbook](pilot.md) only after the coordinator approves the account and exact targets. Starting an existing daemon does not upgrade its code.
+
 ## Session
 
 ```sh
@@ -83,7 +85,7 @@ node dist/src/cli.js --output full request --key 'example-card-001'
 
 The recipient JID is separate from the shared name/phone. Names preserve Unicode and spaces (nonblank, up to 256 UTF-8 bytes); controls, line separators and malformed Unicode are rejected. Phones require explicit `+` and 8–15 international digits, starting nonzero. vCard escaping/folding is automatic; raw cards and batches are unsupported. SQLite persists the exact name/phone/vCard before sending. Same-key content/kind changes fail; retrying the original command returns the recorded intent, including uncertainty, without lookup/resend. Full and compact preserve it identically. Deleted current bodies stay hidden while original intent remains queryable.
 
-Shared content confers no identity verification, WhatsApp membership, phone ownership or send/share permission. Approved contacts and sharing policy belong to the downstream consumer. Only the recipient's exact observed conversation or separately persisted exact-PN verification authorizes sending; aliases never inherit authority. Offline tests cover SDK generation and injected behavior; real phone rendering awaits checkpoint 06.
+Shared content confers no identity verification, WhatsApp membership, phone ownership or send/share permission. Approved contacts and sharing policy belong to the downstream consumer. Only the recipient's exact observed conversation or separately persisted exact-PN verification authorizes sending; aliases never inherit authority. Offline tests cover SDK generation and injected behavior. [Checkpoint 06](validation.md#checkpoint-06--essential-flow-accepted) also records one phone-confirmed card with a fictional number in the approved group; real first contact and arbitrary card rendering remain unverified.
 
 ## Files and chat state
 

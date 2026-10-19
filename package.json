@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "bin": { "whatscli": "dist/src/cli.js" },
-  "files": ["dist/src", "README.md", "LICENSE", "AGENTS.md", "docs"],
+  "files": ["dist/src/*.js", "dist/src/*.js.map", "README.md", "LICENSE", "AGENTS.md", "docs/*.md"],
   "engines": {
     "node": ">=24.18.0 <25"
   },
