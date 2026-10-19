@@ -63,3 +63,5 @@ Recorded results (regenerate after changing fixtures/projections):
 The recovery/continuity envelope adds 154 UTF-8 bytes and 41 tokens to each of these offline fixtures in both formats, compared with the previous recorded baseline; it introduces no new output reduction. An actual interruption/retry carries additional evidence and can be larger.
 
 The unchanged request is intentional: it retains evidence and immutable intent needed to avoid duplicate sends.
+
+New direct PN send requests also retain their entire `route` in both modes: status, actual destination, SDK query source, local observation time, limit and any unproven reason. This adds per-request evidence and payload; the legacy fictional benchmark above has no route and does not measure that addition. An absent route never inherits a later contact mapping. See the [send contract](../README.md#agent-commands) for current server-association versus exact-original-destination limits.
