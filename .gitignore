@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.private/
+.tmp/
+*.sqlite*
+*.db*
+*.log
+.env*
+auth_info*/
