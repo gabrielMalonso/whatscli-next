@@ -2,6 +2,8 @@
 
 Date: 2026-10-19. Decision: **the essential flow passed; proceed with the small CLI and explicit observability limits**. QR pairing, saved-session restart, bidirectional text exchange, idempotency, archive/unarchive, phone-confirmed read/unread, phone-originated changes, automatic WebSocket recovery, and post-recovery sending have live evidence. Read counters can remain stale after an own mutation and must not be treated as current until fresh evidence arrives.
 
+Checkpoint 06's essential media and direct-conversation flow was subsequently accepted by the coordinator after the two scoped repairs and authorized live retests described [below](#checkpoint-06--essential-flow-accepted). The retained limits remain part of that acceptance.
+
 ## Version and inspection
 
 The npm registry reported `baileys@7.0.0-rc14` as `latest` and `6.7.24` as `legacy`. The selected version is a release candidate, pinned exactly rather than fetched from a moving Git branch.
@@ -54,7 +56,7 @@ Probe validation: 23 tests passed. Final daemon/CLI suite: **32 tests passed**, 
 - Offline CLI lifecycle, Unix-socket request/response correlation, pagination, literal Unicode search, configuration preservation, stale-socket recovery, and preservation of unfamiliar files are exercised through real child processes.
 - File manifests describe an immutable byte snapshot before invocation. Download tests check exact bytes, SHA-256, private permissions, output collisions, failures and size limits. Ambiguous message identities are rejected. Concurrent duplicate sends share one durable attempt.
 
-File sending and media downloading were tested with injected SDK/I/O boundaries, not with real WhatsApp media. macOS execution and prolonged physical network outages remain unverified.
+That initial offline suite tested file sending and media downloading with injected SDK/I/O boundaries. Subsequent live media evidence is recorded under checkpoint 06 below. macOS execution and prolonged physical network outages remain unverified.
 
 ## Prolonged disconnections — offline evidence
 
@@ -68,11 +70,11 @@ Injected time simulates 160 consecutive connection failures and more than one ho
 
 The first independent review found two valid ownership races: reconnect could overlap a socket whose internal rc14 shutdown was still awaiting cleanup, and a retained failed-cleanup handle could regain event authority. The second confirmed those original paths were fixed and found two further valid paths: an already-closing transport could outlive the SDK close event, and the SDK internal credential listener could mutate the shared auth object before runtime guards. These are corrected. Regressions execute the installed `end`, `WebSocketClient.close` and credential-listener bodies with fictional dependencies. Separate gates prove transport and socket-end completion, including manual/automatic recovery and stop during drop-connection. Late open/credential/message/key callbacks and nested credential mutations cannot clear intervention or alter persisted/replacement credentials. Existing SDK fixtures emit close before destroying their event buffers.
 
-All new sockets, SDK events, time and failures are injected. No real `makeWASocket`, WhatsApp calls, session, private database, credential, message, log, pairing image, account operation or host network change was used. The previous live recovery evidence remains only a brief WebSocket closure. Prolonged physical outages, real catch-up/decryption, phone effects and real media/1:1 validation remain unverified for checkpoint 06. Baileys, dependencies and CI are unchanged.
+All new sockets, SDK events, time and failures in task 04 were injected. No real `makeWASocket`, WhatsApp calls, session, private database, credential, message, log, pairing image, account operation or host network change was used for that implementation. Its live evidence was limited to a brief WebSocket closure; subsequent phone/media/1:1 retests are recorded below. Prolonged physical outages and complete catch-up/decryption remain unverified. Baileys, dependencies and CI are unchanged.
 
 ## Live checkpoints
 
-### Checkpoint 06 — offline fixes awaiting live retest
+### Checkpoint 06 — media/shutdown fixes and subsequent retests
 
 An anonymized coordinator report reproduced document download failure after a successful SDK send return and a stored exact own-group message. The CLI's message `id` was overwritten by the RPC correlation UUID; the parser then used that UUID as the media target. Download commands now carry an explicit `messageId` while `id` remains strict request/response correlation. CLI `--id` and public projections retain their existing meanings; private-socket/JSONL callers must supply `messageId`, with no legacy correlation fallback, and the daemon must be rebuilt/restarted with the CLI.
 
@@ -94,7 +96,25 @@ The second scoped repair records a new per-request route from a direct `executeU
 
 Ten new offline regressions pass (**123 total**, preserving all 113 prior tests), along with `pnpm check` and `git diff --check`. They use injected SDK queries/sends and the installed rc14 USync parser, message generation and receipt handler, covering text/file/card first sends, exact/malformed/ambiguous/failed responses, bidirectional conflicts/cache exclusion, original allow-jid checks, receipts before/after SDK return, status ordering, direction/device/domain/ID mismatches, key concurrency across command types/targets, file manifests, failure/crash/restart, legacy non-backfill, group separation and real local CLI full/compact request evidence. No real account, WhatsApp socket, session, media, private log or phone image was accessed by this worker.
 
-Roadmap 06 remains open pending the coordinator's live retest and acceptance of the new direct receipt route. The old delivered intent is not resent or backfilled; prolonged physical outages and complete-history/catch-up guarantees remain unverified. All account-specific evidence stays private with the coordinator.
+### Checkpoint 06 — essential flow accepted
+
+The coordinator accepted the essential checkpoint after authorized live retesting of merged main `a235f4eaae910952c8db0c676de88e01233e743d` (PR #8). The existing linked session connected without new pairing. A new direct text had a distinct purpose and a new key; it was not a resend of the legacy intent. The accounts, exact destination and permission for this 1:1 exchange had been explicitly confirmed beforehand. All results here are the coordinator's anonymized reports; this documentation worker did not access the underlying private evidence or operate an account.
+
+For the new request, direct USync returned the exact PN/LID pair. The persisted route was `proven`, with source `baileys.executeUSyncQuery/lid`, local `observedAt` and limit `server-association-at-query-time`. The immutable intent, message ID and route existed before send; `operation.jid` remained the original PN and the SDK sent explicitly to the proven LID. Before the target conversation was opened on the recipient phone, the request already reported `acceptance: server-ack`, `delivery: delivered`, `read: unknown`. Matching own-direction SDK events under the LID and its device-qualified form carried delivery acknowledgments, followed by a server acknowledgment; the older status did not regress the request.
+
+Independently, the recipient phone's conversation list showed exactly one new unread message. Opening that conversation through authorized phone inspection showed the new text once. A subsequent SDK `READ` event with the matching message ID, direction and route advanced the request to `read: read`, retaining server acceptance and delivery. The phone observation and these SDK-derived receipt fields are separate evidence, and the earlier group results do not establish these 1:1 receipts.
+
+Full and compact request data were identical. During a normal restart the previous PID exited before the new runtime started with the same account/session and no QR. The request data JSON, including route, message ID and receipt states, was byte-for-byte equivalent after restart. Repeating the exact key/arguments returned that original record; the event window from before send through the later cutoff contained one operation attempt. There was one message row under its native LID identity and none for that ID under the original PN. The phone still showed one copy after repetition. The legacy PN intent without a route retained unknown receipt fields, with no backfill or resend; the earlier received 1:1 reply remains independent evidence. The group remained restored to read/unarchived with no pending mutation.
+
+The earlier media/document/card, chat-state, restart and brief WebSocket results above remain part of the acceptance. Its limits are explicit:
+
+- Responses remain `source: local`, `coverage: partial`, `appState: unknown` and `receiveContinuity.status: unproven`. The historical decryption problem remains visible and has not been demonstrated resolved. Neither open nor pending-notification completion proves complete history, receiving/decryption or catch-up.
+- The tested disconnection was a brief WebSocket closure, not prolonged physical unavailability. Such an outage remains unverified.
+- Test audio was synthetic Opus media from the linked account (`fromMe: true`), not human speech or another participant's audio.
+- The live 1:1 conversation already existed. Real first contact without an observed chat remains untested; only fictional offline fixtures cover it. USync proves the server's association at query time, not a person's identity or permanent phone ownership. Unknown legacy receipts remain unknown.
+- No downstream-account pilot was performed; macOS execution remains unverified. Completing this checkpoint does not implement the downstream adapter or begin roadmap 07.
+
+The coordinator repeated all 123 offline tests, type checks and diff checks on the final PR #8 HEAD before merge, and the main build passed. For this documentation-only closure, validation consists of `git diff --check` and checking the text against the implementation and supplied reports; no code suite was rerun or claimed as new evidence. Account IDs, phone numbers, message/request IDs, real paths, logs, screenshots and exact private evidence remain exclusively with the coordinator.
 
 ### Message context and deletion consistency — offline evidence
 
