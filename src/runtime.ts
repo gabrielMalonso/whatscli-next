@@ -5,7 +5,8 @@ import type { WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, reconnectDelay } from './health.js';
-import { recipientJid } from './identity.js';
+import { internationalPhone, recipientJid } from './identity.js';
+import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { messageOutput } from './output.js';
@@ -23,7 +24,7 @@ export type RuntimeOptions = {
 };
 
 /** The one Baileys connection and the one database writer shared by both transports. */
-export function createRuntime(options: RuntimeOptions) {
+export function createRuntime(options: RuntimeOptions, socketFactory = makeWASocket) {
   const allowedJid = options.allowedJid === undefined ? undefined : recipientJid(options.allowedJid);
   const store = new Store(options.dataDir);
   const auth = sqliteAuth(store);
@@ -59,9 +60,12 @@ export function createRuntime(options: RuntimeOptions) {
     if (!socket || connection !== 'open') throw new Error('WhatsApp connection is not open');
     return socket;
   }
-  function validateTarget(jid: string): void {
+  function validateTarget(jid: string, sending = false): void {
     if ((options.requireAllowedJid || allowedJid !== undefined) && jid !== allowedJid) throw new Error('Mutation requires the exact --test-jid / allowed recipient JID');
-    if (!store.chat(jid)) throw new Error('Recipient JID has not been observed by this client');
+    if (!store.chat(jid)) {
+      if (!sending || store.recipientCheck(jid)?.status !== 'confirmed') throw new Error('Recipient requires an observed conversation or, for sending, persisted WhatsApp verification via resolve --phone');
+      if (store.contactView(jid).mapping.status === 'conflict') throw new Error('Recipient has conflicting PN/LID associations');
+    }
     connected();
   }
   function open(): void {
@@ -69,7 +73,7 @@ export function createRuntime(options: RuntimeOptions) {
     qr = undefined;
     receivedPendingNotifications = false;
     connection = 'connecting';
-    const current = makeWASocket({
+    const current = socketFactory({
       auth: auth.state, logger,
       markOnlineOnConnect: false,
       emitOwnEvents: false,
@@ -106,6 +110,8 @@ export function createRuntime(options: RuntimeOptions) {
     }));
     current.ev.on('messaging-history.set', history => persist(() => store.transaction(() => {
       for (const chat of history.chats) store.observeChat(chat);
+      for (const contact of history.contacts) store.observeContact(contact, 'messaging-history.set');
+      for (const mapping of history.lidPnMappings ?? []) store.observeMapping(mapping.pn, mapping.lid, 'messaging-history.set');
       for (const message of history.messages) store.observeMessage(message);
       store.event('history-chunk', {
         chats: history.chats.length, messages: history.messages.length,
@@ -141,7 +147,16 @@ export function createRuntime(options: RuntimeOptions) {
       }
       store.event('messages.update', updates.map(({ key, update }) => ({ key, status: update.status ?? null })));
     })));
-    current.ev.on('lid-mapping.update', mapping => persist(() => store.event('lid-mapping', mapping)));
+    current.ev.on('contacts.upsert', contacts => persist(() => store.transaction(() => {
+      for (const contact of contacts) store.observeContact(contact, 'contacts.upsert');
+    })));
+    current.ev.on('contacts.update', contacts => persist(() => store.transaction(() => {
+      for (const contact of contacts) store.observeContact(contact, 'contacts.update');
+    })));
+    current.ev.on('lid-mapping.update', mapping => persist(() => store.transaction(() => {
+      store.observeMapping(mapping.pn, mapping.lid, 'lid-mapping.update');
+      store.event('lid-mapping', { pn: mapping.pn, lid: mapping.lid });
+    })));
     current.ev.on('message-receipt.update', receipts => persist(() => store.event('participant-receipts', receipts)));
     current.ev.on('messages.delete', event => persist(() => { store.event('messages.delete', event); issue('stored-messages-may-have-been-deleted'); }));
   }
@@ -155,6 +170,32 @@ export function createRuntime(options: RuntimeOptions) {
       };
       case 'chats': return store.chats(command.limit, command.offset);
       case 'chat': return store.chatView(command.jid);
+      case 'contact': return store.contactView(command.jid);
+      case 'resolve': {
+        const phone = internationalPhone(command.phone);
+        const current = connected();
+        const jid = `${phone.slice(1)}@s.whatsapp.net`;
+        let status: RecipientCheck['status'] = 'unknown';
+        let reason = 'missing-or-partial-response';
+        try {
+          const result = await current.onWhatsApp(phone);
+          const entry = result?.length === 1 ? result[0] : undefined;
+          // Exact PN only. Missing, alternate, ambiguous or malformed responses confer no authority.
+          if (entry?.jid === jid && typeof entry.exists === 'boolean') {
+            status = entry.exists ? 'confirmed' : 'not-found';
+            reason = entry.exists ? 'whatsapp-confirmed' : 'whatsapp-not-found';
+          }
+        } catch { reason = 'sdk-query-failed'; }
+        const check: RecipientCheck = { status, source: 'baileys.onWhatsApp', observedAt: Date.now() };
+        store.set('recipient-check', jid, check);
+        const contact = store.contactView(jid);
+        const conflict = contact.mapping.status === 'conflict';
+        return {
+          phone, status: conflict ? 'unknown' : status, reason: conflict ? 'conflicting-pn-lid-associations' : reason,
+          jid: status === 'confirmed' && !conflict ? jid : null,
+          source: 'whatsapp', observedAt: check.observedAt, contact,
+        };
+      }
       case 'messages': return store.messages(command.jid, command.limit, command.offset).map(messageOutput);
       case 'search': return store.search(command.query, command.limit, command.offset, command.jid).map(messageOutput);
       case 'group': {
@@ -194,7 +235,7 @@ export function createRuntime(options: RuntimeOptions) {
         open();
         return { reconnecting: true };
       case 'send': return perform(store, command.key, { kind: 'send', jid: command.jid, text: command.text },
-        () => validateTarget(command.jid), async messageId => {
+        () => validateTarget(command.jid, true), async messageId => {
           if (!messageId) throw new Error('Missing persisted message ID');
           return connected().sendMessage(command.jid, { text: command.text, linkPreview: null }, { messageId });
         });
@@ -205,10 +246,10 @@ export function createRuntime(options: RuntimeOptions) {
           if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new Error('Idempotency key already used with different arguments');
           return previous;
         }
-        validateTarget(command.jid);
+        validateTarget(command.jid, true);
         const { buffer, bytes, sha256 } = await prepareFile(command.path);
         return perform(store, command.key, { kind: 'send-file', jid: command.jid, path: command.path, mime: command.mime, caption: command.caption, bytes, sha256 },
-          () => validateTarget(command.jid), async messageId => {
+          () => validateTarget(command.jid, true), async messageId => {
             if (!messageId) throw new Error('Missing persisted message ID');
             return connected().sendMessage(command.jid, { document: buffer, mimetype: command.mime, fileName: basename(command.path), caption: command.caption }, { messageId });
           });

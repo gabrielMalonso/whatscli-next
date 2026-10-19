@@ -27,7 +27,10 @@ export function sqliteAuth(store: Store): { state: AuthenticationState; save: (u
     set(data) {
       store.transaction(() => {
         for (const [category, entries] of Object.entries(data)) {
-          for (const [id, value] of Object.entries(entries)) store.set(category, id, value);
+          for (const [id, value] of Object.entries(entries)) {
+            store.set(category, id, value);
+            if (category === 'lid-mapping') store.observeSdkMapping(id, value);
+          }
         }
       });
     },
