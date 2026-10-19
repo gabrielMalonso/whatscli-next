@@ -341,7 +341,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       }
       case 'download': {
         if (!options.connect) throw new Error('Media download requires network access; restart without --offline');
-        const message = store.locateMessage(command);
+        const message = store.locateMessage({ ...command, id: command.messageId });
         const media = assertMediaContent(normalizeMessageContent(message.message));
         if (toNumber(media.fileLength ?? 0) > MAX_FILE_BYTES) throw new Error('Media exceeds the 64 MiB limit');
         return saveMedia(command.path, () => downloadMediaMessage(message, 'stream', {}, { logger, reuploadRequest: item => connected().updateMediaMessage(item) }));

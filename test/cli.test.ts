@@ -164,6 +164,7 @@ test('offline CLI chat filters preserve state, exact identity and redaction acro
   assert.deepEqual((await cli(directory, 'chats', '--unread', 'true', '--offset', '1')).data, []);
   for (const args of [['--unread', 'yes'], ['--archived', 'null'], ['--unread'], ['--jid', jid]]) assert.equal((await cli(directory, 'chats', ...args)).ok, false);
   assert.equal((await cli(directory, 'unread', '--limit', '1')).ok, false);
+  // @ts-expect-error Deliberately malformed input exercises validation at the wire boundary.
   assert.equal((await rpc(directory, { command: 'chats', unread: 'true' })).ok, false);
   assert.deepEqual((await cli(directory, 'chat', '--jid', jid)).data, before.data);
   assert.deepEqual((await cli(directory, 'events')).data, events.data);

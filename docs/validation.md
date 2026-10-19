@@ -72,6 +72,18 @@ All new sockets, SDK events, time and failures are injected. No real `makeWASock
 
 ## Live checkpoints
 
+### Checkpoint 06 — offline fixes awaiting live retest
+
+An anonymized coordinator report reproduced document download failure after a successful SDK send return and a stored exact own-group message. The CLI's message `id` was overwritten by the RPC correlation UUID; the parser then used that UUID as the media target. Download commands now carry an explicit `messageId` while `id` remains strict request/response correlation. CLI `--id` and public projections retain their existing meanings; private-socket/JSONL callers must supply `messageId`, with no legacy correlation fallback, and the daemon must be rebuilt/restarted with the CLI.
+
+A separate offline regression reproduced premature shutdown visibility: with injected SDK cleanup blocked, the old control endpoint disappeared while the writer lock was still held. The daemon now serves status with `recovery.state: stopping` until SDK cleanup and database closure finish. The CLI's existing bounded wait reports an error if cleanup takes too long, rather than claiming success or killing a process. Upgrading an old daemon still requires confirming its normal PID exit before starting its replacement.
+
+Four new offline tests pass (**113 total**, preserving the 109-test baseline), with `pnpm check` and `git diff --check` passing. They exercise the real CLI/RPC/parser with fictional colliding IDs/JIDs/directions/participants, full/compact output, missing media IDs, rejected response correlations, JSONL errors, and a daemon whose fictional SDK cleanup is released through an injected gate. The media transport fixture only selects stored fictional content; it performs no download or WhatsApp call. The shutdown regression checks that the writer remains locked during cleanup and can be reopened after successful stop, without starting a second runtime.
+
+Separately, the coordinator reported an authorized phone inspection in the approved group: text, TXT document and contact card each appeared once; the document opened with the expected accents/emoji and the card displayed the exact fictional telephone supplied. No contact was added and inspection did not resend a message. This is independent phone-effect evidence, not SDK acceptance/delivery/read evidence or a 1:1 receipt test. Screenshots and account-specific details remain private with the coordinator and were not accessed by this worker.
+
+This is a scoped repair, not checkpoint completion. Received media and real CLI downloads, updated restart/idempotency checks, and approved 1:1 delivery/read tests remain pending with the coordinator; prolonged physical outages remain unverified. Account/session/conversation evidence stays exclusively with the coordinator. Roadmap 06 remains open.
+
 ### Message context and deletion consistency — offline evidence
 
 Inspected the installed, pinned `baileys@7.0.0-rc14`, without an SDK fork: `WAProto/index.d.ts` (`IContextInfo`, `IContactMessage`, `IContactsArrayMessage`, `IProtocolMessage`), `lib/Types/Events.d.ts`, `lib/Utils/messages.js` (five-level normalization of ephemeral/view-once/document-caption/edited and related wrappers), `process-message.js`, `chat-utils.js` and `event-buffer.js`.

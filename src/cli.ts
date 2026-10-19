@@ -8,6 +8,7 @@ import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { rpc, RpcError } from './rpc.js';
 import { object } from './protocol.js';
+import type { Command } from './protocol.js';
 import { formatResponse } from './response.js';
 
 process.umask(0o077);
@@ -100,7 +101,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
     }
     throw new Error(`Daemon startup timed out; inspect ${log}`);
   }
-  let command: Record<string, unknown>;
+  let command: Command;
   const jid = (): string => required(values.jid, 'jid');
   const key = (): string => required(values.key, 'key');
   switch (action) {
@@ -132,7 +133,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
     case 'download':
       only('jid', 'id', 'out', 'from-me', 'participant');
       if (values['from-me'] !== undefined && !['true', 'false'].includes(values['from-me'])) throw new Error('--from-me must be true or false');
-      command = { command: action, jid: jid(), id: required(values.id, 'id'), path: resolve(required(values.out, 'out')),
+      command = { command: action, jid: jid(), messageId: required(values.id, 'id'), path: resolve(required(values.out, 'out')),
         ...(values['from-me'] === undefined ? {} : { fromMe: values['from-me'] === 'true' }),
         ...(values.participant ? { participant: values.participant } : {}) };
       break;

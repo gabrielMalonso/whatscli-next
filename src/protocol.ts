@@ -19,7 +19,7 @@ export type Command =
   | { command: 'send'; key: string; jid: string; text: string }
   | { command: 'send-file'; key: string; jid: string; path: string; mime: string; caption: string }
   | { command: 'send-contact'; key: string; jid: string; name: string; phone: string }
-  | { command: 'download'; jid: string; id: string; path: string; fromMe?: boolean; participant?: string }
+  | { command: 'download'; jid: string; messageId: string; path: string; fromMe?: boolean; participant?: string }
   | { command: 'archive' | 'mark-read'; key: string; jid: string; value: boolean };
 
 export function object(value: unknown): Record<string, unknown> {
@@ -91,7 +91,7 @@ export function parseCommand(value: Record<string, unknown>): Command {
     case 'download': {
       if (value.fromMe !== undefined && typeof value.fromMe !== 'boolean') throw new Error('fromMe must be a boolean');
       return {
-        command: value.command, jid: recipientJid(string(value.jid, 'jid')), id: string(value.id, 'id'), path: string(value.path, 'path'),
+        command: value.command, jid: recipientJid(string(value.jid, 'jid')), messageId: string(value.messageId, 'messageId'), path: string(value.path, 'path'),
         ...(value.fromMe === undefined ? {} : { fromMe: value.fromMe }),
         ...(value.participant === undefined ? {} : { participant: recipientJid(string(value.participant, 'participant')) }),
       };
