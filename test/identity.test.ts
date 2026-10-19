@@ -9,7 +9,7 @@ import { sqliteAuth } from '../src/auth.js';
 import { internationalPhone } from '../src/identity.js';
 import { parseCommand } from '../src/protocol.js';
 import { createRuntime } from '../src/runtime.js';
-import { Store } from '../src/store.js';
+import { encode, Store } from '../src/store.js';
 
 process.umask(0o077);
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
@@ -133,6 +133,41 @@ test('legacy mapping events and SDK key-store entries migrate without inventing 
     await auth.state.keys.set({ 'lid-mapping': { '12025550102': '123450002' } });
     assert.equal(reopened.contactView(otherLid).mapping.status, 'conflict');
     assert.ok(reopened.contactView(otherLid).mapping.evidence.some(row => row.observedAt !== null));
+  } finally { reopened.close(); }
+});
+
+test('migration recovers legacy message-key identities offline without rewriting history or requests', () => {
+  const directory = temporary();
+  const store = new Store(directory);
+  store.set('migration', 'contact-identity-v1', null);
+  const group = '120363000000000001@g.us';
+  const keys = [
+    { remoteJid: group, id: 'legacy-group', fromMe: false, participant: lid, participantAlt: pn },
+    { remoteJid: otherPn, remoteJidAlt: otherLid, id: 'legacy-direct', fromMe: true },
+    { remoteJid: '123450003@lid', remoteJidAlt: '12025550103:2@s.whatsapp.net', id: 'legacy-device', fromMe: false },
+  ];
+  for (const key of keys) {
+    store.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(key.remoteJid, key.id, Number(key.fromMe), 'participant' in key ? key.participant : '', 10,
+      encode({ key, messageTimestamp: 10, message: { conversation: 'Fictional legacy message', messageContextInfo: { messageSecret: Buffer.from('SDK_PRIVATE_SECRET') } } }));
+  }
+  store.saveRequest({ key: 'legacy-send', operation: { kind: 'send', jid: otherPn, text: 'Example' }, messageId: 'legacy-direct',
+    attempt: 'uncertain', acceptance: 'unknown', delivery: 'unknown', read: 'unknown', errorObserved: false });
+  const originalMessages = store.db.prepare('SELECT * FROM messages ORDER BY id').all();
+  const originalRequest = store.request('legacy-send');
+  store.close();
+  const reopened = new Store(directory);
+  try {
+    for (const [jid, expectedPn] of [[lid, pn], [otherLid, otherPn]] as const) {
+      const contact = reopened.contactView(jid);
+      assert.equal(contact.mapping.status, 'known');
+      assert.equal(contact.mapping.pn, expectedPn);
+      assert.equal(contact.mapping.evidence[0]?.source, 'message-key');
+      assert.equal(contact.mapping.evidence[0]?.observedAt, null);
+      assert.doesNotMatch(JSON.stringify(contact), /SDK_PRIVATE_SECRET|messageSecret/);
+    }
+    assert.equal(reopened.contactView('123450003@lid').phone, null);
+    assert.deepEqual(reopened.db.prepare('SELECT * FROM messages ORDER BY id').all(), originalMessages);
+    assert.deepEqual(reopened.request('legacy-send'), originalRequest);
   } finally { reopened.close(); }
 });
 

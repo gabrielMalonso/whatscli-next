@@ -100,6 +100,9 @@ export class Store {
         for (const row of this.db.prepare("SELECT id,json FROM values_store WHERE category='lid-mapping'").all()) {
           this.observeSdkMapping(String(row.id), decode<unknown>(String(row.json)), null);
         }
+        for (const row of this.db.prepare("SELECT json_extract(json,'$.key') AS message_key FROM messages").iterate()) {
+          if (typeof row.message_key === 'string') this.observeMessageIdentities(decode<WAMessageKey>(row.message_key), null);
+        }
         this.set('migration', 'contact-identity-v1', true);
       });
     } catch (error) {
@@ -181,6 +184,15 @@ export class Store {
   }
 
   recipientCheck(jid: string): RecipientCheck | undefined { return this.get<RecipientCheck>('recipient-check', jid); }
+
+  private observeMessageIdentities(key: WAMessageKey, observedAt: number | null = Date.now()): void {
+    for (const [first, second] of [[key.remoteJid, key.remoteJidAlt], [key.participant, key.participantAlt]]) {
+      if (first && second) {
+        if (isPn(first)) this.observeMapping(first, second, 'message-key', observedAt);
+        else if (isLid(first)) this.observeMapping(second, first, 'message-key', observedAt);
+      }
+    }
+  }
 
   contactView(jid: string) {
     contactJid(jid);
@@ -272,12 +284,7 @@ export class Store {
     );
     // Seeing a message proves the conversation exists, not its archive/read state.
     if (chatObserved && !this.chat(jid)) this.observeChat({ id: jid });
-    for (const [first, second] of [[jid, message.key.remoteJidAlt], [participant, message.key.participantAlt]]) {
-      if (first && second) {
-        if (isPn(first)) this.observeMapping(first, second, 'message-key');
-        else if (isLid(first)) this.observeMapping(second, first, 'message-key');
-      }
-    }
+    this.observeMessageIdentities(message.key);
     const ciphertext = message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
     const unexplainedMissingContent = !message.message && message.messageStubType == null;
     if (ciphertext || unexplainedMissingContent) {
