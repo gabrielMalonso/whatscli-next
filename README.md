@@ -227,6 +227,8 @@ Every command returns one JSON object on stdout; errors return `ok: false` and a
 
 A transport timeout does not cancel an in-flight WhatsApp attempt. Query its key afterward. The SDK's outgoing retry-content cache is disabled and outgoing content is withheld from its retry callback, so it cannot silently re-relay an uncertain message through that path. This reduces recovery from recipient decryption failures; delivery can remain unknown. Incoming decryption retry requests remain enabled.
 
+If local storage fails while recording a completed/failed SDK call, the command returns an error and the whole outcome update rolls back. Query the original key: its committed intent/message ID and any earlier independent receipts remain authoritative, possibly with `attempt: uncertain`. Repeating that key never invokes the operation again. Fix the storage problem before further mutations; an error does not establish whether WhatsApp received the operation.
+
 ## Storage and execution
 
 ```text
@@ -253,6 +255,8 @@ pnpm check
 ```
 
 Automated tests use fictional fixtures, offline daemons, local Unix sockets, and injected I/O failures; they never connect to real WhatsApp. See [the validation report](docs/validation.md) for real-account evidence and [the agent quick reference](docs/agents.md) for a compact workflow.
+
+The [offline reliability audit](docs/reliability.md) records fault-injection evidence for atomic operation completion and batched chat deletion, separately from the earlier live checkpoints.
 
 The [development roadmap](docs/roadmap.md) records the next capabilities and validation checkpoints. Contributions follow the independent-review workflow in [AGENTS.md](AGENTS.md).
 

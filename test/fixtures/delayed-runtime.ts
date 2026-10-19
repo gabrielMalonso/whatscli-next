@@ -7,7 +7,8 @@ export function createRuntime(options: RuntimeOptions) {
   let release = () => {};
   const cleanup = new Promise<void>(resolve => { release = resolve; });
   process.on('message', message => { if (message === 'release-cleanup') release(); });
-  const runtime = actualRuntime(options, () => {
+  // The daemon starts --offline; exercise cleanup only with this in-memory socket.
+  const runtime = actualRuntime({ ...options, connect: true }, () => {
     const events = new EventEmitter();
     const ws = Object.assign(new EventEmitter(), { isClosed: false });
     queueMicrotask(() => events.emit('connection.update', { connection: 'open' }));

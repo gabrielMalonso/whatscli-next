@@ -66,24 +66,25 @@ export async function perform(
     preparation?.pending.delete(key);
     release();
   }
+  let outcome: { returned: true; message: WAMessage | undefined | void } | { returned: false };
   try {
     const destination = record.route?.jid ?? operation.jid;
     const message = await invoke(record.messageId, destination);
     if (isSendOperation(operation) && (!message || message.key.id !== record.messageId || message.key.remoteJid !== destination || message.key.fromMe !== true)) {
       throw new Error('SDK did not return the expected message');
     }
+    outcome = { returned: true, message };
+  } catch { outcome = { returned: false }; }
+  // Local persistence errors must escape, not become SDK uncertainty. Commit the
+  // body, request outcome and journal together, preserving earlier independent receipts.
+  return store.transaction(() => {
     // An SDK return is local outgoing evidence, not an independently observed conversation.
-    if (message) store.observeMessage(message, false);
+    if (outcome.returned && outcome.message) store.observeMessage(outcome.message, false);
     const latest = store.request(key) ?? record;
-    latest.attempt = 'sdk-returned';
+    if (outcome.returned) latest.attempt = 'sdk-returned';
+    else latest.errorObserved = true;
     store.saveRequest(latest);
-    store.event('operation-sdk-returned', { key });
+    store.event(outcome.returned ? 'operation-sdk-returned' : 'operation-uncertain', { key });
     return latest;
-  } catch {
-    const latest = store.request(key) ?? record;
-    latest.errorObserved = true;
-    store.saveRequest(latest);
-    store.event('operation-uncertain', { key });
-    return latest;
-  }
+  });
 }

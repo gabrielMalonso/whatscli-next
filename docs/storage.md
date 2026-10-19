@@ -17,6 +17,8 @@ FTS5/trigram is available in the measured Node build. The narrow scan is deliber
 
 Body replacement, search-row replacement/removal and tombstones share a synchronous SQLite transaction, joining the surrounding runtime event transaction when present. Updates retain the existing rowid replacement/order behavior. Deletion/revocation/boundary checks remain authoritative for history, quotes, media and SDK getMessage. Audit and immutable send intents cannot restore current content.
 
+Operation completion also commits the returned body/projection, request outcome and journal entry together. A local write failure rolls back that completion and reaches the command caller as an error; it is not caught as an SDK failure. The previously committed intent and independently observed receipts remain intact, with no retry authorization. Batched `chats.delete` observations remove the exact chat snapshots and append their journal entry in one transaction; a failure rolls back the whole event before the existing fail-closed exit. Message history remains stored.
+
 Chat filtering retains its existing AND tri-state/pending semantics and maximum activity provenance; it is included in the benchmark without an additional chat projection or cache.
 
 ## Schema and upgrade
