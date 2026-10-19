@@ -10,7 +10,8 @@ const observedAt = 1700000000000;
 
 export function publicResponse(data: unknown): Record<string, unknown> {
   return { id: '11111111-2222-4333-8444-555555555555', ok: true, data, running: true, pid: 12345,
-    connection: 'offline', source: 'local', coverage: 'partial', appState: 'unknown', receivedPendingNotifications: false, issues: [] };
+    connection: 'offline', recovery: { state: 'offline', reason: null, code: null, attempt: 0, nextRetryAt: null },
+    receiveContinuity: { status: 'unproven', lastInterruption: null }, source: 'local', coverage: 'partial', appState: 'unknown', receivedPendingNotifications: false, issues: [] };
 }
 
 function message(id: string, text: string, jid = pn): WAMessage {

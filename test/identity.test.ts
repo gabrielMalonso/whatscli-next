@@ -30,8 +30,8 @@ function fixture(directory = temporary(), allowedJid?: string) {
   let failSend = false;
   let returnJid = pn;
   const fake = {
-    ev: events,
-    end: async () => {},
+    ev: events, ws: { isClosed: true },
+    end: async () => { events.emit('connection.update', { connection: 'close' }); },
     onWhatsApp: async (...numbers: string[]) => {
       lookups++;
       assert.deepEqual(numbers, [phone]);

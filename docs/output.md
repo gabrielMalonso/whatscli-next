@@ -13,7 +13,7 @@ Formatting runs in the CLI after the original response. It cannot re-execute an 
 
 ## Projections and inheritance
 
-The envelope is unchanged: `ok`, errors/codes, RPC correlation `id`, running/connection state, local source, partial coverage, unknown app state, pending notifications and issues. Errors are unchanged. A successful command can still describe an uncertain result.
+The envelope is unchanged: `ok`, errors/codes, RPC correlation `id`, running/connection state, local source, partial coverage, unknown app state, pending notifications and historical issues. The additive `recovery` and `receiveContinuity` fields are retained verbatim in both modes; see [the recovery contract](../README.md#recovery). Errors are unchanged. A successful command can still describe an uncertain result.
 
 | Command | Compact differences from full |
 | --- | --- |
@@ -54,10 +54,12 @@ Recorded results (regenerate after changing fixtures/projections):
 
 | Scenario | Full bytes | Compact bytes | Byte reduction | Full tokens | Compact tokens | Token reduction |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Chats with states/pending | 1113 | 930 | 16.44% | 327 | 263 | 19.57% |
-| History with quote/card/deletions | 2195 | 1711 | 22.05% | 603 | 458 | 24.05% |
-| Search across exact JIDs | 1153 | 883 | 23.42% | 315 | 237 | 24.76% |
-| Contact conflict | 1018 | 893 | 12.28% | 290 | 256 | 11.72% |
-| Uncertain send request | 497 | 497 | 0% | 131 | 131 | 0% |
+| Chats with states/pending | 1267 | 1084 | 14.44% | 368 | 304 | 17.39% |
+| History with quote/card/deletions | 2349 | 1865 | 20.6% | 644 | 499 | 22.52% |
+| Search across exact JIDs | 1307 | 1037 | 20.66% | 356 | 278 | 21.91% |
+| Contact conflict | 1172 | 1047 | 10.67% | 331 | 297 | 10.27% |
+| Uncertain send request | 651 | 651 | 0% | 172 | 172 | 0% |
+
+The recovery/continuity envelope adds 154 UTF-8 bytes and 41 tokens to each of these offline fixtures in both formats, compared with the previous recorded baseline; it introduces no new output reduction. An actual interruption/retry carries additional evidence and can be larger.
 
 The unchanged request is intentional: it retains evidence and immutable intent needed to avoid duplicate sends.

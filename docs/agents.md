@@ -97,6 +97,12 @@ After a chat mutation, the affected observed field becomes `null` with a pending
 
 ## Recovery
 
-`reconnect` requests a new connection; transient disconnects normally recover automatically. `resync` asks Baileys to synchronize app state, but can return despite failed collections. Inspect `status.issues` and later events. Historical issues do not disappear simply because the connection reopens.
+Inspect the response envelope's `recovery.state`: `connecting`, `open`, `waiting-retry`, `intervention-required`, `offline`, or `stopping`. `reason`/`code` explain a known failure; `attempt` counts automatic retries since the last open/manual reconnect; `nextRetryAt` is a local millisecond timestamp only while waiting. Both output modes retain these fields. Historical `issues` are separate: an old connection-stopped issue does not block a currently open runtime.
+
+Known transient rc14 codes 408/428/503 and restart-required 515 retry indefinitely with waits capped at 30 seconds (at least one second, including 515). Terminal codes 401/403/411/440/500 and unknown codes require investigation. `reconnect` explicitly cancels a pending retry or replaces the socket with the same credentials; concurrent calls share cleanup/creation. It cannot enable offline access or reopen after shutdown. Socket creation/cleanup exceptions require investigation and a runtime restart; persistence failures fail closed. See [the recovery contract](../README.md#recovery) for reasons and limitations.
+
+`receiveContinuity.status` stays `unproven`, even after open or pending-notification completion. Its persisted `lastInterruption` is only the latest local observation (`at` in milliseconds and `reason`), not a remote interval or lost-message count. It survives offline restart; a null marker does not prove uninterrupted reception. Source stays local, coverage partial, app state unknown. Consult stored history/requests during an outage; a new send fails offline, while repeating an existing key returns its evidence without sending. Never replace an uncertain intent with a new key just to recover.
+
+`resync` asks Baileys to synchronize app state, but can return despite failed collections. Inspect later events without claiming catch-up.
 
 Preserve the private data directory when diagnosing a failure. Never remove credentials or recreate the session as an automatic recovery step. Keep daemon logs, databases, QR images, backups, and message data private. See [the README](../README.md) for installation, storage permissions, and the full command reference.

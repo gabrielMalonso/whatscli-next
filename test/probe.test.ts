@@ -312,11 +312,13 @@ test('JSONL process is offline by default, reports partial coverage and refuses 
     ].join('\n') + '\n',
   });
   assert.equal(child.status, 0, child.stderr);
-  const output: { ok: boolean; connection?: string; coverage?: string; error?: string }[] = child.stdout.trim().split('\n').map(line => decode(line));
+  const output: { ok: boolean; connection?: string; coverage?: string; recovery?: { state: string }; receiveContinuity?: { status: string }; error?: string }[] = child.stdout.trim().split('\n').map(line => decode(line));
   assert.equal(output.length, 7);
   assert.equal(output[0]?.ok, false);
   assert.equal(output[1]?.connection, 'offline');
   assert.equal(output[1]?.coverage, 'partial');
+  assert.equal(output[1]?.recovery?.state, 'offline');
+  assert.equal(output[1]?.receiveContinuity?.status, 'unproven');
   assert.equal(output[2]?.ok, false);
   assert.match(output[2]?.error ?? '', /test-jid/);
   assert.equal(output[3]?.ok, false);
@@ -341,9 +343,10 @@ test('pairing QR images stay private and subsequent requests preserve existing f
 
 test('reconnection stops on terminal errors and caps retry backoff', () => {
   for (const code of [401, 403, 411, 440, 500]) assert.equal(reconnectDelay(code, 0), undefined);
-  assert.equal(reconnectDelay(515, 0), 0);
+  assert.equal(reconnectDelay(515, 0), 1000);
   assert.equal(reconnectDelay(408, 0), 1000);
   assert.equal(reconnectDelay(503, 7), 30000);
+  assert.equal(reconnectDelay(408, 800), 30000);
   assert.equal(reconnectDelay(undefined, 8), undefined);
   assert.equal(diagnosticIssue('failed to sync regular from v1, giving up'), 'app-state-sync-incomplete');
   assert.equal(diagnosticIssue('regular blocked on missing key, parking'), 'app-state-sync-incomplete');
