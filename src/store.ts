@@ -27,8 +27,13 @@ function decodeMessage(value: string): WAMessage {
 export type Operation =
   | { kind: 'send'; jid: string; text: string }
   | { kind: 'send-file'; jid: string; path: string; mime: string; caption: string; bytes: number; sha256: string }
+  | { kind: 'send-contact'; jid: string; name: string; phone: string; vcard: string }
   | { kind: 'archive'; jid: string; value: boolean }
   | { kind: 'mark-read'; jid: string; value: boolean };
+
+export function isSendOperation(operation: Operation): operation is Extract<Operation, { kind: 'send' | 'send-file' | 'send-contact' }> {
+  return operation.kind === 'send' || operation.kind === 'send-file' || operation.kind === 'send-contact';
+}
 
 export type RequestRecord = {
   key: string;
@@ -309,7 +314,7 @@ export class Store {
   }
 
   invalidateChatState(key: string, operation: Operation): void {
-    if (operation.kind === 'send' || operation.kind === 'send-file') return;
+    if (isSendOperation(operation)) return;
     const pending = this.get<PendingChatState>('pending-chat', operation.jid) ?? {};
     if (operation.kind === 'archive') pending.archived = { key, value: operation.value };
     else pending.unread = { key, value: !operation.value };
@@ -634,9 +639,10 @@ export class Store {
 
   receipt(key: WAMessageKey, status: number): void {
     if (key.fromMe !== true || !key.id || !key.remoteJid) return;
+    if (!Number.isInteger(status) || status < proto.WebMessageInfo.Status.ERROR || status > proto.WebMessageInfo.Status.PLAYED) return;
     for (const row of this.db.prepare('SELECT json FROM requests').all()) {
       const request = decode<RequestRecord>(String(row.json));
-      if (!['send', 'send-file'].includes(request.operation.kind) || request.messageId !== key.id || request.operation.jid !== key.remoteJid) continue;
+      if (!isSendOperation(request.operation) || request.messageId !== key.id || request.operation.jid !== key.remoteJid) continue;
       // Monotonic evidence: late PENDING/ERROR events cannot erase an observed receipt.
       if (status === proto.WebMessageInfo.Status.ERROR) request.errorObserved = true;
       if (status >= proto.WebMessageInfo.Status.SERVER_ACK) request.acceptance = 'server-ack';

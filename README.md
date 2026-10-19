@@ -69,7 +69,7 @@ node dist/src/cli.js contact --jid '123450001@lid'
 
 `resolve` requires an open WhatsApp connection and exactly `+` followed by 8–15 digits; no country/area code, punctuation or local-number interpretation is added. It uses the pinned Baileys `onWhatsApp` API. Only a single affirmative result for the exact requested PN JID yields `status: confirmed` and a usable `jid`. Missing, partial, ambiguous, different-identity or failed SDK responses yield `status: unknown`, with `jid: null`; an explicit negative yields `not-found`. The installed SDK filters out negative entries, so an empty result remains unknown. Inspect `data.status`, not just `ok`.
 
-Verification is persisted separately from chats and authorizes text/document first contact to that exact PN JID. It survives restart and is historical evidence, without an automatic expiry or claim that the phone is still assigned to the same person. A subsequent inconclusive/negative lookup replaces the prior verification. Resolution and an SDK send return do not create an observed conversation; archive/read still require an observed chat and a stored last-message key/timestamp. `--allow-jid` remains an exact restriction, including when a PN/LID association is known. Resolution does not grant authority to send to an unobserved LID alias.
+Verification is persisted separately from chats and authorizes text/document/contact-card first contact to that exact PN JID. It survives restart and is historical evidence, without an automatic expiry or claim that the phone is still assigned to the same person. A subsequent inconclusive/negative lookup replaces the prior verification. Resolution and an SDK send return do not create an observed conversation; archive/read still require an observed chat and a stored last-message key/timestamp. `--allow-jid` remains an exact restriction, including when a PN/LID association is known. Resolution does not grant authority to send to an unobserved LID alias.
 
 `contact` is a local query and works offline. It returns exact identifiers, `source: local`, `historical: true`, the exact JID's verification, and safe contact metadata (`name`, `notify`, `username`, `verifiedName`, `status`) with per-field source/observation time. Association evidence comes from SDK contact/history/mapping events, alternate message keys and the SDK mapping key store. `mapping.status` is `known`, `unknown` or `conflict`; contradictory associations in either direction are retained. An unknown/conflicting LID has `phone: null`. No association is inferred from names or LID digits. Conflicts block first contact even with a positive phone check. Legacy journal mappings retain their original times; legacy SDK key-store/alternate message-key evidence has `observedAt: null` when the original time is unavailable. Metadata availability and identity coverage remain partial.
 
@@ -110,7 +110,7 @@ Keys are matched by exact chat, message ID, direction and incoming participant w
 
 The SDK also types `{jid, all: true}` with no server time or message range. On that observation, known rows in the exact chat are deleted; a persisted local time boundary conservatively withholds later old/undated arrivals as `status: unknown, source: chat-delete-boundary`. A newly observed message timestamped after that boundary is allowed. Clock skew and missing timestamps cannot establish membership in the cleared range; unknown quotes across that boundary are withheld too. Legacy delete journals are recovered on upgrade; the same range uncertainty applies to old chat-wide events. This is local, partial evidence, not a remote retention guarantee. Previously exported files/responses are not recalled, and immutable outbound request intents retain the originally supplied text/caption as intent evidence.
 
-Send text or a local file:
+Send text, a local file or one explicit contact card:
 
 ```sh
 node dist/src/cli.js send \
@@ -124,9 +124,21 @@ node dist/src/cli.js send-file \
   --file ./example.txt \
   --mime text/plain \
   --caption 'Fictional attachment'
+
+node dist/src/cli.js send-contact \
+  --jid '12025550101@s.whatsapp.net' \
+  --key 'example-card-001' \
+  --name 'Fictional Contact' \
+  --phone '+12025550103'
 ```
 
 Files are sent as WhatsApp documents, with their filename preserved. The default MIME type is `application/octet-stream`. The initial size limit is 64 MiB. The daemon reads one byte snapshot, persists its size/SHA-256/arguments and generated message ID, then invokes Baileys using those exact bytes.
+
+`send-contact` sends one real `contactMessage` through rc14's `sendMessage({contacts: {contacts: [card]}})` API. `--jid` addresses the recipient; `--name` and `--phone` describe only the shared card. The phone requires an explicit `+` followed by 8–15 digits, starting with a nonzero digit; no punctuation or inferred country code. The name must be nonblank and at most 256 UTF-8 bytes. Unicode, spelling and surrounding spaces are preserved without normalization; controls (C0/C1), Unicode line/paragraph separators and unpaired surrogates are rejected. The deterministic vCard 3.0 builder escapes backslash/comma/semicolon, uses CRLF framing and folds lines at 75 UTF-8 bytes without splitting code points. Raw vCards, implicit lookup and multiple cards are unsupported.
+
+Before invocation, SQLite stores the exact recipient, name, phone, generated vCard and message ID in an immutable `send-contact` operation. A repeated key compares all this content and returns the original record, including while the SDK is pending, offline or after restart/identity changes. Changing recipient/name/phone/kind conflicts. Full, compact and `request` preserve the complete intent and separate attempt/receipt/uncertainty fields. Deleted current message bodies stay hidden; the original request remains intent evidence. SDK return alone establishes no acceptance, delivery, read or observed chat/state.
+
+The card's phone does not verify identity, current WhatsApp membership, ownership or permission to share/send. It never feeds recipient checks, identity mappings or verified contacts. Recipient authorization uses the same exact observed-chat or persisted positive exact-PN rules as other sends; PN/LID aliases and `--allow-jid` remain exact. Sharing permissions and approved-contact choices belong to the downstream consumer. Card generation and behavior have offline fixture coverage only; phone rendering and real-account effects await checkpoint 06.
 
 A key binds one immutable operation. Reusing it returns the recorded result, including uncertainty, without another send. Changed arguments are rejected. Reusing a file key returns its original manifest even if that path's contents have since changed. To inspect an uncertain result:
 

@@ -10,6 +10,7 @@ import { rpc, RpcError } from '../src/rpc.js';
 import { Store } from '../src/store.js';
 import type { WAMessage } from 'baileys';
 import { publicResponse, uncertain } from './fixtures/responses.js';
+import { contactCard } from '../src/contact-card.js';
 
 process.umask(0o077);
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
@@ -195,6 +196,9 @@ test('RPC timeout makes one attempt and instructs the caller to inspect the dura
 test('CLI compact sends one unchanged command, keeps JSON/exit codes, and validates output before I/O', async t => {
   const directory = temporary();
   const commands: Record<string, unknown>[] = [];
+  const cardName = '名; Fictional, \\name';
+  const cardPhone = '+12025550103';
+  const card = { ...uncertain, key: 'card', operation: { kind: 'send-contact', jid, name: cardName, phone: cardPhone, vcard: contactCard(cardName, cardPhone).vcard } };
   const server = createServer(socket => {
     socket.setEncoding('utf8');
     let buffer = '';
@@ -206,7 +210,7 @@ test('CLI compact sends one unchanged command, keeps JSON/exit codes, and valida
       if (command.key === 'closed') { socket.end(); return; }
       const response = command.key === 'error'
         ? { ok: false, error: 'Fictional conflict', code: 'CONFLICT' }
-        : publicResponse(uncertain);
+        : publicResponse(command.key === 'card' ? card : uncertain);
       socket.end(JSON.stringify({ ...response, id: command.id }) + '\n');
     });
   });
@@ -238,4 +242,21 @@ test('CLI compact sends one unchanged command, keeps JSON/exit codes, and valida
   assert.equal((await cli(directory, 'send', '--output', 'short')).ok, false);
   assert.equal((await cli(directory, 'send', '--output')).ok, false);
   assert.equal(commands.length, 3, 'invalid presentation options cannot invoke an operation');
+
+  for (const output of ['full', 'compact']) {
+    const { stdout, stderr } = await invoke('send-contact', '--jid', jid, '--key', 'card', '--name', cardName, '--phone', cardPhone, '--output', output);
+    assert.equal(stdout.trim().split('\n').length, 1);
+    assert.equal(stderr, '');
+    assert.deepEqual((JSON.parse(stdout) as { data: unknown }).data, card);
+    const { id: _id, ...sent } = commands.at(-1)!;
+    assert.deepEqual(sent, { command: 'send-contact', jid, key: 'card', name: cardName, phone: cardPhone });
+    assert.deepEqual((await cli(directory, 'request', '--key', 'card', '--output', output)).data, card);
+  }
+  const count = commands.length;
+  for (const args of [[], ['--phone', cardPhone], ['--name', cardName], ['--text', 'wrong']]) {
+    assert.equal((await cli(directory, 'send-contact', '--jid', jid, '--key', 'card', ...args)).ok, false);
+  }
+  assert.equal(commands.length, count, 'invalid CLI fields never reach I/O');
+  const help = await cli(directory, 'help');
+  assert.match(String((help.data as { commands: Record<string, string> }).commands['send-contact']), /--name NAME --phone/);
 });

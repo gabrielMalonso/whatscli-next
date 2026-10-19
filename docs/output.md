@@ -22,7 +22,7 @@ The envelope is unchanged: `ok`, errors/codes, RPC correlation `id`, running/con
 | `search` | Keep the original array order and each row's exact JID, even with `--jid`. Never combine identities or colliding IDs. Uses the message component omissions below. |
 | `contact`, nested `resolve.contact` | Omit contact `source` when equal to the envelope source. A metadata field `{value}` inherits both `source` and `observedAt` from its exact enclosing `contacts` record, only when both originally match. Otherwise retain all three fields. Keep every mapping edge and its source/time, conflicts, null phone, historical flag and verification. |
 | `archive`, `unarchive`, `read`, `unread` | Apply the chat projection to `data.localChat`. Keep the complete request and pending verification. |
-| Others | Unchanged. In particular, `send`, `send-file` and `request` retain immutable operation, key, message ID, attempt, acceptance, delivery, read and error evidence. |
+| Others | Unchanged. In particular, `send`, `send-file`, `send-contact` and `request` retain immutable operation (including the card's explicit name/phone/vCard), key, message ID, attempt, acceptance, delivery, read and error evidence. |
 
 Message component defaults are explicit:
 

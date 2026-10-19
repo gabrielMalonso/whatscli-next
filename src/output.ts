@@ -19,7 +19,7 @@ function contactCard(card: proto.Message.IContactMessage) {
   let name: string | null = null;
   let malformed = false;
   const lines = card.vcard?.replace(/\r\n[ \t]|\n[ \t]/g, '').trim().split(/\r?\n/) ?? [];
-  const unescape = (value: string) => value.replace(/\\[nN]/g, '\n').replace(/\\([,;\\])/g, '$1');
+  const unescape = (value: string) => value.replace(/\\([nN,;\\])/g, (_escape, character: string) => /[nN]/.test(character) ? '\n' : character);
   for (const line of lines) {
     if (!line) continue;
     const colon = line.indexOf(':');

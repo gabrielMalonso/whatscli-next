@@ -9,6 +9,7 @@ import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
+import { contactCard } from './contact-card.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
@@ -315,6 +316,14 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           if (!messageId) throw new Error('Missing persisted message ID');
           return connected().sendMessage(command.jid, { text: command.text, linkPreview: null }, { messageId });
         });
+      case 'send-contact': {
+        const card = contactCard(command.name, command.phone);
+        return perform(store, command.key, { kind: 'send-contact', jid: command.jid, name: command.name, phone: command.phone, vcard: card.vcard },
+          () => validateTarget(command.jid, true), async messageId => {
+            if (!messageId) throw new Error('Missing persisted message ID');
+            return connected().sendMessage(command.jid, { contacts: { displayName: card.displayName, contacts: [card] } }, { messageId });
+          });
+      }
       case 'send-file': {
         const previous = store.request(command.key);
         if (previous) {
