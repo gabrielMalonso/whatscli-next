@@ -15,6 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && node --test dist/test/*.test.js",
+    "benchmark:store": "pnpm build && node dist/scripts/benchmark-store.js",
     "benchmark:output": "pnpm build && node dist/scripts/benchmark-output.js",
     "probe": "node dist/src/probe.js",
     "whatscli": "node dist/src/cli.js"
