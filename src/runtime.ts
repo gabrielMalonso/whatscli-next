@@ -225,11 +225,11 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       for (const chat of chats) store.observeChat(chat);
       store.event('chats.update', chats);
     })));
-    current.ev.on('chats.delete', jids => persist(() => {
+    current.ev.on('chats.delete', jids => persist(() => store.transaction(() => {
       // Keep historical records, but signal that their current existence is no longer known.
       for (const jid of jids) store.db.prepare('DELETE FROM chats WHERE jid=?').run(jid);
       store.event('chats.delete', jids);
-    }));
+    })));
     current.ev.on('messages.upsert', event => persist(() => store.transaction(() => {
       for (const message of event.messages) store.observeMessage(message);
       store.event('messages.upsert', { type: event.type, keys: event.messages.map(message => message.key) });

@@ -14,7 +14,7 @@ const runFile = promisify(execFile);
 
 test('CLI stop waits for delayed SDK cleanup and writer release before reporting stopped', { timeout: 10000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'whatscli-stop-'));
-  const child = spawn(process.execPath, ['--import', './dist/test/fixtures/daemon-hooks.js', 'dist/src/daemon.js', '--data-dir', directory],
+  const child = spawn(process.execPath, ['--import', './dist/test/fixtures/daemon-hooks.js', 'dist/src/daemon.js', '--offline', '--data-dir', directory],
     { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   let diagnostics = '';
   child.stderr?.on('data', chunk => { diagnostics += String(chunk); });
