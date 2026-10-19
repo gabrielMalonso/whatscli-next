@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { rpc, RpcError } from '../src/rpc.js';
 import { Store } from '../src/store.js';
 import type { WAMessage } from 'baileys';
+import { publicResponse, uncertain } from './fixtures/responses.js';
 
 process.umask(0o077);
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
@@ -65,6 +66,15 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
   assert.equal((chats.data as { jid: string }[])[0]?.jid, jid);
   const messages = await cli(directory, 'messages', '--jid', jid, '--limit', '1', '--offset', '1');
   assert.equal((messages.data as { id: string }[])[0]?.id, 'example-1');
+  const beforeCompactEvents = await cli(directory, 'events');
+  const compactMessages = await cli(directory, '--output', 'compact', 'messages', '--jid', jid, '--limit', '1', '--offset', '1');
+  assert.deepEqual((compactMessages.data as { messages: { id: string }[] }).messages.map(message => message.id), ['example-1']);
+  assert.equal((compactMessages.data as { jid: string }).jid, jid);
+  const compactNextPage = await cli(directory, 'messages', '--output', 'compact', '--jid', jid, '--limit', '1', '--offset', '2');
+  assert.deepEqual(compactNextPage.data, { jid, messages: [] });
+  const explicitFull = await cli(directory, 'messages', '--output', 'full', '--jid', jid, '--limit', '1', '--offset', '1');
+  assert.deepEqual(explicitFull.data, messages.data);
+  assert.deepEqual((await cli(directory, 'events')).data, beforeCompactEvents.data);
   const search = await cli(directory, 'search', '--query', 'SÃO PAULO 100%_');
   assert.equal((search.data as unknown[]).length, 1);
   assert.doesNotMatch(JSON.stringify(search), /PRIVATE_SEARCH_SECRET|messageSecret/);
@@ -140,6 +150,9 @@ test('offline CLI chat filters preserve state, exact identity and redaction acro
   assert.doesNotMatch(stdout, /DELETED_CHAT_BODY|PRIVATE_CHAT_SECRET|messageSecret|messages|mediaKey/);
   assert.deepEqual(((await cli(directory, 'chats', '--unread', 'unknown', '--archived', 'unknown')).data as { jid: string }[]).map(chat => chat.jid), [lid]);
   assert.deepEqual((await cli(directory, 'chats', '--unread', 'false')).data, []);
+  const compactFiltered = await cli(directory, '--output', 'compact', 'chats', '--unread', 'true', '--archived', 'false', '--limit', '1');
+  assert.deepEqual((compactFiltered.data as { jid: string }[]).map(chat => chat.jid), [jid]);
+  assert.deepEqual((await cli(directory, 'chats', '--output', 'compact', '--unread', 'true', '--offset', '1')).data, []);
   assert.deepEqual((await cli(directory, 'chats', '--unread', 'true', '--offset', '1')).data, []);
   for (const args of [['--unread', 'yes'], ['--archived', 'null'], ['--unread'], ['--jid', jid]]) assert.equal((await cli(directory, 'chats', ...args)).ok, false);
   assert.equal((await cli(directory, 'unread', '--limit', '1')).ok, false);
@@ -170,4 +183,52 @@ test('RPC timeout makes one attempt and instructs the caller to inspect the dura
   await assert.rejects(rpc(directory, { command: 'send', key: 'fictional-timeout-key', jid, text: 'Example' }, 80), error =>
     error instanceof RpcError && error.code === 'TIMEOUT' && /idempotency key/.test(error.message));
   assert.equal(connections, 1);
+});
+
+test('CLI compact sends one unchanged command, keeps JSON/exit codes, and validates output before I/O', async t => {
+  const directory = temporary();
+  const commands: Record<string, unknown>[] = [];
+  const server = createServer(socket => {
+    socket.setEncoding('utf8');
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk;
+      if (!buffer.includes('\n')) return;
+      const command = JSON.parse(buffer.trim()) as Record<string, unknown>;
+      commands.push(command);
+      if (command.key === 'closed') { socket.end(); return; }
+      const response = command.key === 'error'
+        ? { ok: false, error: 'Fictional conflict', code: 'CONFLICT' }
+        : publicResponse(uncertain);
+      socket.end(JSON.stringify({ ...response, id: command.id }) + '\n');
+    });
+  });
+  await new Promise<void>(resolve => server.listen(join(directory, 'control.sock'), resolve));
+  t.after(() => server.close());
+  const invoke = (...args: string[]) => runFile(process.execPath, ['dist/src/cli.js', '--data-dir', directory, ...args], { timeout: 5000 });
+  const { stdout, stderr } = await invoke('send', '--jid', jid, '--key', uncertain.key, '--text', uncertain.operation.kind === 'send' ? uncertain.operation.text : '', '--output', 'compact');
+  assert.equal(stdout.trim().split('\n').length, 1);
+  assert.equal(stderr, '');
+  assert.deepEqual((JSON.parse(stdout) as { data: unknown }).data, uncertain);
+  assert.equal(commands.length, 1);
+  assert.deepEqual(Object.keys(commands[0]!).sort(), ['command', 'id', 'jid', 'key', 'text']);
+  assert.equal(commands[0]?.command, 'send');
+  assert.equal(commands[0]?.key, uncertain.key);
+  assert.equal(commands[0]?.jid, jid);
+
+  for (const [key, code] of [['error', 'CONFLICT'], ['closed', 'PROTOCOL']]) {
+    await assert.rejects(invoke('request', '--key', key!, '--output', 'compact'), error => {
+      assert.ok(error && typeof error === 'object' && 'stdout' in error && 'code' in error);
+      assert.equal(error.code, 1);
+      assert.equal(typeof error.stdout, 'string');
+      const result = JSON.parse(String(error.stdout)) as { ok: boolean; code: string };
+      assert.equal(result.ok, false);
+      assert.equal(result.code, code);
+      return true;
+    });
+  }
+  assert.equal(commands.length, 3, 'neither an error nor protocol uncertainty causes a retry');
+  assert.equal((await cli(directory, 'send', '--output', 'short')).ok, false);
+  assert.equal((await cli(directory, 'send', '--output')).ok, false);
+  assert.equal(commands.length, 3, 'invalid presentation options cannot invoke an operation');
 });
