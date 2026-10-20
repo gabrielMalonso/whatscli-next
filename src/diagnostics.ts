@@ -7,11 +7,12 @@ const consoleMessages = new Set([
 ]);
 
 /** Project dependency console calls to known labels, never arbitrary strings/objects. */
-export function installConsoleDiagnostics(): void {
+export function installConsoleDiagnostics(observe?: () => void): void {
   const diagnostic = (first: unknown): void => {
     const message = typeof first === 'string' && consoleMessages.has(first) ? first
       : typeof first === 'string' && first.startsWith('Session error:') ? 'Session decryption error'
       : 'Dependency diagnostic';
+    try { observe?.(); } catch { /* Optional telemetry never changes diagnostics. */ }
     process.stderr.write(JSON.stringify({ level: 'diagnostic', message }) + '\n');
   };
   console.log = console.info = console.debug = console.warn = console.error = diagnostic;

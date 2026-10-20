@@ -13,6 +13,8 @@
 
 This is **SQLite only**, not a complete copy of the data directory. The database contains sensitive credentials, message bodies, audit and intent evidence, **without encryption at rest**. Keep the entire output private and out of version control. File manifests retain the original local paths/hashes; they do not include the files. Recovery cannot recreate those external files or make media remotely available.
 
+The optional [observability area and persistent preference](observability.md) are also excluded, including JSONL segments, HMAC secret/configuration and temporary lock/pending configuration. Restoring only this SQLite artifact into a NEW directory leaves observability at its default off. Telemetry expiry never removes backup or operational recovery evidence.
+
 ## Create explicitly
 
 Use the same explicit source data directory as the running daemon. Create a new private parent first (its own parent must already exist); never repair an existing directory's permissions silently:

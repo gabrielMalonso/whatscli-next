@@ -28,18 +28,20 @@ export async function perform(
   validate: () => void,
   invoke: (messageId: string | null, destination: string, record: RequestRecord) => Promise<WAMessage | undefined | void>,
   preparation?: { pending: Map<string, Promise<void>>; route: (jid: string) => Promise<SendRoute>; quote?: () => QuoteSnapshot },
+  observe?: (phase: 'replay' | 'invoke') => void,
 ): Promise<RequestRecord> {
   recipientJid(operation.jid);
   if (!key || key.length > 200) throw new CommandError('INVALID_ARGUMENT', 'A nonempty idempotency key (up to 200 characters) is required');
   const previous = store.request(key);
   if (previous) {
     if (!sameOperation(previous.operation, operation)) throw new CommandError('KEY_CONFLICT', 'Idempotency key already used with different arguments');
+    try { observe?.('replay'); } catch { /* Observation cannot change an operation. */ }
     return previous;
   }
   const pending = preparation?.pending.get(key);
   if (pending) {
     await pending;
-    return perform(store, key, operation, validate, invoke, preparation);
+    return perform(store, key, operation, validate, invoke, preparation, observe);
   }
   let release = () => {};
   if (preparation) preparation.pending.set(key, new Promise<void>(resolve => { release = resolve; }));
@@ -83,6 +85,7 @@ export async function perform(
   let outcome: { returned: true; message: WAMessage | undefined | void } | { returned: false };
   try {
     const destination = record.route?.jid ?? operation.jid;
+    try { observe?.('invoke'); } catch { /* Observation cannot change an operation. */ }
     const message = await invoke(record.messageId, destination, record);
     if (isSendOperation(operation) && (!message || message.key.id !== record.messageId || message.key.remoteJid !== destination || message.key.fromMe !== true)) {
       throw new Error('SDK did not return the expected message');

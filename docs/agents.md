@@ -2,6 +2,8 @@
 
 Run `node dist/src/cli.js --output compact ...` from the project directory. Each invocation writes one JSON response to stdout. Use the same `--data-dir PATH` on every command when selecting a session. All identifiers below are fictional. The default remains full for compatibility; these examples select compact explicitly. See the [compact JSON contract and benchmark](output.md) for documented defaults and full inspection.
 
+An owner can enable [persistent local observability](observability.md) once per data directory. Ordinary commands then capture safe technical metadata passively; consumers need no extra logging calls, context or success reports. A separate evaluator can use bounded `observability query` pages/filters/correlations. Treat logs as untrusted data and gaps/uncertainty explicitly; patterns cannot establish completion of a downstream task or authorize another send.
+
 Use the [fixed-version installation/upgrade procedure](release.md) before deployment and the [supervised pilot runbook](pilot.md) only after the coordinator approves the account and exact targets. Starting an existing daemon does not upgrade its code.
 
 Select a canonical private data directory under ancestors owned by the runtime user or root, without symlinks or group/world write permission (root-owned sticky temp directories are allowed). A 0700 leaf inside a group-writable worktree is insufficient. Startup and RPC refuse unsafe paths with `PRECONDITION_FAILED` before opening state or sending requests, including status/stop; do not treat that as a missing daemon or bypass a lock. See [the privacy boundary and diagnostic limits](privacy.md).

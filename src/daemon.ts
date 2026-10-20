@@ -7,6 +7,9 @@ import { parseRequest, RequestError } from './protocol.js';
 import { dataDirectory, socketPath } from './paths.js';
 import { createRuntime } from './runtime.js';
 import { CommandError, errorResponse } from './errors.js';
+import { obsAction, obsCode } from './observability.js';
+import { commandFields, wireFields } from './observability-context.js';
+import type { ObsFields } from './observability.js';
 
 process.umask(0o077);
 installConsoleDiagnostics();
@@ -22,6 +25,7 @@ async function main(): Promise<void> {
   // The lifetime writer lock is acquired before any connection or stale socket cleanup.
   const runtime = createRuntime({ dataDir: directory, connect: !values.offline,
     ...(values['allow-jid'] === undefined ? {} : { allowedJid: values['allow-jid'] }) });
+  installConsoleDiagnostics(() => runtime.observability.record('diagnostic', { label: 'dependency' }));
   const clients = new Set<Socket>();
   const active = new Set<Promise<void>>();
   let stopping: Promise<void> | undefined;
@@ -33,10 +37,21 @@ async function main(): Promise<void> {
     client.on('error', () => {});
     client.once('close', () => clients.delete(client));
     let buffer = '';
-    const respond = (value: unknown): void => { if (!client.destroyed) client.end(JSON.stringify(value) + '\n'); };
+    const started = performance.now();
+    let fields: ObsFields = { action: 'unknown' };
+    let capture = true;
+    let parsed = false;
+    const respond = (value: Record<string, unknown>): void => {
+      const line = JSON.stringify(value) + '\n';
+      if (!client.destroyed) client.end(line);
+      if (capture) runtime.observability.record(parsed ? 'transport' : 'parser', {
+        ...fields, durationMs: performance.now() - started, requestBytes: client.bytesRead,
+        responseBytes: client.destroyed ? 0 : Buffer.byteLength(line), ok: value.ok === true,
+        code: value.ok === true ? 'OK' : obsCode(value.code) }, 'daemon');
+    };
     client.on('data', chunk => {
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > 131072) { respond({ id: null, ...errorResponse(new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB')) }); return; }
+      if (Buffer.byteLength(buffer) > 131072) { client.removeAllListeners('data'); respond({ id: null, ...errorResponse(new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB')) }); return; }
       const end = buffer.indexOf('\n');
       if (end < 0) return;
       client.removeAllListeners('data');
@@ -45,12 +60,18 @@ async function main(): Promise<void> {
         let id: string | null = null;
         try {
           const request = parseRequest(line);
+          parsed = true;
           id = request.id;
+          fields = { ...commandFields(runtime.observability, request.command), ...wireFields(runtime.observability, id) };
+          capture = request.command.command !== 'observability';
           if (stopping && request.command.command !== 'status') throw new CommandError('PRECONDITION_FAILED', 'Daemon is stopping');
-          const data = await runtime.execute(request.command);
+          const data = await runtime.execute(request.command, wireFields(runtime.observability, id));
           respond({ id, ok: true, data, running: true, pid: process.pid, ...runtime.snapshot() });
           if (request.command.command === 'stop') void shutdown();
-        } catch (error) { respond({ id: error instanceof RequestError ? error.id : id, ...errorResponse(error) }); }
+        } catch (error) {
+          if (error instanceof RequestError) fields = { action: obsAction(error.action), ...wireFields(runtime.observability, error.id) };
+          respond({ id: error instanceof RequestError ? error.id : id, ...errorResponse(error) });
+        }
       })();
       active.add(work);
       void work.finally(() => active.delete(work));

@@ -19,6 +19,8 @@ node dist/src/cli.js help
 
 Command failures retain human-readable `error` and add a stable `code` where the cause is known, with an explicit `UNKNOWN` fallback. See the [error contract and safe next steps](docs/output.md#command-errors-and-safe-next-steps), including legacy daemons and local persistence failures. Codes never establish nondelivery or authorize a retry; inspect an operation's original key after an error.
 
+[Optional local observability](docs/observability.md) is off by default. `observability enable` persists the choice per `--data-dir` until `observability disable`, including stop/start. It captures private structured command/transport/runtime metadata and process samples automatically, with five-day expiry and a 32-file/8 MiB cap. `observability status` exposes configuration/degradation; `observability query` provides bounded JSON filters without logging its own analysis. No message contents, credentials, remote upload or consumer logging calls are involved. Operational SQLite evidence and legacy `daemon.log` have separate retention.
+
 Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. `pnpm-lock.yaml` fixes the dependency graph and integrity hashes. Installation scripts for Baileys (a Node version check) and protobufjs are disabled; the published code is used directly.
 
 `pnpm verify:build` compares the complete `dist` file set and bytes with a fresh in-memory TypeScript emission and the expected stamp. It writes nothing; a mismatch requires preserving the candidate and using a new source/build directory. It needs source and development dependencies, and does not verify Git, dependency integrity or authenticity.

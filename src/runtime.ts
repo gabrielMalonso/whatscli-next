@@ -9,8 +9,13 @@ import { sdkDiagnostic } from './diagnostics.js';
 import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
-import { perform } from './operations.js';
-import { CommandError } from './errors.js';
+import { perform as performOperation } from './operations.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Observability } from './observability.js';
+import type { ObsFields } from './observability.js';
+import { commandFields, resultFields } from './observability-context.js';
+import { observeProcess } from './observability-runtime.js';
+import { CommandError, errorResponse } from './errors.js';
 import { createBackup } from './backup.js';
 import { unprovenRoute } from './send-route.js';
 import type { SendRoute } from './send-route.js';
@@ -42,6 +47,14 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   const allowedJid = options.allowedJid === undefined ? undefined : recipientJid(options.allowedJid);
   const store = new Store(options.dataDir);
   const auth = sqliteAuth(store);
+  const observability = new Observability(store.directory, 'runtime');
+  const processObservation = observeProcess(observability);
+  const execution = new AsyncLocalStorage<{ invoked: boolean; replay: boolean }>();
+  function perform(...args: Parameters<typeof performOperation>): ReturnType<typeof performOperation> {
+    const context = execution.getStore();
+    args[6] = phase => { if (context) { if (phase === 'invoke') context.invoked = true; else context.replay = true; } };
+    return performOperation(...args);
+  }
   let socket: WASocket | undefined;
   let socketClosed: Promise<void> | undefined;
   let connection = 'offline';
@@ -76,6 +89,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         if (problem && !stopped) issue(problem);
         // msg can itself interpolate identifiers/errors; fields and arbitrary text stay private.
         const level = typeof record.level === 'number' ? record.level : undefined;
+        observability.record('diagnostic', { label: 'sdk', ...(problem ? { issue: problem } : {}) });
         process.stderr.write(encode({ level, message: sdkDiagnostic(message, problem) }) + '\n');
         next();
       } catch (error) { next(error instanceof Error ? error : new Error('Diagnostic write failed')); }
@@ -172,6 +186,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     current.ev.on('connection.update', update => {
       // Observe SDK cleanup separately from the transport: rc14 can emit this while
       // ws.isClosing, or return early from end() while another end is still running.
+      const admitted = socket === current && owner === token && !stopped;
       if (update.connection === 'close') closed();
       persist(() => {
         if ('qr' in update) qr = update.qr;
@@ -212,6 +227,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           }
         }
       });
+      if (admitted) observability.record('diagnostic', { label: 'connection', connection, recovery: recovery.state });
     });
     current.ev.on('messaging-history.set', history => persist(() => store.transaction(() => {
       for (const chat of history.chats) store.observeChat(chat);
@@ -250,6 +266,10 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       }
       store.event('messages.update', updates.map(({ key, update }) => ({ key, status: update.status ?? null })));
     })));
+    current.ev.on('messages.update', updates => {
+      if (socket !== current || owner !== token || stopped) return;
+      for (const { key, update } of updates) if (update.status !== undefined) observeMessageKey(key, update.status);
+    });
     current.ev.on('contacts.upsert', contacts => persist(() => store.transaction(() => {
       for (const contact of contacts) store.observeContact(contact, 'contacts.upsert');
     })));
@@ -260,11 +280,15 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       store.observeMapping(mapping.pn, mapping.lid, 'lid-mapping.update');
       store.event('lid-mapping', { pn: mapping.pn, lid: mapping.lid });
     })));
-    current.ev.on('message-receipt.update', receipts => persist(() => store.event('participant-receipts', receipts)));
+    current.ev.on('message-receipt.update', receipts => persist(() => {
+      store.event('participant-receipts', receipts);
+      for (const receipt of receipts) observeMessageKey(receipt.key);
+    }));
     current.ev.on('messages.delete', event => persist(() => store.deleteMessages(event)));
   }
   async function execute(command: Command): Promise<unknown> {
     switch (command.command) {
+      case 'observability': return processObservation.status();
       case 'backup': {
         if (stopped || backupWork) throw new CommandError('PRECONDITION_FAILED', 'Runtime is stopping or another backup is in progress');
         backupWork = backupDatabase(store.db, command.path);
@@ -272,6 +296,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       }
       case 'status': return {
         build: { fingerprint: buildFingerprint },
+        observability: processObservation.status(),
         hasLinkedCredentials: hasLinkedCredentials(auth.state.creds),
         registered: auth.state.creds.registered,
         accountJid: auth.state.creds.me?.id ?? null, accountLid: auth.state.creds.me?.lid ?? null,
@@ -365,6 +390,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         if (previous) {
           const op = previous.operation;
           if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new CommandError('KEY_CONFLICT', 'Idempotency key already used with different arguments');
+          const context = execution.getStore(); if (context) context.replay = true;
           return previous;
         }
         const preparing = sendPreparation.pending.get(command.key);
@@ -400,7 +426,19 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       case 'stop': return { stopping: true };
     }
   }
+  function observeMessageKey(key: { id?: string | null; remoteJid?: string | null; fromMe?: boolean | null; participant?: string | null }, status?: number | null): void {
+    if (!observability.enabled) return;
+    const message = key.id ? observability.opaque('message', key.id) : undefined;
+    const destination = key.remoteJid ? observability.opaque('resource', key.remoteJid) : undefined;
+    const participant = key.participant ? observability.opaque('resource', key.participant) : undefined;
+    observability.record('diagnostic', { label: 'receipt', ...(message ? { message } : {}), ...(destination ? { destination } : {}),
+      ...(participant ? { participant } : {}), ...(typeof key.fromMe === 'boolean' ? { fromMe: key.fromMe } : {}),
+      // rc14 status is evidence only; participant receipt events remain separate and unclassified.
+      ...(status === 2 ? { acceptance: 'server-ack' as const } : {}), ...(status === 3 ? { delivery: 'delivered' as const } : {}),
+      ...(status === 4 ? { read: 'read' as const } : {}), ...(status === 0 ? { errorObserved: true } : {}) });
+  }
   function fatal(): never {
+    observability.record('diagnostic', { label: 'fatal', code: 'LOCAL_STATE', build: buildFingerprint });
     process.stderr.write(encode({ error: 'Fatal persistence failure' }) + '\n');
     // Do not keep operating with failed credential/event persistence.
     process.exit(1);
@@ -439,6 +477,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   function shutdown(): Promise<void> {
     if (ending) return ending;
     stopped = true;
+    processObservation.stop();
     cancelRetry();
     recovery = { state: 'stopping', reason: null, code: null, attempt: 0, nextRetryAt: null };
     qr = undefined;
@@ -458,10 +497,29 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   }
   return {
     directory: store.directory,
-    execute,
+    observability,
+    execute(command: Command, context: ObsFields = {}) {
+      processObservation.reconcile();
+      if (command.command === 'observability') return execute(command);
+      const state = { invoked: false, replay: false };
+      const started = performance.now();
+      const fields = commandFields(observability, command);
+      return execution.run(state, async () => {
+        let result: unknown;
+        let code = 'OK';
+        try { result = await execute(command); return result; }
+        catch (error) { code = errorResponse(error).code; throw error; }
+        finally {
+          observability.record('execution', { ...fields, ...context, ...resultFields(result, observability),
+            ...(('key' in command && command.command !== 'request') ? state : {}),
+            durationMs: performance.now() - started, code, ok: code === 'OK', connection, recovery: recovery.state, build: buildFingerprint, coverage: 'partial', appState: 'unknown' });
+        }
+      });
+    },
     start() {
       if (started || stopped) return;
       started = true;
+      observability.record('lifecycle', { label: 'startup', build: buildFingerprint, connection, recovery: recovery.state });
       if (options.connect) {
         interrupt('runtime-start');
         recovery = { state: 'connecting', reason: 'startup', code: null, attempt: 0, nextRetryAt: null };
@@ -481,6 +539,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         // A disconnected/timed-out client never cancels it or releases ownership early.
         await backupWork?.catch(() => {});
         auth.save({});
+        observability.record('lifecycle', { label: 'shutdown', build: buildFingerprint, connection, recovery: recovery.state });
         store.close();
       })();
       return closing;

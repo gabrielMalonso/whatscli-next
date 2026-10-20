@@ -1,0 +1,1471 @@
+{
+  "generatedAt": "2026-10-20T14:16:39.844Z",
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "method": {
+    "variants": "OFF absent preference then ON, sequential; one fresh offline daemon per variant; 300 fictional 2KB messages and one durable uncertain intent",
+    "calls": "one first + five subsequent fresh CLI processes per scenario/mode; CPU totals include Node/imports; wall includes process + socket + formatting + optional telemetry drain",
+    "memory": "current RSS/heap at child exit; no resourceUsage.maxRSS, GC, cold-cache or peak claim",
+    "equivalence": "SHA256 of public response excluding randomized wire id and daemon PID; status excluded due explicit observability diagnostics",
+    "maintenance": "separate fresh process, 36 rotations with fake UTC time, five-day expiry, six ~10ms sampler ticks; accelerated ticks only in benchmark, production 60s"
+  },
+  "rows": [
+    {
+      "enabled": false,
+      "scenario": "small",
+      "output": "full",
+      "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e",
+      "code": 0,
+      "bytes": 596,
+      "first": {
+        "ms": 174.66834499999993,
+        "userMs": 144.581,
+        "systemMs": 21.786,
+        "rssBytes": 54681600,
+        "heapBytes": 6591824,
+        "bytes": 596,
+        "code": 0,
+        "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+      },
+      "subsequent": [
+        {
+          "ms": 155.805742,
+          "userMs": 141.902,
+          "systemMs": 17.108,
+          "rssBytes": 54505472,
+          "heapBytes": 6185712,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 152.6869589999999,
+          "userMs": 125.837,
+          "systemMs": 28.187,
+          "rssBytes": 53829632,
+          "heapBytes": 6573472,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 146.3078190000001,
+          "userMs": 125.995,
+          "systemMs": 24.191,
+          "rssBytes": 54874112,
+          "heapBytes": 6572368,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 154.140402,
+          "userMs": 122.254,
+          "systemMs": 31.321,
+          "rssBytes": 54206464,
+          "heapBytes": 6183592,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 157.45156599999996,
+          "userMs": 134.24,
+          "systemMs": 23.39,
+          "rssBytes": 54431744,
+          "heapBytes": 6830968,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "small",
+      "output": "compact",
+      "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b",
+      "code": 0,
+      "bytes": 544,
+      "first": {
+        "ms": 160.81005699999992,
+        "userMs": 139.528,
+        "systemMs": 21.079,
+        "rssBytes": 54214656,
+        "heapBytes": 6835880,
+        "bytes": 544,
+        "code": 0,
+        "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+      },
+      "subsequent": [
+        {
+          "ms": 139.40784200000007,
+          "userMs": 116.502,
+          "systemMs": 28.365,
+          "rssBytes": 54808576,
+          "heapBytes": 6207592,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 161.5925729999999,
+          "userMs": 135.181,
+          "systemMs": 30.813,
+          "rssBytes": 54628352,
+          "heapBytes": 6866728,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 146.88936000000012,
+          "userMs": 122.491,
+          "systemMs": 26.539,
+          "rssBytes": 54157312,
+          "heapBytes": 6842208,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 161.92129299999988,
+          "userMs": 136.907,
+          "systemMs": 23.675,
+          "rssBytes": 54087680,
+          "heapBytes": 6841432,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 144.27765899999986,
+          "userMs": 122.199,
+          "systemMs": 25.622,
+          "rssBytes": 54571008,
+          "heapBytes": 6209936,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "history-100",
+      "output": "full",
+      "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192",
+      "code": 0,
+      "bytes": 227707,
+      "first": {
+        "ms": 176.39603100000022,
+        "userMs": 128.479,
+        "systemMs": 33.649,
+        "rssBytes": 55795712,
+        "heapBytes": 7393448,
+        "bytes": 227707,
+        "code": 0,
+        "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+      },
+      "subsequent": [
+        {
+          "ms": 182.44289600000002,
+          "userMs": 129.364,
+          "systemMs": 32.595,
+          "rssBytes": 55955456,
+          "heapBytes": 7395552,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 171.51745200000005,
+          "userMs": 128.371,
+          "systemMs": 32.345,
+          "rssBytes": 55185408,
+          "heapBytes": 7393448,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 175.84012600000005,
+          "userMs": 136.742,
+          "systemMs": 32.655,
+          "rssBytes": 55611392,
+          "heapBytes": 7393448,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 178.45399700000007,
+          "userMs": 141.761,
+          "systemMs": 26.327,
+          "rssBytes": 55349248,
+          "heapBytes": 7393520,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 168.48627299999998,
+          "userMs": 131.086,
+          "systemMs": 26.626,
+          "rssBytes": 55185408,
+          "heapBytes": 7388648,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "history-100",
+      "output": "compact",
+      "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0",
+      "code": 0,
+      "bytes": 216542,
+      "first": {
+        "ms": 171.34414900000002,
+        "userMs": 139.446,
+        "systemMs": 22.909,
+        "rssBytes": 55492608,
+        "heapBytes": 7457248,
+        "bytes": 216542,
+        "code": 0,
+        "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+      },
+      "subsequent": [
+        {
+          "ms": 166.86577699999998,
+          "userMs": 134.097,
+          "systemMs": 24.197,
+          "rssBytes": 56029184,
+          "heapBytes": 7528776,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 184.5040570000001,
+          "userMs": 139.317,
+          "systemMs": 36.343,
+          "rssBytes": 55775232,
+          "heapBytes": 7528632,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 171.2983690000001,
+          "userMs": 136.821,
+          "systemMs": 28.962,
+          "rssBytes": 55377920,
+          "heapBytes": 7528632,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 167.85690199999954,
+          "userMs": 136.425,
+          "systemMs": 24.714,
+          "rssBytes": 55173120,
+          "heapBytes": 7528632,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 171.1078319999997,
+          "userMs": 134.85,
+          "systemMs": 27.164,
+          "rssBytes": 55132160,
+          "heapBytes": 7528704,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "search-100",
+      "output": "full",
+      "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192",
+      "code": 0,
+      "bytes": 227707,
+      "first": {
+        "ms": 165.23491000000013,
+        "userMs": 127.512,
+        "systemMs": 28.562,
+        "rssBytes": 55566336,
+        "heapBytes": 7393448,
+        "bytes": 227707,
+        "code": 0,
+        "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+      },
+      "subsequent": [
+        {
+          "ms": 174.74831799999993,
+          "userMs": 134.764,
+          "systemMs": 30.397,
+          "rssBytes": 55066624,
+          "heapBytes": 7393320,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 172.98895300000004,
+          "userMs": 120.118,
+          "systemMs": 40.735,
+          "rssBytes": 55255040,
+          "heapBytes": 7393176,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 163.76073900000029,
+          "userMs": 128.529,
+          "systemMs": 29.119,
+          "rssBytes": 55611392,
+          "heapBytes": 7393320,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 196.90801199999987,
+          "userMs": 154.925,
+          "systemMs": 32.018,
+          "rssBytes": 55025664,
+          "heapBytes": 7393176,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 157.59484800000064,
+          "userMs": 118.642,
+          "systemMs": 32.9,
+          "rssBytes": 55652352,
+          "heapBytes": 7393248,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "search-100",
+      "output": "compact",
+      "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22",
+      "code": 0,
+      "bytes": 218707,
+      "first": {
+        "ms": 169.23389300000053,
+        "userMs": 133.32,
+        "systemMs": 25.194,
+        "rssBytes": 55508992,
+        "heapBytes": 7535328,
+        "bytes": 218707,
+        "code": 0,
+        "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+      },
+      "subsequent": [
+        {
+          "ms": 158.1415509999997,
+          "userMs": 124.424,
+          "systemMs": 27.312,
+          "rssBytes": 55169024,
+          "heapBytes": 7533224,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 160.9031530000002,
+          "userMs": 123.739,
+          "systemMs": 27.941,
+          "rssBytes": 55349248,
+          "heapBytes": 7533424,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 174.4578220000003,
+          "userMs": 137.072,
+          "systemMs": 30.687,
+          "rssBytes": 55365632,
+          "heapBytes": 7533224,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 167.58742799999982,
+          "userMs": 125.031,
+          "systemMs": 34.282,
+          "rssBytes": 55607296,
+          "heapBytes": 7533224,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 168.98858699999982,
+          "userMs": 129.349,
+          "systemMs": 30.316,
+          "rssBytes": 55676928,
+          "heapBytes": 7533296,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "error",
+      "output": "full",
+      "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71",
+      "code": 1,
+      "bytes": 156,
+      "first": {
+        "ms": 155.24987299999975,
+        "userMs": 127.911,
+        "systemMs": 28.316,
+        "rssBytes": 54939648,
+        "heapBytes": 6831216,
+        "bytes": 156,
+        "code": 1,
+        "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+      },
+      "subsequent": [
+        {
+          "ms": 137.69791500000065,
+          "userMs": 118.671,
+          "systemMs": 26.701,
+          "rssBytes": 54906880,
+          "heapBytes": 6848752,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 138.52343999999994,
+          "userMs": 117.967,
+          "systemMs": 27.696,
+          "rssBytes": 54484992,
+          "heapBytes": 6428048,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 150.16581300000053,
+          "userMs": 126.168,
+          "systemMs": 28.489,
+          "rssBytes": 54349824,
+          "heapBytes": 6849352,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 145.1445990000002,
+          "userMs": 124.68,
+          "systemMs": 27.928,
+          "rssBytes": 54476800,
+          "heapBytes": 6843336,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 145.6317250000002,
+          "userMs": 131.229,
+          "systemMs": 20.035,
+          "rssBytes": 54845440,
+          "heapBytes": 6845760,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "error",
+      "output": "compact",
+      "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71",
+      "code": 1,
+      "bytes": 156,
+      "first": {
+        "ms": 156.7118300000002,
+        "userMs": 127.381,
+        "systemMs": 30.88,
+        "rssBytes": 53714944,
+        "heapBytes": 6821880,
+        "bytes": 156,
+        "code": 1,
+        "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+      },
+      "subsequent": [
+        {
+          "ms": 151.3404840000003,
+          "userMs": 130.122,
+          "systemMs": 27.025,
+          "rssBytes": 54464512,
+          "heapBytes": 6185600,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 154.87627299999986,
+          "userMs": 126.848,
+          "systemMs": 29.195,
+          "rssBytes": 54259712,
+          "heapBytes": 6823568,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 146.254719999999,
+          "userMs": 129.266,
+          "systemMs": 21.875,
+          "rssBytes": 54321152,
+          "heapBytes": 6841040,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 160.18682099999933,
+          "userMs": 131.816,
+          "systemMs": 30.186,
+          "rssBytes": 53452800,
+          "heapBytes": 6834832,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 162.84097099999963,
+          "userMs": 145.357,
+          "systemMs": 19.179,
+          "rssBytes": 54325248,
+          "heapBytes": 6822896,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "replay",
+      "output": "full",
+      "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+      "code": 0,
+      "bytes": 645,
+      "first": {
+        "ms": 173.38313300000118,
+        "userMs": 137.937,
+        "systemMs": 34.484,
+        "rssBytes": 54530048,
+        "heapBytes": 6811672,
+        "bytes": 645,
+        "code": 0,
+        "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+      },
+      "subsequent": [
+        {
+          "ms": 152.65022800000042,
+          "userMs": 127.745,
+          "systemMs": 30.698,
+          "rssBytes": 54284288,
+          "heapBytes": 6597560,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 147.79568899999867,
+          "userMs": 123.206,
+          "systemMs": 26.827,
+          "rssBytes": 53948416,
+          "heapBytes": 6583344,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 158.91682199999923,
+          "userMs": 129.534,
+          "systemMs": 31.371,
+          "rssBytes": 53985280,
+          "heapBytes": 6839672,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 150.87312799999927,
+          "userMs": 129.59,
+          "systemMs": 24.543,
+          "rssBytes": 53772288,
+          "heapBytes": 6172872,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 154.2220559999987,
+          "userMs": 127.155,
+          "systemMs": 28.585,
+          "rssBytes": 54484992,
+          "heapBytes": 6855200,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        }
+      ]
+    },
+    {
+      "enabled": false,
+      "scenario": "replay",
+      "output": "compact",
+      "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+      "code": 0,
+      "bytes": 645,
+      "first": {
+        "ms": 154.12713000000076,
+        "userMs": 143.458,
+        "systemMs": 16.164,
+        "rssBytes": 54546432,
+        "heapBytes": 6853216,
+        "bytes": 645,
+        "code": 0,
+        "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+      },
+      "subsequent": [
+        {
+          "ms": 148.8821709999993,
+          "userMs": 124.473,
+          "systemMs": 27.775,
+          "rssBytes": 54382592,
+          "heapBytes": 6845968,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 174.14964800000052,
+          "userMs": 146.961,
+          "systemMs": 31.858,
+          "rssBytes": 54329344,
+          "heapBytes": 6838408,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 149.1863480000011,
+          "userMs": 134.075,
+          "systemMs": 22.177,
+          "rssBytes": 54423552,
+          "heapBytes": 6574560,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 155.45113799999854,
+          "userMs": 137.512,
+          "systemMs": 20.372,
+          "rssBytes": 54235136,
+          "heapBytes": 6841320,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 152.3433640000003,
+          "userMs": 129.719,
+          "systemMs": 24.322,
+          "rssBytes": 54579200,
+          "heapBytes": 6853352,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "small",
+      "output": "full",
+      "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e",
+      "code": 0,
+      "bytes": 596,
+      "first": {
+        "ms": 184.22527100000116,
+        "userMs": 147.368,
+        "systemMs": 28.876,
+        "rssBytes": 54935552,
+        "heapBytes": 7108688,
+        "bytes": 596,
+        "code": 0,
+        "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+      },
+      "subsequent": [
+        {
+          "ms": 163.94394300000022,
+          "userMs": 141.122,
+          "systemMs": 23.351,
+          "rssBytes": 55455744,
+          "heapBytes": 7120632,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 167.55252699999983,
+          "userMs": 137.47,
+          "systemMs": 29.099,
+          "rssBytes": 55795712,
+          "heapBytes": 6890968,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 137.54007599999932,
+          "userMs": 117.093,
+          "systemMs": 23.216,
+          "rssBytes": 55230464,
+          "heapBytes": 7111424,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 177.87965199999962,
+          "userMs": 153.14,
+          "systemMs": 24.34,
+          "rssBytes": 55074816,
+          "heapBytes": 7134928,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        },
+        {
+          "ms": 159.30249000000003,
+          "userMs": 139.14,
+          "systemMs": 22.696,
+          "rssBytes": 55164928,
+          "heapBytes": 6438768,
+          "bytes": 596,
+          "code": 0,
+          "hash": "b68e1093a083e8148bf0219b3302ee05ada1363250615d8b5a563a8469ae665e"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "small",
+      "output": "compact",
+      "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b",
+      "code": 0,
+      "bytes": 544,
+      "first": {
+        "ms": 130.09423700000116,
+        "userMs": 105.453,
+        "systemMs": 28.947,
+        "rssBytes": 55119872,
+        "heapBytes": 6396152,
+        "bytes": 544,
+        "code": 0,
+        "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+      },
+      "subsequent": [
+        {
+          "ms": 160.92634299999918,
+          "userMs": 129.96,
+          "systemMs": 34.792,
+          "rssBytes": 55222272,
+          "heapBytes": 7118168,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 175.75502799999958,
+          "userMs": 152.024,
+          "systemMs": 27.64,
+          "rssBytes": 55410688,
+          "heapBytes": 6426360,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 162.11071600000105,
+          "userMs": 133.521,
+          "systemMs": 28.322,
+          "rssBytes": 55427072,
+          "heapBytes": 7111232,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 159.4354629999998,
+          "userMs": 138.499,
+          "systemMs": 22.404,
+          "rssBytes": 55717888,
+          "heapBytes": 7116512,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        },
+        {
+          "ms": 159.3021320000007,
+          "userMs": 133.189,
+          "systemMs": 29.484,
+          "rssBytes": 55549952,
+          "heapBytes": 7173904,
+          "bytes": 544,
+          "code": 0,
+          "hash": "8d4866c0ac4da063d3586bd342a6faa4e1c306eb81482cc674e7a7e2f64a3a0b"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "history-100",
+      "output": "full",
+      "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192",
+      "code": 0,
+      "bytes": 227707,
+      "first": {
+        "ms": 187.4733410000008,
+        "userMs": 139.761,
+        "systemMs": 29.203,
+        "rssBytes": 56823808,
+        "heapBytes": 7620288,
+        "bytes": 227707,
+        "code": 0,
+        "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+      },
+      "subsequent": [
+        {
+          "ms": 165.43038700000034,
+          "userMs": 131.342,
+          "systemMs": 27.86,
+          "rssBytes": 56750080,
+          "heapBytes": 7620288,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 166.5735599999989,
+          "userMs": 121.638,
+          "systemMs": 39.881,
+          "rssBytes": 56528896,
+          "heapBytes": 7620424,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 178.0697820000005,
+          "userMs": 133.996,
+          "systemMs": 34.254,
+          "rssBytes": 56700928,
+          "heapBytes": 7620360,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 175.4313889999994,
+          "userMs": 140.07,
+          "systemMs": 28.808,
+          "rssBytes": 56619008,
+          "heapBytes": 7615480,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 193.74760400000014,
+          "userMs": 138.213,
+          "systemMs": 35.069,
+          "rssBytes": 56549376,
+          "heapBytes": 7622128,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "history-100",
+      "output": "compact",
+      "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0",
+      "code": 0,
+      "bytes": 216542,
+      "first": {
+        "ms": 179.97280000000137,
+        "userMs": 135.538,
+        "systemMs": 34.135,
+        "rssBytes": 56635392,
+        "heapBytes": 7749496,
+        "bytes": 216542,
+        "code": 0,
+        "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+      },
+      "subsequent": [
+        {
+          "ms": 173.72933900000135,
+          "userMs": 141.01,
+          "systemMs": 27.804,
+          "rssBytes": 56696832,
+          "heapBytes": 7749424,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 172.52664100000038,
+          "userMs": 138.398,
+          "systemMs": 28.668,
+          "rssBytes": 56651776,
+          "heapBytes": 7749496,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 177.29514500000005,
+          "userMs": 135.23,
+          "systemMs": 33.077,
+          "rssBytes": 57004032,
+          "heapBytes": 7749480,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 176.9574249999987,
+          "userMs": 139.635,
+          "systemMs": 29.5,
+          "rssBytes": 56061952,
+          "heapBytes": 7749424,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        },
+        {
+          "ms": 139.7204789999996,
+          "userMs": 113.399,
+          "systemMs": 24.652,
+          "rssBytes": 57122816,
+          "heapBytes": 7749480,
+          "bytes": 216542,
+          "code": 0,
+          "hash": "c28ff799912cdb50a11b433a98f85edc14d776fd038e939b85f8002b64381ae0"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "search-100",
+      "output": "full",
+      "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192",
+      "code": 0,
+      "bytes": 227707,
+      "first": {
+        "ms": 182.19753200000014,
+        "userMs": 138.257,
+        "systemMs": 36.597,
+        "rssBytes": 56754176,
+        "heapBytes": 7620352,
+        "bytes": 227707,
+        "code": 0,
+        "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+      },
+      "subsequent": [
+        {
+          "ms": 184.3243399999992,
+          "userMs": 145.028,
+          "systemMs": 24.685,
+          "rssBytes": 57008128,
+          "heapBytes": 7621856,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 169.39525700000013,
+          "userMs": 139.903,
+          "systemMs": 26.358,
+          "rssBytes": 57020416,
+          "heapBytes": 7620080,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 173.3403559999988,
+          "userMs": 138.322,
+          "systemMs": 27.461,
+          "rssBytes": 56418304,
+          "heapBytes": 7620008,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 182.74321000000054,
+          "userMs": 139.765,
+          "systemMs": 34.164,
+          "rssBytes": 56918016,
+          "heapBytes": 7620008,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        },
+        {
+          "ms": 192.2412540000023,
+          "userMs": 142.305,
+          "systemMs": 32.296,
+          "rssBytes": 56274944,
+          "heapBytes": 7620008,
+          "bytes": 227707,
+          "code": 0,
+          "hash": "13c0aefd49d26f2e36c0a39ca43c50e84b0244c41d7a51002e3caf26b9a71192"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "search-100",
+      "output": "compact",
+      "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22",
+      "code": 0,
+      "bytes": 218707,
+      "first": {
+        "ms": 189.43019600000116,
+        "userMs": 157.744,
+        "systemMs": 25.279,
+        "rssBytes": 56647680,
+        "heapBytes": 7754144,
+        "bytes": 218707,
+        "code": 0,
+        "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+      },
+      "subsequent": [
+        {
+          "ms": 181.3328930000025,
+          "userMs": 140.138,
+          "systemMs": 31.58,
+          "rssBytes": 56909824,
+          "heapBytes": 7754128,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 166.0982100000001,
+          "userMs": 125.369,
+          "systemMs": 34.938,
+          "rssBytes": 56729600,
+          "heapBytes": 7755992,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 178.3473320000012,
+          "userMs": 140.819,
+          "systemMs": 30.612,
+          "rssBytes": 56995840,
+          "heapBytes": 7754128,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 173.34481699999742,
+          "userMs": 138.741,
+          "systemMs": 27.343,
+          "rssBytes": 57200640,
+          "heapBytes": 7754416,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        },
+        {
+          "ms": 173.64558000000034,
+          "userMs": 134.596,
+          "systemMs": 29.803,
+          "rssBytes": 57278464,
+          "heapBytes": 7754216,
+          "bytes": 218707,
+          "code": 0,
+          "hash": "01fd324b3e913ed9318616aaf6867fd46d85e801bb2071d26b9d43b590fd4d22"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "error",
+      "output": "full",
+      "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71",
+      "code": 1,
+      "bytes": 156,
+      "first": {
+        "ms": 148.41040499999872,
+        "userMs": 130.751,
+        "systemMs": 23.954,
+        "rssBytes": 55582720,
+        "heapBytes": 6394488,
+        "bytes": 156,
+        "code": 1,
+        "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+      },
+      "subsequent": [
+        {
+          "ms": 110.20815399999992,
+          "userMs": 87.591,
+          "systemMs": 25.169,
+          "rssBytes": 55504896,
+          "heapBytes": 6429504,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 148.96749099999943,
+          "userMs": 134.831,
+          "systemMs": 22.802,
+          "rssBytes": 55500800,
+          "heapBytes": 6405752,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 174.65464799999972,
+          "userMs": 150.154,
+          "systemMs": 27.479,
+          "rssBytes": 55238656,
+          "heapBytes": 6405608,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 161.51184600000124,
+          "userMs": 134.999,
+          "systemMs": 31.704,
+          "rssBytes": 55193600,
+          "heapBytes": 6416208,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 176.78148900000087,
+          "userMs": 144.721,
+          "systemMs": 34.17,
+          "rssBytes": 54956032,
+          "heapBytes": 6395376,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "error",
+      "output": "compact",
+      "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71",
+      "code": 1,
+      "bytes": 156,
+      "first": {
+        "ms": 151.56871599999795,
+        "userMs": 130.314,
+        "systemMs": 25.474,
+        "rssBytes": 55443456,
+        "heapBytes": 6421096,
+        "bytes": 156,
+        "code": 1,
+        "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+      },
+      "subsequent": [
+        {
+          "ms": 86.00224199999866,
+          "userMs": 71.256,
+          "systemMs": 15.617,
+          "rssBytes": 55988224,
+          "heapBytes": 6394912,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 144.67857000000004,
+          "userMs": 125.48,
+          "systemMs": 25.504,
+          "rssBytes": 55590912,
+          "heapBytes": 6415176,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 134.70410400000037,
+          "userMs": 120.874,
+          "systemMs": 20.487,
+          "rssBytes": 55078912,
+          "heapBytes": 6410104,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 167.70358599999963,
+          "userMs": 141.002,
+          "systemMs": 28.796,
+          "rssBytes": 55828480,
+          "heapBytes": 6412592,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        },
+        {
+          "ms": 142.06003899999996,
+          "userMs": 116.681,
+          "systemMs": 33.337,
+          "rssBytes": 55517184,
+          "heapBytes": 6427608,
+          "bytes": 156,
+          "code": 1,
+          "hash": "8b66c88ee18f2f45993fd57145df16cc8ed5544490c624da4a088cbeb8762c71"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "replay",
+      "output": "full",
+      "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+      "code": 0,
+      "bytes": 645,
+      "first": {
+        "ms": 146.87825999999768,
+        "userMs": 124.056,
+        "systemMs": 28.946,
+        "rssBytes": 55435264,
+        "heapBytes": 6427696,
+        "bytes": 645,
+        "code": 0,
+        "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+      },
+      "subsequent": [
+        {
+          "ms": 109.46277899999768,
+          "userMs": 89.168,
+          "systemMs": 19.815,
+          "rssBytes": 55332864,
+          "heapBytes": 6409744,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 82.17403200000263,
+          "userMs": 71.334,
+          "systemMs": 13.84,
+          "rssBytes": 55390208,
+          "heapBytes": 6468160,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 113.42568799999935,
+          "userMs": 98.863,
+          "systemMs": 17.446,
+          "rssBytes": 55369728,
+          "heapBytes": 7133656,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 172.88940899999943,
+          "userMs": 142.206,
+          "systemMs": 32.046,
+          "rssBytes": 54673408,
+          "heapBytes": 7145640,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 157.20755999999892,
+          "userMs": 133.086,
+          "systemMs": 26.816,
+          "rssBytes": 55455744,
+          "heapBytes": 7175696,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        }
+      ]
+    },
+    {
+      "enabled": true,
+      "scenario": "replay",
+      "output": "compact",
+      "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+      "code": 0,
+      "bytes": 645,
+      "first": {
+        "ms": 123.68802599999981,
+        "userMs": 106.429,
+        "systemMs": 22.514,
+        "rssBytes": 55529472,
+        "heapBytes": 7183240,
+        "bytes": 645,
+        "code": 0,
+        "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+      },
+      "subsequent": [
+        {
+          "ms": 161.42786900000283,
+          "userMs": 133.739,
+          "systemMs": 29.834,
+          "rssBytes": 55570432,
+          "heapBytes": 7141992,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 153.26634099999865,
+          "userMs": 133.004,
+          "systemMs": 26.6,
+          "rssBytes": 55320576,
+          "heapBytes": 7173040,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 166.1560559999998,
+          "userMs": 139.561,
+          "systemMs": 28.733,
+          "rssBytes": 55681024,
+          "heapBytes": 7127840,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 103.27745999999752,
+          "userMs": 76.753,
+          "systemMs": 30.701,
+          "rssBytes": 55578624,
+          "heapBytes": 6433832,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        },
+        {
+          "ms": 167.11443500000314,
+          "userMs": 147.117,
+          "systemMs": 25.191,
+          "rssBytes": 55242752,
+          "heapBytes": 7162592,
+          "bytes": 645,
+          "code": 0,
+          "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde"
+        }
+      ]
+    }
+  ],
+  "daemons": [
+    {
+      "enabled": false,
+      "userMs": 855.729,
+      "systemMs": 134.114,
+      "rssBytes": 121643008,
+      "heapBytes": 29836408,
+      "files": 0,
+      "telemetryBytes": 0
+    },
+    {
+      "enabled": true,
+      "userMs": 972.655,
+      "systemMs": 152.513,
+      "rssBytes": 121307136,
+      "heapBytes": 30248016,
+      "files": 1,
+      "telemetryBytes": 135151
+    }
+  ],
+  "maintenance": {
+    "rotationMs": 98.518908,
+    "expiryMs": 2.2144069999999942,
+    "userMs": 136.006,
+    "systemMs": 31.31,
+    "rssBytes": 64917504,
+    "samples": 6,
+    "status": {
+      "configured": true,
+      "enabled": true,
+      "effective": true,
+      "degraded": false,
+      "dropped": 0,
+      "evicted": 4,
+      "expired": 32,
+      "limits": {
+        "days": 5,
+        "bytes": 8388608,
+        "files": 32,
+        "segment": 262144,
+        "line": 4096,
+        "sampleMs": 60000
+      },
+      "scope": "process-counters"
+    },
+    "childMetrics": {
+      "userMs": 234.699,
+      "systemMs": 55.103,
+      "rssBytes": 64917504,
+      "heapBytes": 6233512
+    }
+  },
+  "base": "e79fbaa3b8d82eb1a8aa6e9ed25bbbb663622f35",
+  "buildFingerprint": "sha256:0757b6a0c6cd8c842825b1e5ee09773f18207846e417dc0ac29499798c634faa"
+}
