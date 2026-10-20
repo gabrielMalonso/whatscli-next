@@ -266,7 +266,9 @@ pnpm test
 pnpm verify:build
 ```
 
-`pnpm format` applies Prettier to TypeScript sources/tests/scripts, the listed root configuration files and Markdown documentation. ESLint uses the recommended JavaScript/TypeScript checks plus strict equality (allowing `== null`), without type-aware or formatting rules; `pnpm check` remains the TypeScript check. Both tools are development dependencies only. Private/generated state and historical `docs/*-results.json` measurements are excluded. Embedded code blocks and template payloads are left to their authors (`embeddedLanguageFormatting: off`); review literals and fixtures when formatting.
+[GitHub Actions CI](.github/workflows/ci.yml) runs these checks in order on pull requests and pushes to `main`, using a hosted Ubuntu 24.04 runner, Node.js 24.18.0 and pnpm 10.24.0 from `packageManager`. It installs with `pnpm install --frozen-lockfile --ignore-scripts`; `pnpm test` builds and stamps the output before the offline suite, then `pnpm verify:build` verifies that final build. Failures fail the job without automatic retries. CI uses no account/session or repository secrets and uploads no artifacts. Passing CI is offline evidence only; live tests require separate authorization.
+
+`pnpm format` applies Prettier to TypeScript sources/tests/scripts, the listed root configuration files, `.github/workflows/ci.yml` and Markdown documentation. ESLint uses the recommended JavaScript/TypeScript checks plus strict equality (allowing `== null`), without type-aware or formatting rules; `pnpm check` remains the TypeScript check. Both tools are development dependencies only. Private/generated state and historical `docs/*-results.json` measurements are excluded. Embedded code blocks and template payloads are left to their authors (`embeddedLanguageFormatting: off`); review literals and fixtures when formatting.
 
 Automated tests use fictional fixtures, offline daemons, local Unix sockets, and injected I/O failures; they never connect to real WhatsApp. See [the validation report](docs/validation.md) for real-account evidence and [the agent quick reference](docs/agents.md) for a compact workflow.
 
