@@ -163,3 +163,29 @@ Across the ten scenario/mode rows, median client CPU totals ranged 151.3–166.4
 The separate maintenance process made **24,960 real sample-shaped record writes in one UTC day** in 4292.67 ms, reaching the 32-file cap and evicting 4 older segments; retained data occupied 8,003,096 bytes. This is volume pressure, with no clock-driven forced rotations. Expiring those 32 fully expired generated segments took 1.21 ms (n=1). Its separate sparse fixture retained **all 186 samples over four days**, oldest 96.0 hours, using 5 files / 67,332 bytes, with zero cap evictions; writing them took 21.28 ms.
 
 The same process then produced 6 accelerated sampler ticks over about 65 ms. The entire volume/expiry/sparse/sampler interval used 4598.16 CPU ms with current RSS 116.2 MiB. Those totals primarily include the high-volume write stress and must not be attributed to the normal 60-second sampler. Counter polling every 64 writes is included in the stress time. These single-run synthetic observations are not sustained throughput, hardware guarantees or production sampling overhead. No real account or forced GC was involved.
+
+### Short-client loss experiment after the quote integration
+
+[Raw samples and source/compiled hashes](observability-loss-results.json) preserve the initial `92e0a09` experiment and a pre-integration candidate separately. The final comparison uses approved main **`064ca87fd624fb86fe65880d6b8bc2c1bfc6930a`**, fingerprint `sha256:4195d9bf94e2a260a75c94e4b3520958ebfd932dd532baf91f34b01055dfd378`, versus integrated production source **`1bd220de90f7c0c49fe90f9cbf03949171ffe9bc`**, fingerprint `sha256:82ae00b02ec9431f9b4ca6b9e5b0ee303139899213a955d47d190a23fe54a814`. Subsequent documentation/report commits do not change those compiled production modules. The reference is compiled from versioned main sources into ignored local build artifacts, with the same compiler/options/dependencies and identical benchmark/hook; its stamp was asserted equal to approved main. No checkout switch, extra Git worktree or live session was used. An initial unstamped reference run was retained locally and excluded from this final pair.
+
+Reproduce on the source revision being measured:
+
+```sh
+pnpm build
+node dist/scripts/benchmark-observability-contention.js .tmp/observability-loss-results.json
+```
+
+Each source runs OFF then ON, with a fresh offline daemon per scenario, 30 identical fictional 2 KiB messages and an existing uncertain send intent. Replay has **4 sequential fresh clients**; search has **4 batches of 4 concurrent fresh clients (n=16)**. All public response hashes matched across every source/OFF/ON variant, excluding only random wire id/PID; status/stop are setup/cleanup, excluded from the hash comparison. All CPU times include startup/imports. Wall samples include the client process, socket, formatting and final synchronous telemetry work. OS caches, run order, CPU scheduling and filesystem deadlines are uncontrolled. These are small bounded observations, not a throughput or precise overhead estimate.
+
+Final pair, **median client wall / CPU milliseconds**; drops are **measured-client sum / entire daemon lifetime**, ON only:
+
+| Source              | Scenario                |  OFF wall / CPU |   ON wall / CPU | ON drops client / daemon | ON retained bytes / files |
+| ------------------- | ----------------------- | --------------: | --------------: | -----------------------: | ------------------------: |
+| main `064ca87`      | sequential replay, n=4  | 147.16 / 153.47 | 160.65 / 165.18 |                    0 / 1 |                16,347 / 1 |
+| candidate `1bd220d` | sequential replay, n=4  | 159.12 / 160.94 | 165.78 / 170.10 |                    0 / 0 |                16,754 / 1 |
+| main `064ca87`      | concurrent search, n=16 | 135.71 / 138.93 | 149.21 / 146.31 |                  15 / 14 |                25,833 / 1 |
+| candidate `1bd220d` | concurrent search, n=16 | 122.98 / 125.02 | 137.76 / 138.47 |                  19 / 12 |                24,866 / 2 |
+
+The final concurrent candidate still lost **31 observations versus 29** in main in these process-local counters; intermediate runs also varied. This does **not** demonstrate an overall loss-rate or latency improvement. The deterministic schedules establish removal of this request's daemon/client self-contention, while independent clients and shutdown remain genuine loss paths. The main sequential daemon loss was outside the four measured replay clients; daemon totals include startup, status and stop/shutdown and cannot be assigned exclusively to the scenario. More retained bytes/rows is not itself completeness; lower bytes caused by discarded rows is not efficiency.
+
+ON daemon lifetime CPU was 494.05 / 419.80 ms (main/candidate replay) and 487.22 / 519.67 ms (search). Median client current exit RSS was about 52–53 MiB; raw samples include each current RSS, not a peak or isolated post-exec allocation claim. The [Linux maxRSS limitation](cli-performance.md) remains applicable; this experiment does not use maxRSS. OFF created zero telemetry files/bytes. ON used at most two files here; separate real-volume regression coverage reaches **31 segments plus one witness**, asserts the 32-file / 8 MiB total and 256 KiB segment bounds, and exercises expiry. No heavy Store benchmark, remote connection or account operation was performed.
