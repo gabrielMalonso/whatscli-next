@@ -249,7 +249,7 @@ The directory must be owned by the current user with private permissions (0700);
 
 [CLI startup and RPC measurements](docs/cli-performance.md) separate process/import cost from local transport and explain the response-assembly improvement for large pages. Use smaller pages when full message bodies dominate; compact output preserves complete text and does not reduce socket payloads.
 
-Credentials and messages are **not encrypted at rest**. Keep the entire directory, WAL/SHM files, QR images, logs, and backups private and out of version control. Stop the daemon before copying a backup. The repository ignores `.private/`, `.tmp/`, databases and logs; the package file allowlist excludes state. No credential deletion, logout, OS service installation or network-wide interruption is performed automatically.
+Credentials and messages are **not encrypted at rest**. Keep the entire directory, WAL/SHM files, QR images, logs, and backups private and out of version control. For a manual full-directory backup, stop normally and confirm the recorded PID exited before copying. Alternatively, `backup --out NEW_DIRECTORY` asks the runtime for a verified, consistent **SQLite-only** snapshot, including sensitive auth/intents but excluding logs, QR images, execution locks and external media/files. Its parent must already be owned/private (0700), without symlink or unsafe writable ancestors; existing output is never reused. See [backup scope, completion/timeout rules and NEW-directory offline recovery](docs/backup.md). The repository ignores `.private/`, `.tmp/`, databases and logs; the package file allowlist excludes state. No credential deletion, logout, OS service installation or network-wide interruption is performed automatically.
 
 ## Verification and limits
 

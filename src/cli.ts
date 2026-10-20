@@ -48,7 +48,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
   if (action === 'help') return { ok: true, data: {
     name: 'whatscli-next', output: 'JSON',
     commands: {
-      start: '[--offline] [--allow-jid JID]', status: '', stop: '',
+      start: '[--offline] [--allow-jid JID]', status: '', stop: '', backup: '--out NEW_PRIVATE_DIRECTORY (sensitive SQLite only)',
       'pair qr': '', 'pair code': '--phone INTERNATIONAL_DIGITS',
       chats: '[--unread true|false|unknown] [--archived true|false|unknown] [--limit 100] [--offset 0]', chat: '--jid JID',
       resolve: '--phone +INTERNATIONAL_DIGITS', contact: '--jid PN_OR_LID_JID',
@@ -107,6 +107,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
   const jid = (): string => required(values.jid, 'jid');
   const key = (): string => required(values.key, 'key');
   switch (action) {
+    case 'backup': only('out'); command = { command: action, path: resolve(required(values.out, 'out')) }; break;
     case 'status': case 'stop': case 'reconnect': case 'resync': case 'drop-connection':
       only(); command = { command: action }; break;
     case 'pair':
