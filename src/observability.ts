@@ -4,6 +4,7 @@ import {
   constants,
   fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   opendirSync,
@@ -32,6 +33,7 @@ export const OBS_LIMITS = {
   line: 4096,
   sampleMs: 60_000,
 } as const;
+const captureLimits = { records: 16, bytes: 64 * 1024, retryMs: 25 } as const;
 const dayMs = 86400000;
 // A segment contains one UTC day's records. Expire only after that whole day
 // leaves the query window; per-record timestamps enforce its exact five days.
@@ -164,6 +166,7 @@ export type ObsRecord = ObsFields & {
   generation: string;
   session: string;
   dropped: number;
+  uncertain?: number;
   evicted: number;
   expired: number;
 };
@@ -179,7 +182,14 @@ function safeDirectory(directory: string): void {
   checkAncestors(directory);
   checkPrivatePath(directory, 'directory');
 }
-function readPrivate(path: string, max: number): string {
+type PreferenceFile = Readonly<{ fd: number; dev: bigint; ino: bigint }>;
+type PreferenceLease = PreferenceFile & Readonly<{ generation: string }>;
+
+function readPrivate(
+  path: string,
+  max: number,
+  retain?: { file?: PreferenceFile },
+): string {
   checkPrivatePath(path, 'file');
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -196,20 +206,49 @@ function readPrivate(path: string, max: number): string {
     const count = readSync(fd, bytes, 0, bytes.length, 0);
     if (count > max || count !== stat.size || fstatSync(fd).size !== stat.size)
       throw new Error('Incomplete or changing observability file');
+    if (retain) {
+      const identity = fstatSync(fd, { bigint: true });
+      retain.file = { fd, dev: identity.dev, ino: identity.ino };
+    }
     return bytes.subarray(0, count).toString('utf8');
   } finally {
-    closeSync(fd);
+    if (retain?.file?.fd !== fd) closeSync(fd);
   }
 }
 export function readObservability(directory: string): Configuration {
+  return loadObservability(directory).configuration;
+}
+function loadObservability(
+  directory: string,
+  retain = false,
+): {
+  configuration: Configuration;
+  lease?: PreferenceLease;
+} {
+  const opened: { file?: PreferenceFile } = {};
+  const release = (): void => {
+    const file = opened.file;
+    delete opened.file; // Never retry close: its descriptor may already have been reused.
+    if (file) closeSync(file.fd);
+  };
   try {
     safeDirectory(directory);
     let text: string;
     try {
-      text = readPrivate(join(directory, 'observability.json'), 512);
+      text = readPrivate(
+        join(directory, 'observability.json'),
+        512,
+        retain ? opened : undefined,
+      );
     } catch (error) {
       if (isMissing(error))
-        return { preference: null, configured: false, degraded: false };
+        return {
+          configuration: {
+            preference: null,
+            configured: false,
+            degraded: false,
+          },
+        };
       throw error;
     }
     const value: unknown = JSON.parse(text);
@@ -230,23 +269,55 @@ export function readObservability(directory: string): Configuration {
         'enabled,generation,secret,version'
     )
       throw new Error('Unsupported preference');
-    return {
+    const configuration: Configuration = {
       preference: value as Preference,
       configured: value.enabled,
       degraded: false,
     };
+    if (value.enabled && opened.file) {
+      const lease: PreferenceLease = {
+        ...opened.file,
+        generation: value.generation,
+      };
+      delete opened.file;
+      return { configuration, lease };
+    }
+    release();
+    return { configuration };
   } catch (error) {
+    try {
+      release();
+    } catch {
+      /* Configuration remains unreadable; no descriptor retry. */
+    }
     if (isMissing(error)) {
       try {
         checkAncestors(directory, undefined, true);
-        return { preference: null, configured: false, degraded: false };
+        return {
+          configuration: {
+            preference: null,
+            configured: false,
+            degraded: false,
+          },
+        };
       } catch {
         /* Unknown namespace is never admitted. */
       }
     }
-    return { preference: null, configured: null, degraded: true };
+    return {
+      configuration: { preference: null, configured: null, degraded: true },
+    };
   }
 }
+
+function samePreference(directory: string, lease: PreferenceLease): boolean {
+  const path = join(directory, 'observability.json');
+  checkPrivatePath(path, 'file');
+  const stat = lstatSync(path, { bigint: true });
+  return stat.nlink === 1n && stat.dev === lease.dev && stat.ino === lease.ino;
+}
+
+class CaptureBusy extends Error {}
 
 /** One non-waiting filesystem critical section across processes. Never steal an existing lock.
  * A crash in this short section leaves a visible degradation, rather than unsafe lock recovery.
@@ -258,7 +329,18 @@ function exclusive<T>(
 ): T {
   safeDirectory(directory);
   const lock = join(directory, name);
-  mkdirSync(lock, { mode: 0o700 });
+  try {
+    mkdirSync(lock, { mode: 0o700 });
+  } catch (error) {
+    if (
+      name === 'observability.lock' &&
+      error instanceof Error &&
+      'code' in error &&
+      error.code === 'EEXIST'
+    )
+      throw new CaptureBusy();
+    throw error;
+  }
   try {
     return work();
   } finally {
@@ -399,7 +481,13 @@ function expireLoss(directory: string, generation: string, now: number): void {
   );
 }
 
-function persistLoss(directory: string, origin: ObsOrigin, now: number): void {
+function persistLoss(
+  directory: string,
+  origin: ObsOrigin,
+  now: number,
+  lease?: PreferenceLease,
+  eligible?: () => void,
+): void {
   // Separate from the contended append lock. Configuration takes both locks in this order;
   // failure capture takes only this one, rechecks opt-in, and never waits or retries.
   exclusive(
@@ -407,6 +495,13 @@ function persistLoss(directory: string, origin: ObsOrigin, now: number): void {
     () => {
       const config = readObservability(directory);
       if (!config.preference?.enabled || config.degraded) return;
+      if (
+        lease &&
+        (lease.generation !== config.preference.generation ||
+          !samePreference(directory, lease))
+      )
+        return;
+      eligible?.();
       const root = join(directory, 'observability');
       ensurePrivateDirectory(root);
       const previous = readLoss(directory, config.preference.generation);
@@ -658,6 +753,33 @@ export function safeObsFields(input: ObsFields): ObsFields {
   return output;
 }
 
+type CaptureOutcome = 'invalidated' | 'not-written' | 'uncertain' | 'captured';
+type CaptureBase = Omit<
+  ObsRecord,
+  'dropped' | 'uncertain' | 'evicted' | 'expired'
+>;
+type CaptureSnapshot = Readonly<{
+  base: Readonly<CaptureBase>;
+  lease: PreferenceLease;
+  time: number;
+  admittedAt: number;
+  bytes: number;
+}>;
+type Admission =
+  { kind: 'admitted'; snapshot: CaptureSnapshot } | { kind: 'not-admitted' };
+type CaptureResult = { kind: CaptureOutcome } | { kind: 'busy' };
+type PendingCapture = {
+  snapshot: CaptureSnapshot;
+  sequence: number;
+  state: 'admitted' | 'deferred';
+};
+type Drain = {
+  deadline: number;
+  through: number;
+  promise: Promise<void>;
+  complete: () => void;
+};
+
 export class Observability {
   private configuration: Configuration = {
     preference: null,
@@ -666,15 +788,44 @@ export class Observability {
   };
   private dropped = 0;
   private totalDropped = 0;
+  private uncertain = 0;
+  private totalUncertain = 0;
   private failed = false;
+  private cleanupFailed = false;
+  private cleanupFailures = 0;
+  private hashingFailed = false;
+  private hashingFailures = 0;
+  private maintenanceFailed = false;
   private evicted = 0;
   private expired = 0;
   private warned = false;
+  private readonly pending: PendingCapture[] = [];
+  private pendingBytes = 0;
+  private capturing = false;
+  private rejecting = false;
+  private closed = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private draining: Drain | undefined;
+  private readonly capture = {
+    admitted: 0,
+    captured: 0,
+    deferred: 0,
+    invalidated: 0,
+    expired: 0,
+    overflow: 0,
+    schedulerDiscarded: 0,
+    lockAttempts: 0,
+    busyAttempts: 0,
+    preparationFailures: 0,
+    maxPending: 0,
+    maxBytes: 0,
+  };
   readonly session = randomBytes(16).toString('hex');
   constructor(
     readonly directory: string,
     readonly origin: ObsOrigin,
     private readonly now = Date.now,
+    private readonly elapsed = () => performance.now(),
   ) {
     this.refresh();
   }
@@ -695,18 +846,43 @@ export class Observability {
     } catch (error) {
       blocked = !isMissing(error);
     }
+    const degraded =
+      this.configuration.degraded ||
+      this.failed ||
+      blocked ||
+      this.cleanupFailed ||
+      this.hashingFailed ||
+      this.maintenanceFailed;
     return {
       configured: this.configuration.configured,
       enabled: this.enabled,
-      effective: this.enabled && !this.failed && !blocked,
-      degraded: this.configuration.degraded || this.failed || blocked,
+      effective: this.enabled && !this.closed && !degraded,
+      degraded,
       dropped: this.totalDropped,
+      uncertain: this.totalUncertain,
+      cleanupFailures: this.cleanupFailures,
+      hashingFailures: this.hashingFailures,
+      components: {
+        captureDegraded: this.failed || blocked,
+        cleanupDegraded: this.cleanupFailed,
+        hashingDegraded: this.hashingFailed,
+        retentionDegraded: this.maintenanceFailed,
+      },
+      session: this.session,
+      generation: this.configuration.preference?.generation ?? null,
       evicted: this.evicted,
       expired: this.expired,
       limits: OBS_LIMITS,
       directory: join(resolve(this.directory), 'observability'),
       scope: 'process-counters',
       captureCompleteness: 'unknown',
+      buffer: {
+        ...this.capture,
+        pending: this.pending.length,
+        bytes: this.pendingBytes,
+        closed: this.closed,
+        limits: captureLimits,
+      },
     };
   }
   opaque(
@@ -717,30 +893,54 @@ export class Observability {
     if (!this.enabled || !preference || Buffer.byteLength(value) > 4096)
       return undefined;
     try {
-      return createHmac('sha256', Buffer.from(preference.secret, 'hex'))
+      const digest = createHmac('sha256', Buffer.from(preference.secret, 'hex'))
         .update(domain + '\0')
         .update(value)
         .digest('hex')
         .slice(0, 32);
+      this.hashingFailed = false;
+      return digest;
     } catch {
-      this.failure();
+      this.hashingFailed = true;
+      this.hashingFailures++;
+      this.warn();
       return undefined;
     }
   }
-  failure(origin: ObsOrigin = this.origin): void {
-    this.failed = true;
-    this.dropped++;
-    this.totalDropped++;
+  failure(
+    origin: ObsOrigin = this.origin,
+    outcome: 'dropped' | 'uncertain' = 'dropped',
+    lease?: PreferenceLease,
+  ): void {
+    this.countFailure(outcome);
     try {
-      if (this.enabled) persistLoss(this.directory, origin, this.now());
+      if (this.enabled) persistLoss(this.directory, origin, this.now(), lease);
     } catch {
       // Witness persistence is also fallible. Query always exposes unknown completeness.
     }
+    this.warn();
+  }
+  private countFailure(outcome: 'dropped' | 'uncertain'): void {
+    this.failed = true;
+    if (outcome === 'dropped') {
+      this.dropped++;
+      this.totalDropped++;
+    } else {
+      this.uncertain++;
+      this.totalUncertain++;
+    }
+  }
+  private cleanupFailure(): void {
+    this.cleanupFailed = true;
+    this.cleanupFailures++;
+    this.warn();
+  }
+  private warn(): void {
     if (!this.warned) {
       this.warned = true;
       try {
         process.stderr.write(
-          '{"level":"diagnostic","code":"OBSERVABILITY_DEGRADED","message":"Optional telemetry lost; inspect observability status"}\n',
+          '{"level":"diagnostic","code":"OBSERVABILITY_DEGRADED","message":"Optional telemetry degraded; inspect observability status"}\n',
         );
       } catch {
         /* No fallback. */
@@ -757,16 +957,21 @@ export class Observability {
     try {
       const directory = join(this.directory, 'observability');
       safeDirectory(directory);
-      return exclusive(this.directory, () => {
+      let witnessFailed = false;
+      const retained = exclusive(this.directory, () => {
+        this.refresh();
+        const current = this.configuration.preference;
+        if (!current) throw new Error('Unreadable preference');
         const files = segments(directory);
-        expireLoss(this.directory, preference.generation, this.now());
-        if (
-          files.some(
-            (file) =>
-              file.generation !== this.configuration.preference?.generation,
-          )
-        )
+        if (files.some((file) => file.generation !== current.generation))
           throw new Error('Unrecognized generation');
+        // A witness has its own provenance/gate. Preserve a bad witness without
+        // coupling it to expiration of recognized segments of this generation.
+        try {
+          expireLoss(this.directory, current.generation, this.now());
+        } catch {
+          witnessFailed = true;
+        }
         let retained = 0;
         for (const file of files) {
           if (segmentEnd(file.time) <= this.now() - OBS_LIMITS.days * dayMs) {
@@ -774,15 +979,64 @@ export class Observability {
             this.expired++;
           } else retained++;
         }
-        return (
-          retained > 0 ||
-          readLoss(this.directory, preference.generation) !== null
-        );
+        try {
+          return (
+            retained > 0 ||
+            readLoss(this.directory, current.generation) !== null
+          );
+        } catch {
+          witnessFailed = true;
+          return true;
+        }
       });
+      this.maintenanceFailed = witnessFailed;
+      if (witnessFailed) this.warn();
+      return retained || witnessFailed;
     } catch (error) {
       if (isMissing(error)) return false;
-      this.failed = true;
+      this.maintenanceFailed = true;
+      this.warn();
       return true;
+    }
+  }
+  private admit(
+    category: ObsCategory,
+    fields: ObsFields,
+    origin: ObsOrigin,
+  ): Admission {
+    if (this.closed || this.rejecting) return { kind: 'not-admitted' };
+    const loaded = loadObservability(this.directory, true);
+    this.configuration = loaded.configuration;
+    if (!loaded.lease) return { kind: 'not-admitted' };
+    try {
+      const time = this.now();
+      const base: Readonly<CaptureBase> = Object.freeze({
+        schema: 1,
+        timestamp: new Date(time).toISOString(),
+        origin,
+        category,
+        span: randomBytes(16).toString('hex'),
+        generation: loaded.lease.generation,
+        session: this.session,
+        ...safeObsFields(fields),
+      });
+      const snapshot: CaptureSnapshot = Object.freeze({
+        base,
+        lease: loaded.lease,
+        time,
+        admittedAt: this.elapsed(),
+        bytes: Buffer.byteLength(JSON.stringify(base)),
+      });
+      // Preparation can reenter the lifetime owner through an injected boundary.
+      if (this.closed || this.rejecting) {
+        this.releaseLease(loaded.lease);
+        return { kind: 'not-admitted' };
+      }
+      return { kind: 'admitted', snapshot };
+    } catch {
+      this.releaseLease(loaded.lease);
+      this.preparationFailure();
+      return { kind: 'not-admitted' };
     }
   }
   record(
@@ -790,12 +1044,221 @@ export class Observability {
     fields: ObsFields = {},
     origin: ObsOrigin = this.origin,
   ): void {
-    this.refresh();
-    if (!this.enabled) return;
+    const admission = this.admit(category, fields, origin);
+    if (admission.kind === 'not-admitted') return;
+    const snapshot = admission.snapshot;
+    this.capture.admitted++;
+    if (
+      this.pending.length >= captureLimits.records ||
+      this.pendingBytes + snapshot.bytes > captureLimits.bytes
+    ) {
+      this.discard(snapshot, 'overflow');
+      this.releaseLease(snapshot.lease);
+      return;
+    }
+    const entry: PendingCapture = {
+      snapshot,
+      sequence: this.capture.admitted,
+      state: 'admitted',
+    };
+    this.pending.push(entry);
+    this.pendingBytes += snapshot.bytes;
+    this.capture.maxPending = Math.max(
+      this.capture.maxPending,
+      this.pending.length,
+    );
+    this.capture.maxBytes = Math.max(this.capture.maxBytes, this.pendingBytes);
+    // Reentrant capture joins the FIFO after the already admitted observation.
+    if (this.capturing || this.pending.length > 1) this.defer(entry);
+    this.flush();
+  }
+  private defer(entry: PendingCapture): void {
+    if (entry.state === 'deferred') return;
+    entry.state = 'deferred';
+    this.capture.deferred++;
+  }
+  private releaseLease(lease: PreferenceLease): void {
     try {
+      closeSync(lease.fd);
+    } catch {
+      this.cleanupFailure();
+    }
+  }
+  private current(snapshot: CaptureSnapshot): boolean {
+    try {
+      const config = readObservability(this.directory);
+      return (
+        !config.degraded &&
+        config.preference?.enabled === true &&
+        config.preference.generation === snapshot.lease.generation &&
+        samePreference(this.directory, snapshot.lease)
+      );
+    } catch {
+      return false;
+    }
+  }
+  preparationFailure(): void {
+    this.capture.preparationFailures++;
+    this.failed = true;
+    this.warn();
+  }
+  private discard(
+    snapshot: CaptureSnapshot,
+    reason: 'expired' | 'overflow' | 'schedulerDiscarded',
+  ): void {
+    let counted = false;
+    const count = (): void => {
+      counted = true;
+      this.capture[reason]++;
+      this.countFailure('dropped');
+      this.warn();
+    };
+    try {
+      persistLoss(
+        this.directory,
+        snapshot.base.origin,
+        this.now(),
+        snapshot.lease,
+        count,
+      );
+    } catch {
+      // A busy/faulted witness cannot hide a known discard. This fallback only
+      // counts a decision; publication still requires the witness gate/token.
+      if (!counted && this.current(snapshot)) count();
+    }
+    if (!counted) this.capture.invalidated++;
+  }
+  private flush(): void {
+    if (this.capturing) return;
+    this.capturing = true;
+    try {
+      // Process only this finite batch. Reentrant arrivals use a later pass.
+      let remaining = this.pending.length;
+      while (this.pending.length && remaining-- > 0) {
+        const entry = this.pending[0]!;
+        const snapshot = entry.snapshot;
+        const deadline = Math.min(
+          snapshot.admittedAt + captureLimits.retryMs,
+          this.draining?.deadline ?? Infinity,
+        );
+        if (
+          (entry.state === 'deferred' || this.draining) &&
+          this.elapsed() >= deadline
+        ) {
+          this.pending.shift();
+          this.pendingBytes -= snapshot.bytes;
+          this.discard(snapshot, 'expired');
+          this.releaseLease(snapshot.lease);
+          continue;
+        }
+        const result = this.append(snapshot);
+        if (result.kind === 'busy') {
+          this.defer(entry);
+          break;
+        }
+        this.pending.shift();
+        this.pendingBytes -= snapshot.bytes;
+        if (result.kind === 'invalidated') this.capture.invalidated++;
+        else if (result.kind !== 'captured')
+          this.failure(
+            snapshot.base.origin,
+            result.kind === 'uncertain' ? 'uncertain' : 'dropped',
+            snapshot.lease,
+          );
+        this.releaseLease(snapshot.lease);
+      }
+    } finally {
+      this.capturing = false;
+      this.finishDrain();
+      if (this.pending.length) this.schedule();
+    }
+  }
+  private schedule(): void {
+    try {
+      if (!this.timer) {
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          this.flush();
+        }, 1);
+        this.timer.unref();
+      }
+      if (this.draining) this.timer.ref();
+    } catch {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = undefined;
+      const pending = this.pending.splice(0);
+      this.pendingBytes = 0;
+      this.rejecting = true;
+      try {
+        for (const { snapshot } of pending) {
+          this.discard(snapshot, 'schedulerDiscarded');
+          this.releaseLease(snapshot.lease);
+        }
+      } finally {
+        this.rejecting = false;
+        this.finishDrain();
+      }
+    }
+  }
+  private finishDrain(): void {
+    const drain = this.draining;
+    if (
+      drain &&
+      (!this.pending.length || this.pending[0]!.sequence > drain.through)
+    ) {
+      this.draining = undefined;
+      drain.complete();
+    }
+    if (!this.pending.length) {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+  /** Drain already admitted observations once, with a fixed budget and watermark.
+   * New arrivals cannot extend it; filesystem calls/scheduling have no wall deadline.
+   */
+  drain(): Promise<void> {
+    if (this.draining) return this.draining.promise;
+    if (!this.pending.length) return Promise.resolve();
+    let complete = (): void => {};
+    const promise = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    this.draining = {
+      promise,
+      complete,
+      through: this.capture.admitted,
+      deadline: this.elapsed() + captureLimits.retryMs,
+    };
+    this.flush();
+    return promise;
+  }
+  /** The lifetime owner seals admission before awaiting its final drain. */
+  close(): Promise<void> {
+    this.closed = true;
+    return this.drain();
+  }
+
+  private append(snapshot: CaptureSnapshot): CaptureResult {
+    // A write exception cannot establish how many bytes reached the file. Only a
+    // complete byte count proves capture; close/release are separate outcomes.
+    const attempt: { outcome: CaptureOutcome } = {
+      outcome: 'not-written',
+    };
+    try {
+      this.capture.lockAttempts++;
       exclusive(this.directory, () => {
         this.refresh();
-        if (!this.enabled || !this.configuration.preference) return;
+        if (
+          !this.enabled ||
+          !this.configuration.preference ||
+          this.configuration.preference.generation !==
+            snapshot.lease.generation ||
+          !samePreference(this.directory, snapshot.lease)
+        ) {
+          attempt.outcome = 'invalidated';
+          return;
+        }
         const directory = join(this.directory, 'observability');
         ensurePrivateDirectory(directory);
         let files = segments(directory);
@@ -806,12 +1269,15 @@ export class Observability {
             this.configuration.preference.generation,
             this.now(),
           );
+          this.maintenanceFailed = false;
         } catch {
-          /* Preserve it. */
+          this.maintenanceFailed = true;
+          this.warn();
         }
         let expired = 0;
         let evicted = 0;
         const now = this.now();
+        const recordTime = snapshot.time;
         const remove = (file: Segment): void => {
           // Only generated recognized regular entries under this exclusive area are eligible.
           const path = join(directory, file.name);
@@ -838,7 +1304,7 @@ export class Observability {
           last &&
           (last.partial ||
             last.bytes + OBS_LIMITS.line > OBS_LIMITS.segment ||
-            segmentEnd(last.time) !== segmentEnd(now))
+            segmentEnd(last.time) !== segmentEnd(recordTime))
         )
           last = undefined;
         while (
@@ -853,16 +1319,12 @@ export class Observability {
           evicted++;
           if (last === first) last = undefined;
         }
+        // Counters describe failures preceding this APPEND, even when the admitted
+        // snapshot is older. Subtract only this carry after a complete write.
+        const carry = { dropped: this.dropped, uncertain: this.uncertain };
         const record: ObsRecord = {
-          schema: 1,
-          timestamp: new Date(now).toISOString(),
-          origin,
-          category,
-          span: randomBytes(16).toString('hex'),
-          generation: this.configuration.preference.generation,
-          session: this.session,
-          ...safeObsFields(fields),
-          dropped: this.dropped,
+          ...snapshot.base,
+          ...carry,
           evicted,
           expired,
         };
@@ -871,7 +1333,7 @@ export class Observability {
           throw new Error('Oversized record');
         const path = join(
           directory,
-          last?.name ?? `v1-${now}-${randomUUID()}.jsonl`,
+          last?.name ?? `v1-${recordTime}-${randomUUID()}.jsonl`,
         );
         if (last) {
           // Never append after an interrupted/partial line.
@@ -896,18 +1358,34 @@ export class Observability {
           0o600,
         );
         try {
-          if (writeSync(fd, line) !== Buffer.byteLength(line))
-            throw new Error('Partial write');
+          attempt.outcome = 'uncertain';
+          const count = writeSync(fd, line);
+          attempt.outcome =
+            count === Buffer.byteLength(line) ? 'captured' : 'not-written';
+          if (attempt.outcome !== 'captured') throw new Error('Partial write');
         } finally {
-          closeSync(fd);
+          try {
+            closeSync(fd);
+          } catch {
+            this.cleanupFailure();
+          }
         }
-        this.dropped = 0;
-        this.failed = false;
+        this.dropped -= carry.dropped;
+        this.uncertain -= carry.uncertain;
+        this.failed = this.dropped > 0 || this.uncertain > 0;
+        this.capture.captured++;
         this.evicted += evicted;
         this.expired += expired;
       });
-    } catch {
-      this.failure(origin);
+      return { kind: attempt.outcome };
+    } catch (error) {
+      if (error instanceof CaptureBusy) {
+        this.capture.busyAttempts++;
+        return { kind: 'busy' };
+      }
+      if (attempt.outcome === 'captured' || attempt.outcome === 'invalidated')
+        this.cleanupFailure();
+      return { kind: attempt.outcome };
     }
   }
 }
@@ -945,6 +1423,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
       'INVALID_ARGUMENT',
       'Observability from must precede to',
     );
+  const from = query.from ? Date.parse(query.from) : undefined;
+  const to = query.to ? Date.parse(query.to) : undefined;
   if (
     (query.action && obsAction(query.action) !== query.action) ||
     (query.code && obsCode(query.code) !== query.code) ||
@@ -1038,9 +1518,12 @@ export function queryObservability(directory: string, query: ObsQuery) {
           row.schema !== 1 ||
           typeof row.timestamp !== 'string' ||
           !Number.isFinite(timestamp) ||
-          !/^[a-f0-9]{32}$/.test(row.span ?? '') ||
-          !/^[a-f0-9]{32}$/.test(row.generation ?? '') ||
-          !/^[a-f0-9]{32}$/.test(row.session ?? '') ||
+          typeof row.span !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.span) ||
+          typeof row.generation !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.generation) ||
+          typeof row.session !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.session) ||
           !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(
             row.origin ?? '',
           ) ||
@@ -1058,8 +1541,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
         if (
           timestamp <= retainedAfter ||
           timestamp > cutoff ||
-          (query.from && row.timestamp < query.from) ||
-          (query.to && row.timestamp > query.to)
+          (from !== undefined && timestamp < from) ||
+          (to !== undefined && timestamp > to)
         )
           continue;
         const record: ObsRecord = {
@@ -1072,6 +1555,9 @@ export function queryObservability(directory: string, query: ObsQuery) {
           session: row.session!,
           ...safeObsFields(row),
           dropped: safeCounter(row.dropped),
+          ...(row.uncertain === undefined
+            ? {}
+            : { uncertain: safeCounter(row.uncertain) }),
           evicted: safeCounter(row.evicted),
           expired: safeCounter(row.expired),
         };

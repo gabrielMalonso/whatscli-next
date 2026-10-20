@@ -600,7 +600,7 @@ async function execute(
   return response;
 }
 
-function finish(result: Record<string, unknown>): void {
+async function finish(result: Record<string, unknown>): Promise<void> {
   const line = JSON.stringify(result) + '\n';
   process.stdout.write(line);
   if (result.ok === false) process.exitCode = 1;
@@ -615,6 +615,7 @@ function finish(result: Record<string, unknown>): void {
       code: result.ok === true ? 'OK' : obsCode(result.code),
     });
     if (!observer.enabled) observer.maintain();
+    await observer.close();
   }
 }
 main()

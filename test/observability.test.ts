@@ -79,7 +79,13 @@ function raw(directory: string): string {
 function scheduledChild(
   directory: string,
   entry: 'cli' | 'daemon',
-  mode: 'daemon-lock' | 'daemon-waits' | 'cli-lock' | 'rpc-waits',
+  mode:
+    | 'daemon-lock'
+    | 'daemon-waits'
+    | 'daemon-waits-drain'
+    | 'daemon-recovery'
+    | 'cli-lock'
+    | 'rpc-waits',
   args: string[],
 ) {
   const child = spawn(
@@ -181,12 +187,15 @@ test('daemon capture completes before its response wakes the short client', asyn
 });
 
 for (const holdThroughClientExit of [false, true])
-  test(`real independent client contention persists loss (hold through client exit: ${holdThroughClientExit})`, async () => {
+  test(`independent client contention recovers or proves expired loss (hold through client exit: ${holdThroughClientExit})`, async () => {
     const directory = temporary();
     configureObservability(directory, true);
-    const daemon = scheduledChild(directory, 'daemon', 'daemon-waits', [
-      '--offline',
-    ]);
+    const daemon = scheduledChild(
+      directory,
+      'daemon',
+      holdThroughClientExit ? 'daemon-waits-drain' : 'daemon-recovery',
+      ['--offline'],
+    );
     let client: ReturnType<typeof scheduledChild> | undefined;
     let holder: ReturnType<typeof scheduledChild> | undefined;
     try {
@@ -223,15 +232,21 @@ for (const holdThroughClientExit of [false, true])
         holder.release.write('x');
         await holder.result();
       }
+      await daemon.stage('daemon-drained');
       const page = queryObservability(directory, {});
       const rows = page.records.filter((row) => row.action === 'send-contact');
       assert.deepEqual(
         new Set(rows.map((row) => row.origin)),
         new Set(
-          holdThroughClientExit ? ['runtime'] : ['runtime', 'rpc', 'cli'],
+          holdThroughClientExit
+            ? ['runtime']
+            : ['runtime', 'daemon', 'rpc', 'cli'],
         ),
       );
-      assert.equal(page.gaps.lossEvidence?.origin, 'daemon');
+      assert.equal(
+        page.gaps.lossEvidence?.origin,
+        holdThroughClientExit ? 'daemon' : undefined,
+      );
       assert.equal(page.gaps.captureCompleteness, 'unknown');
       const status = await rpc(
         directory,
@@ -240,7 +255,10 @@ for (const holdThroughClientExit of [false, true])
         undefined,
         false,
       );
-      assert.equal((status.data as { dropped: number }).dropped, 1);
+      assert.equal(
+        (status.data as { dropped: number }).dropped,
+        holdThroughClientExit ? 1 : 0,
+      );
       assert.doesNotMatch(raw(directory), new RegExp(canary));
     } finally {
       daemon.release.end();
@@ -850,6 +868,8 @@ test('contention/crash lock is preserved, drops are visible and faulted telemetr
   const started = performance.now();
   observer.record('command', { action: 'status' });
   assert.ok(performance.now() - started < 100);
+  assert.equal(observer.status().buffer.pending, 1);
+  await observer.close();
   assert.equal(observer.status().dropped, 1);
   assert.equal(observer.status().degraded, true);
   assert.throws(() => configureObservability(directory, false), {
@@ -891,11 +911,21 @@ test('disk-full injection drops safely; next successful record reports loss with
     fs.writeSync = write;
     syncBuiltinESMExports();
   }
-  assert.equal(observer.status().dropped, 1);
+  assert.equal(observer.status().dropped, 0);
+  assert.equal(observer.status().uncertain, 1);
   assert.equal(observer.status().degraded, true);
   observer.record('command', { action: 'help' });
-  assert.equal(logs(directory).at(-1)?.dropped, 1);
-  assert.equal(observer.status().degraded, false);
+  assert.equal(logs(directory).at(-1)?.dropped, 0);
+  assert.equal(logs(directory).at(-1)?.uncertain, 1);
+  // The global write fault also left an empty witness; stream recovery does not
+  // establish that witness retention is healthy.
+  assert.equal(observer.status().components.captureDegraded, false);
+  assert.equal(observer.status().components.retentionDegraded, true);
+  assert.equal(observer.status().degraded, true);
+  assert.equal(
+    queryObservability(directory, {}).gaps.lossEvidenceUnreadable,
+    true,
+  );
   assert.doesNotMatch(raw(directory), new RegExp(canary));
 });
 

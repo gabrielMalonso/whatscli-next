@@ -50,8 +50,8 @@ export async function rpc(
     throw error;
   } finally {
     // Operational endpoint admission happens before optional preference I/O.
-    const observer = context?.observer ?? new Observability(directory, 'rpc');
-    if (capture)
+    if (capture) {
+      const observer = context?.observer ?? new Observability(directory, 'rpc');
       observer.record(
         'transport',
         {
@@ -65,6 +65,8 @@ export async function rpc(
         },
         'rpc',
       );
+      if (!context) await observer.close();
+    }
   }
 }
 

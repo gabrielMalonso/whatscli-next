@@ -67,8 +67,8 @@ async function main(): Promise<void> {
           },
           'daemon',
         );
-      // Complete the synchronous append before waking this request's short client.
-      // Other clients can still contend; slow filesystems add response latency.
+      // Try capture before waking this client. Busy acquisition defers telemetry;
+      // slow synchronous filesystem work still adds response latency.
       if (!client.destroyed) client.end(line);
     };
     client.on('data', (chunk) => {

@@ -53,7 +53,7 @@ export function observeProcess(
         previous = current;
         previousTime = currentTime;
       } catch {
-        observer.failure();
+        observer.preparationFailure();
       }
     }, intervalMs);
     timer.unref();
