@@ -19,6 +19,8 @@ import { syncBuiltinESMExports } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { Readable, Writable } from 'node:stream';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import {
@@ -74,6 +76,153 @@ function raw(directory: string): string {
     : '';
 }
 
+function scheduledChild(
+  directory: string,
+  entry: 'cli' | 'daemon',
+  mode: 'daemon-lock' | 'daemon-waits' | 'rpc-lock' | 'rpc-waits',
+  args: string[],
+) {
+  const child = spawn(
+    process.execPath,
+    [
+      '--import',
+      `./dist/test/fixtures/observability-order-hooks.js?mode=${mode}`,
+      `dist/src/${entry}.js`,
+      '--data-dir',
+      directory,
+      ...args,
+    ],
+    { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] },
+  );
+  const notifications = child.stdio[3];
+  const release = child.stdio[4];
+  assert.ok(notifications instanceof Readable);
+  assert.ok(release instanceof Writable);
+  const stages = createInterface({ input: notifications })[
+    Symbol.asyncIterator
+  ]();
+  let stdout = '';
+  let stderr = '';
+  child.stdout!.on('data', (data) => {
+    stdout += String(data);
+  });
+  child.stderr!.on('data', (data) => {
+    stderr += String(data);
+  });
+  const exited = once(child, 'close');
+  // Failure deadline only: EOF releases a blocked fixture so normal protocol shutdown can run.
+  const deadline = setTimeout(() => release.end(), 15000);
+  child.once('exit', () => clearTimeout(deadline));
+  return {
+    release,
+    exited,
+    async stage(expected: string) {
+      assert.equal((await stages.next()).value, expected, stderr);
+    },
+    async result() {
+      const status = await exited;
+      return {
+        status,
+        response: JSON.parse(stdout) as Record<string, unknown>,
+        stderr,
+      };
+    },
+  };
+}
+
+for (const holder of ['daemon', 'rpc'] as const)
+  test(`response-first scheduling with the ${holder} holding the telemetry lock`, async () => {
+    const directory = temporary();
+    configureObservability(directory, true);
+    const action = holder === 'daemon' ? 'send-contact' : 'search';
+    const args =
+      holder === 'daemon'
+        ? [
+            'send-contact',
+            '--jid',
+            lid,
+            '--key',
+            canary,
+            '--name',
+            canary,
+            '--phone',
+            '+12025550103',
+          ]
+        : ['search', '--query', canary];
+    const daemon = scheduledChild(
+      directory,
+      'daemon',
+      holder === 'daemon' ? 'daemon-lock' : 'daemon-waits',
+      ['--offline'],
+    );
+    let client: ReturnType<typeof scheduledChild> | undefined;
+    try {
+      await daemon.stage('ready');
+      client = scheduledChild(
+        directory,
+        'cli',
+        holder === 'daemon' ? 'rpc-waits' : 'rpc-lock',
+        args,
+      );
+      if (holder === 'daemon') {
+        await daemon.stage('daemon-before-lock');
+        await client.stage('rpc-before-lock');
+        daemon.release.write('x');
+        await daemon.stage('daemon-locked');
+        assert.equal(existsSync(join(directory, 'observability.lock')), true);
+        client.release.write('x');
+        const result = await client.result();
+        assert.equal(result.response.ok, false);
+        assert.equal(result.response.code, 'PRECONDITION_FAILED');
+        assert.deepEqual(result.status, [1, null]);
+        assert.match(result.stderr, /OBSERVABILITY_DEGRADED/);
+        daemon.release.write('x');
+        await daemon.stage('daemon-recorded');
+      } else {
+        await daemon.stage('daemon-before-lock');
+        await client.stage('rpc-locked');
+        assert.equal(existsSync(join(directory, 'observability.lock')), true);
+        daemon.release.write('x');
+        await daemon.stage('daemon-recorded');
+        client.release.write('x');
+        const result = await client.result();
+        assert.equal(result.response.ok, true);
+        assert.deepEqual(result.status, [0, null]);
+        assert.equal(result.stderr, '');
+      }
+      const records = logs(directory).filter((row) => row.action === action);
+      assert.deepEqual(
+        new Set(records.map((row) => row.origin)),
+        new Set(
+          holder === 'daemon'
+            ? ['runtime', 'daemon']
+            : ['runtime', 'rpc', 'cli'],
+        ),
+      );
+      assert.equal(new Set(records.map((row) => row.correlation)).size, 1);
+      assert.ok(records[0]?.correlation);
+      assert.equal(records.filter((row) => row.origin === 'runtime').length, 1);
+      if (holder === 'rpc') {
+        const status = await rpc(
+          directory,
+          { command: 'observability' },
+          1000,
+          undefined,
+          false,
+        );
+        assert.equal((status.data as { dropped: number }).dropped, 1);
+        assert.equal((status.data as { degraded: boolean }).degraded, true);
+      }
+      assert.doesNotMatch(raw(directory), new RegExp(canary));
+    } finally {
+      daemon.release.end();
+      client?.release.end();
+      if (client) await client.exited;
+      await cli(directory, 'stop');
+      assert.deepEqual(await daemon.exited, [0, null]);
+    }
+  });
+
 test('missing/off never creates telemetry; persistent preference is private, atomic and independent of SQLite', () => {
   const directory = temporary();
   const observer = new Observability(directory, 'cli');
@@ -115,7 +264,14 @@ test('CLI lifecycle, live preference reconciliation, correlation, all command fa
   store.close();
   const child = spawn(
     process.execPath,
-    ['dist/src/daemon.js', '--offline', '--data-dir', directory],
+    [
+      '--import',
+      './dist/test/fixtures/observability-order-hooks.js?mode=ordered',
+      'dist/src/daemon.js',
+      '--offline',
+      '--data-dir',
+      directory,
+    ],
     { stdio: 'pipe' },
   );
   const exited = once(child, 'exit');
@@ -268,6 +424,9 @@ test('CLI lifecycle, live preference reconciliation, correlation, all command fa
     assert.equal(
       correlated.find((row) => row.origin === 'rpc')?.responseBytes,
       correlated.find((row) => row.origin === 'daemon')?.responseBytes,
+    );
+    assert.ok(
+      correlated.find((row) => row.origin === 'rpc')!.responseBytes! > 0,
     );
     assert.ok(search.stdoutBytes! > 0);
     assert.ok(
