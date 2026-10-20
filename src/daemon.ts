@@ -24,7 +24,7 @@ async function main(): Promise<void> {
       'allow-jid': { type: 'string' },
     },
   });
-  const directory = dataDirectory(values['data-dir']);
+  const directory = dataDirectory({ path: values['data-dir'] });
   const path = socketPath(directory);
   // The lifetime writer lock is acquired before any connection or stale socket cleanup.
   const runtime = createRuntime({
