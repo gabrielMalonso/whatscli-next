@@ -1,46 +1,43 @@
-# Local private-state boundary
+# Private state and diagnostics
 
-WhatsCLI protects local state and control traffic from another local UID through filesystem ownership and permissions. The runtime user and root remain trusted: processes running as either already control these files and credentials. There is no multi-user service, socket authentication protocol or same-UID isolation. Credentials, messages, immutable intents, deletion audit and backups remain **unencrypted at rest**.
+Credentials, messages, immutable intents, deleted-body audit data, quoted-send snapshots, and backups are **not encrypted at rest**. Filesystem checks protect against other local UIDs; the runtime user and root remain trusted. There is no same-UID isolation or separate socket authentication service. Keep private state out of Git, packages, and public reports.
 
-## Paths
+## Trusted paths
 
-Choose a canonical data directory. Every existing ancestor must be a directory owned by the runtime user or root, without symlinks or group/world write permission. Root-owned sticky temporary directories such as Linux `/tmp` are permitted. A foreign-owned `0755` ancestor is unsafe because its owner can replace its children, even with a private final directory.
+Every data-directory ancestor must be a directory owned by the runtime user or root, without symlinks or group/world write permission. Root-owned sticky temporary directories are allowed. A foreign-owned 0755 ancestor is unsafe because its owner can replace children.
 
-The final directory and existing entries must belong to the runtime user with private permissions (normally directory 0700, file/socket 0600), without symlinks. Database/log paths must be regular files; the control endpoint must be a socket. Startup validates existing ancestry, creates each missing component nonrecursively and checks its ownership/privacy/type before descending, then revalidates complete ancestry before opening SQLite/log output. A component introduced concurrently must pass the same checks; no recursive mkdir follows a newly inserted symlink. RPC checks ancestry, directory and endpoint before connecting or sending any command, including start's initial status request. Writer locking, stale-socket recovery and shutdown retain their lifecycle.
+Owner write permission is allowed; a private directory inside a group- or world-writable worktree is insufficient.
 
-Unsafe paths return `PRECONDITION_FAILED`, including for `status`/`stop`; this does not mean an absent daemon. Missing endpoints under trusted paths retain `NOT_RUNNING` and the CLI's successful stopped/status behavior. Refusal preserves existing content and modes without chmod, chown, deletion, relocation or replacement. Have the owner choose a trusted path and investigate existing permissions separately. Never bypass rejection by removing locks or starting another live runtime. Timeout/protocol errors still describe unknown outcomes and never authorize resending.
+The final directory and existing entries must belong to the runtime user and have private permissions: normally 0700 for directories and 0600 for files and sockets. Database and log entries must be regular files; the endpoint must be a socket.
 
-A 0700 `.private/session` inside a group-writable source worktree is insufficient; choose a separate trusted path. Source-directory permissions are never repaired automatically. On macOS, system aliases such as `/tmp` and `/var` may be symlinks: use the actual canonical path (`fs.realpathSync` can report an existing chosen directory). Aliases are rejected instead of silently followed. Only Linux was exercised; macOS operation/default paths remain unvalidated on a Mac.
+Use a canonical path. macOS `/tmp` and `/var` aliases may be symlinks and are rejected rather than silently followed.
 
-[Backup](backup.md) shares the ancestor rule with an existing 0700 parent and a NEW destination. QR files are exclusively created inside validated state. Explicit `send-file` inputs retain existing behavior; there is no general file sandbox. Downloads retain exclusive creation, 0600 and preserved partials.
+### Path validation
 
-[Quoted text replies](../user/quoted-replies.md) persist the selected visible text/caption as immutable send-intent evidence. Full/compact `request` can return that original snapshot after a later target deletion, as with existing outgoing text/caption intents. Current history/quote visibility remains redacted; deleted audit bodies, nested quotes, media payloads and cryptographic material are never copied to prepare a reply. Snapshots and backups remain private and unencrypted at rest.
+Startup validates ancestry, creates missing components one at a time with revalidation, and checks the complete path before accessing SQLite or logs. RPC validates paths before connecting or sending request bytes, including for `status` and `stop`.
+
+If ancestry is missing during admission, the request returns `NOT_RUNNING` rather than trusting a path that appears during the check.
+
+Unsafe paths return `PRECONDITION_FAILED`, not a "daemon absent" result. Refusal preserves existing content and permissions; it does not chmod, chown, relocate, remove locks, or reset sessions. Investigate the path with its owner. A later explicit start validates it again.
+
+See [error handling](../user/output.md#command-errors-and-safe-next-steps).
+
+### Files and backups
+
+[Backups](backup.md) require an existing private parent and a new destination under the same ancestry rules. QR files are created exclusively within validated state. Downloads create 0600 output files without overwriting existing files and preserve partial output.
+
+Explicit `send-file` inputs are not subject to a general file sandbox.
+
+Deletion hides current public message bodies but does not erase immutable outgoing intents or original quoted-send snapshots. See [Quoted replies](../user/quoted-replies.md) for this private retention boundary.
 
 ## Diagnostics
 
-[Opt-in observability](observability.md) adds a separate private bounded JSONL area, with field allowlists, exact-selector HMACs and no body/argv/SDK/error dumps or remote upload. The local secret/preference survives restart; equality digests remain linkable within that data directory across re-enable, even longer if copies are retained. Unknown entries/locks/configuration are preserved and capture degrades; existing namespace permissions are never repaired. Its five-day record query window, daily-segment cleanup granularity and 32-file/8 MiB cap apply to recognized telemetry segments and the fixed loss witness (31 segments plus at most one 4 KiB witness), not SQLite or legacy `daemon.log`.
+JSON responses use stdout; diagnostics use stderr, captured in private `daemon.log` for background starts.
 
-SDK structured fields, arbitrary strings, raw objects, error causes and stacks stay out of ordinary diagnostics. SDK `msg` is untrusted too: rc14 interpolates identifiers into some warnings. Logs retain known exact static labels, fixed existing issue categories (app-state sync, initial-sync timeout, decryption/integrity) and numeric level. Other SDK strings become `SDK diagnostic`. Console calls retain a small set of exact session labels or a fixed decryption-error label, discarding extra arguments/dynamic strings. Unknown messages lose detail intentionally; no secret/identity regex scrubber or verbose fallback exists.
+Diagnostics exclude arbitrary SDK objects, interpolated strings, exception causes and stacks, and parser excerpts. Only allowlisted static labels, numeric levels, and bounded sync/decryption issue categories are retained.
 
-Daemon/probe startup and shutdown use the command `errorResponse` boundary. Known public messages/codes stay actionable; arbitrary exception/parser text becomes `Command failed` / `UNKNOWN`. JSON results remain on stdout, diagnostics on stderr (private `daemon.log` for CLI starts). Full/compact share this boundary. Stored logs/data still must not be published.
+Unknown SDK strings become `SDK diagnostic`. Console session objects and dynamic arguments are discarded. There is no verbose raw fallback.
 
-## Offline evidence
+Known public errors retain actionable codes and messages; arbitrary failures become safe `Command failed` / `UNKNOWN` responses. Sanitization does not make stored logs or databases safe to publish.
 
-On exact base `507827e22f9a4f8f71e6c2f387ee2d748bf52254`, all seven initial `test/privacy.test.ts` scenarios failed before production changes:
-
-| Controlled trigger                                                                                                                          | Base observation                                                             | Correction                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Writable, injected foreign-owned 0755, or symlink ancestor over a private Store                                                             | SQLite opened; missing nested state was created through replaceable ancestry | Refuse before mkdir/open; preserve existing DB bytes/modes                  |
-| Own fictional socket changed to 0666                                                                                                        | RPC delivered the fictional send body and accepted the response              | Refuse before connection/bytes; secure owned endpoint works                 |
-| Pinned `LIDMappingStore` pure handler with fictional invalid identifiers; injected logger errors and libsignal console error-string pattern | Interpolated identifiers/error text reached stderr                           | Fixed labels/categories; private markers absent from stderr/public snapshot |
-| Daemon/probe parser with a fictional private option                                                                                         | Supplied option reached stderr                                               | Safe generic startup error                                                  |
-
-Additional tests cover injected endpoint/directory/ancestor ownership, symlink endpoints, trusted user/root/sticky-root ancestry, CLI full/compact and offline daemon/probe rejection, and log preservation. Existing transport correlation/error forwarding/size limits, build fingerprint, backup, locking, shutdown and durable idempotency tests continue to run. No chown, elevation, other UID/process, actual multi-user attack or real WhatsApp connection was used.
-
-The first full baseline run was 154/155: the backup fixture issued a second stop in `finally` after confirmed stop while releasing its gated copy. Eight new offline children confirmed the first stop, rejection of the second during `stopping`, and normal exit. The fixture now awaits its own child's exit after confirmed stop; otherwise it still requests normal shutdown. This corrects fixture synchronization without changing production shutdown or hiding errors.
-
-Metadata reads cost O(path depth) per RPC and at Store/startup, without per-request DB reading/hashing. Affected fictional state moves from group-writable worktree ancestors to new short OS temporary directories; artifacts are retained. The Store benchmark retains source/build scratch in `.tmp` and records a separate OS temporary SQLite root as `retainedState`. Broad benchmarks, real-account data, live upgrade/backup/recovery, hardware failures, macOS and same-UID isolation were not tested or claimed.
-
-R1 independently found a creation race in candidate `d9de304b94752585f7f20ad901543e3a906de991`: an absent ancestor could appear after validation, and recursive mkdir followed it before only checking the final directory. Two new Store insertion regressions failed against that committed implementation before correction, injecting either a symlink or foreign-UID/0777 parent at mkdir. All four Store/CLI regressions also reproduce against the original helper compiled from that commit (only its errors import path is redirected to the built module). The Store opened SQLite; the CLI reached its log open (intercepted to avoid spawning a daemon in the failing probe). Component creation now validates before descending and rechecks complete ancestry. The regressions require zero SQLite/log opens, no child directory under either inserted ancestor, and unchanged existing sentinel/symlink/mode. All probes use owned fictional paths and injected metadata, without chown or an actual cross-UID attack.
-
-The same missing-path admission pattern also affected RPC: a controlled hook introduced a symlink namespace after its missing components had been skipped, and the unchanged reviewed RPC sent the fictional body to an owned fixture endpoint. A fifth regression demonstrated that before the RPC correction. RPC now requires present, trusted ancestry for admission; after any missing-path observation it checks remaining existing ancestry for unsafe paths but always returns `NOT_RUNNING`, without connecting even if an endpoint appears during inspection. A later explicit start still validates each component before use.
+[Observability](observability.md) adds opt-in technical metadata with selected HMAC digests, not original message bodies or identifiers, and makes no remote uploads. Its secret survives restarts and re-enabling, so copied digests remain linkable. Its retention limits do not apply to SQLite or `daemon.log`.

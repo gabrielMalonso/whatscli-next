@@ -21,7 +21,7 @@ Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. Keep 
 
 `help` returns the JSON command reference. You can also run `pnpm -s whatscli ...`, but use `node dist/src/cli.js ...` when another program consumes stdout.
 
-For an installation tied to a specific commit, follow the [fixed-version runbook](../operations/release.md). `pnpm verify:build` checks emitted files against the current source and compiler. It does not verify Git provenance or dependency authenticity.
+See [builds and upgrades](../operations/release.md) for build verification and installation updates. `pnpm verify:build` checks emitted files against the current source and compiler, not Git provenance or dependency authenticity.
 
 ## Choose a data directory
 

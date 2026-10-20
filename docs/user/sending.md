@@ -103,10 +103,6 @@ Recipient authorization follows the same exact observed-chat or persisted positi
 
 Sharing permissions and approved-contact decisions belong to the downstream consumer.
 
-[Checkpoint 06](../internals/validation.md#checkpoint-06--essential-flow-accepted) records one phone-confirmed card with a fictional number in an approved group, alongside offline generation tests.
-
-That evidence does not validate arbitrary card rendering or real first contact.
-
 ## Durable request keys
 
 A key identifies one immutable operation.

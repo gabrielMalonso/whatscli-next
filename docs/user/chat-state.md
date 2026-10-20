@@ -52,4 +52,4 @@ An observed state may differ from the requested state. Clearing `pending` does n
 
 The rc14 callback provides neither request correlation nor remote action time.
 
-See [confirmation limits and the finite validation procedure](../internals/read-unread.md).
+See [read/unread implementation constraints](../internals/read-unread.md).

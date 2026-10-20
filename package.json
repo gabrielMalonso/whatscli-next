@@ -18,8 +18,7 @@
     "docs/*.md",
     "docs/user/*.md",
     "docs/operations/*.md",
-    "docs/internals/*.md",
-    "docs/internals/*.json"
+    "docs/internals/*.md"
   ],
   "engines": {
     "node": ">=24.18.0 <25"

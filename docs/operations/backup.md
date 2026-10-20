@@ -1,56 +1,53 @@
-# Consistent SQLite backup and offline recovery
+# SQLite backup and offline recovery
 
-`backup --out NEW_DIRECTORY` explicitly asks the running runtime to snapshot its SQLite database. The CLI only sends a socket request; it never opens the Store. Nothing is scheduled, uploaded, downloaded, sent to WhatsApp or paired. An offline runtime stays offline. The existing manual option remains valid: stop normally, confirm the recorded PID exited, then privately copy the entire data directory, including any SQLite sidecars. Never copy a live `probe.sqlite` alone.
+`backup --out NEW_DIRECTORY` requests a SQLite snapshot from the running runtime through its existing database handle. The CLI only sends a socket request. An offline runtime remains offline; no WhatsApp operation, scheduler, or upload is involved.
 
 ## Scope
 
-| Included in `probe.sqlite`                                                                      | Outside this snapshot                                               |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| SDK-serialized credentials and key categories, including sessions and app-state keys            | Lifetime `writer-lock.sqlite` and its sidecars; control socket      |
-| Immutable intents, message IDs, routes, receipts and pending chat state                         | `daemon.log` and other logs                                         |
-| Messages, private deletion audit, tombstones and chat-delete boundaries                         | Pairing QR PNGs                                                     |
-| Chat/contact/identity evidence, search projection, events, migration markers, schema and rowids | Downloaded media, original sent files and every other external file |
+The database contains auth/Signal/app-state keys, messages, deletion audit/tombstones, immutable intents/IDs/routes/receipts, pending chat state, contact/identity/activity/search evidence, events, schema, and rowids. This data is sensitive and **not encrypted at rest**.
 
-This is **SQLite only**, not a complete copy of the data directory. The database contains sensitive credentials, message bodies, audit and intent evidence, **without encryption at rest**. Keep the entire output private and out of version control. File manifests retain the original local paths/hashes; they do not include the files. Recovery cannot recreate those external files or make media remotely available.
+The backup excludes execution locks/socket, logs, QR images, downloaded media, original sent files, and the entire observability area, preference, and secret. File manifests retain paths and hashes, not external file bytes. SQLite-only recovery into a new directory leaves observability disabled and cannot restore external files or remote media availability.
 
-The optional [observability area and persistent preference](observability.md) are also excluded, including JSONL segments, HMAC secret/configuration and temporary locks/pending configuration and bounded loss witness. Restoring only this SQLite artifact into a NEW directory leaves observability at its default off. Telemetry expiry never removes backup or operational recovery evidence.
+For a manual full-directory backup, stop the runtime normally, confirm its PID has exited, then copy the entire private directory, including sidecars. Never copy a live database file alone.
 
-## Create explicitly
-
-Use the same explicit source data directory as the running daemon. Create a new private parent first (its own parent must already exist); never repair an existing directory's permissions silently:
+## Create and verify
 
 ```sh
-umask 077
-mkdir -m 700 /absolute/private/backup-parent
-node dist/src/cli.js --data-dir /absolute/private/session backup \
+node dist/src/cli.js --data-dir /absolute/private/example-session backup \
   --out /absolute/private/backup-parent/snapshot-001
 ```
 
-The immediate parent must already be owned by the runtime user with mode 0700. Every ancestor must be a directory owned by the runtime user or root, without symlinks or group/world write permission; root-owned sticky temporary directories such as Linux `/tmp` are permitted. A foreign-owned `0755` ancestor is unsafe too: its owner can replace its children. Choose a canonical path without symlink ancestors. The requested output directory must not exist, including as a file, empty directory or dangling symlink. No existing content is overwritten. The operation creates mode 0700 output and mode 0600 files, rejecting unexpected permissions instead of changing them. These checks rely on the owning account remaining trusted; they are not isolation from another process running as that same user or root. macOS remains unvalidated.
+The output path must not exist, even as an empty directory or dangling symlink. Its existing parent must be owned/private (0700) with [trusted canonical ancestry](privacy.md). The runtime creates the output directory with 0700 permissions and files with 0600. It does not repair existing content or permissions. Only one backup can run at a time.
 
-Only one backup runs at a time; another request gets `PRECONDITION_FAILED`. SQLite uses the runtime's existing database handle and [Node 24.18's online backup API](https://github.com/nodejs/node/blob/v24.18.0/doc/api/sqlite.md#sqlitebackupsource-db-path-options), not raw file copying or manually assembled WAL/SHM. Committed mutations on that same handle may enter the snapshot while it runs; this is a consistent committed state, not a promise to capture command-start time or in-flight SDK work. See [SQLite's online backup consistency rules](https://www.sqlite.org/backup.html#file_and_database_connection_locking). The source is neither vacuumed nor checkpointed by this command. Only the artifact's journal mode is changed to DELETE, producing a standalone SQLite file without changing logical rows/rowids or schema.
+[Node's online backup API](https://github.com/nodejs/node/blob/v24.18.0/doc/api/sqlite.md#sqlitebackupsource-db-path-options) produces a consistent committed state. Commits made during copying may be included, so the result does not guarantee command-start state or capture in-flight SDK work. The source database is not vacuumed or checkpointed. The artifact alone uses DELETE journal mode, preserving logical rows, rowids, and schema.
 
-The runtime checks the artifact with `PRAGMA integrity_check`, checks schema 1, closes it, streams its bytes through SHA-256 and synchronizes the database and pending manifest before publication. It creates:
+After schema-1 and `PRAGMA integrity_check` validation, the runtime closes, hashes, and synchronizes the artifact and manifest before publishing completion.
 
-- `probe.sqlite`: the standalone database, potentially partial until publication.
-- `backup.pending.json`: safe metadata written after verification; alone it does **not** mean completion.
-- `backup.json`: atomically published last using a no-overwrite hard link to the pending metadata. Both names refer to the same manifest inode; there is no second database copy.
+| Entry                 | Meaning                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `probe.sqlite`        | Standalone database, potentially partial until completion.                                                  |
+| `backup.pending.json` | Verified metadata alone does not establish completion.                                                      |
+| `backup.json`         | Published last through an exclusive hard link to the pending manifest; both names share one manifest inode. |
 
-Full and compact responses contain the same `data`: `state: complete`, `scope: sqlite-only`, `sensitive: true`, absolute `directory`/`path`/`manifestPath`, actual artifact `bytes`/`sha256`, `schemaVersion: 1`, `integrity: ok`, `startedAt`/`verifiedAt` in local milliseconds and the excluded categories. No bodies, identities, credentials, SQL or raw SDK objects are returned. Times bound the operation; neither is an exact remote or snapshot timestamp. The response envelope's connection/recovery fields describe the responding runtime, not the snapshot's historical point. No later live counts are attributed to the backup.
+Full, compact, and JSONL output preserve `state: complete`, `scope: sqlite-only`, `sensitive: true`, absolute directory/artifact/manifest paths, bytes/SHA-256, schema 1, integrity ok, local started/verified times, and exclusions.
 
-Hash/size establish the recorded local artifact bytes, not authenticity, remote completeness, credential validity or delivery. Local history remains partial, app state unknown and receive continuity unproven. Backup does not settle an uncertain intent, cancel a pending send or authorize another attempt. Changes after the snapshot are absent, including later intents/receipts/deletions; an older snapshot cannot prove they never occurred. Before any separately authorized live recovery, reconcile that missing interval independently and preserve the newer state. Never infer permission to resend from a missing key in an older backup.
+These times bound the local backup operation, not an exact snapshot or remote event time. The response envelope's connection/recovery describes the responding runtime, not the snapshot's historical state.
 
-## Failure, timeout and interruption
+## Failures and timeouts
 
-`INVALID_ARGUMENT` covers an invalid path; `PRECONDITION_FAILED` covers unsafe/existing output or an already running backup/stopping runtime. Filesystem/copy/verification/publication failures use safe `LOCAL_STATE` text. Partial output stays in the newly reserved directory; the operation does not delete it or reuse it. A directory, database or pending manifest **without `backup.json` is incomplete**, even if SQLite can open it. Preserve it for diagnosis; choose a new output directory for another explicit attempt. A filesystem that cannot hard-link or synchronize the output fails without publishing completion.
+Existing or unsafe output, concurrent backups, and stopping state return `PRECONDITION_FAILED`. Invalid input returns `INVALID_ARGUMENT`; copy, verification, or publication failures return safe `LOCAL_STATE` errors.
 
-A transport timeout/disconnect is an unknown command outcome, not cancellation. The runtime continues its own backup and waits for it before closing SQLite or releasing the writer lock, including during stop. Inspect the requested output's `backup.json`, parse it and verify its recorded size/hash before treating the artifact as completed. Do not overwrite/retry that same directory. There is no progress/job/retry service. The completion directory entry may be lost across a crash before the filesystem persists it, conservatively leaving incomplete output; this does not claim power-loss, hardware durability or disk-health validation.
+Partial output is preserved, never reused or removed automatically. Without `backup.json`, the backup is incomplete even if SQLite can open the database. A filesystem without hard-link or synchronization support cannot publish completion.
+
+A timeout or disconnect does not cancel copying. Runtime shutdown waits for the backup before closing SQLite and releasing ownership. Inspect `backup.json` and verify the recorded bytes and hash before accepting the artifact.
+
+Preserve partial output and choose a new destination for another explicit attempt. Crash and power-loss durability have not been established; an unpersisted completion entry conservatively leaves the output incomplete.
 
 ## Recover only into a NEW directory, offline
 
-The automated recovery evidence uses fictional fixtures only. The following procedure also describes the bounded manual operation for a separately authorized recovery. Do not replace an active or existing directory, copy execution locks/sockets, start a second network connection for cloned credentials, or run an older writer against schema 1. For an actual account, first stop its original runtime normally and confirm its recorded PID exited; a missing socket or timeout alone is insufficient. Do not signal/kill it, remove locks, log out or re-pair as a recovery shortcut. Keep the original directory and backup untouched.
+For real credentials, stop the original runtime and confirm that its recorded PID has exited. Preserve the original state and backup. Do not restore over existing state, copy locks/sockets, run an older writer against schema 1, or start a second live session with cloned credentials.
 
-Select a trusted completed backup and a **nonexistent** new data directory under an already private, canonical parent. This example verifies bytes before copying and SQLite integrity on the new copy. It does not open the backup as a Store or change the original:
+Choose a completed, trusted backup and a nonexistent target under a private canonical parent. The following procedure verifies the source bytes before copying and checks integrity on the new copy without opening the original as a Store:
 
 ```sh
 umask 077
@@ -85,12 +82,14 @@ node dist/src/cli.js --data-dir "$new_data" request --key ORIGINAL_KNOWN_KEY
 node dist/src/cli.js --data-dir "$new_data" stop
 ```
 
-Stop on any failed step (`set -eu` when running as a shell program). A failed copy/check leaves only its own new directory for investigation; never reuse it. Require `data.networkEnabled: false` and `connection: offline` after every start. Compare known fixture/history/search/identity/pending/request evidence, keeping exact PN/LID identities, original message IDs/routes and uncertainty. Automated tests also reopen the recovered Store and replay existing keys offline twice, including an unavailable original file, with no validation/lookup/read-file/send attempt. There is no destructive restore command, automatic reconnection, real-account recovery validation or guarantee that old credentials remain usable.
+Stop on any failure (use `set -eu` in a shell script). A failed copy or integrity check leaves the new directory for investigation; do not reuse it.
 
-## Offline verification and cost
+After starting, require `networkEnabled: false` and an offline connection. Inspect known history, identity, pending state, and original request keys, preserving exact identities, routes, IDs, and uncertainty. There is no destructive restore command or automatic reconnection.
 
-`pnpm test` includes WAL-active commits and an atomic observation written between native backup steps, full logical schema/table/rowid comparison (including SDK binary auth and protobuf Long timestamps), artifact integrity/hash checks, NEW Store/daemon recovery and unchanged original backup bytes. It covers no-overwrite, symlinks, parent permissions, repeated explicit backups, copy/corruption/publication failures, concurrent admission and source ownership. An injected foreign-owned `0755` ancestor is rejected before destination reservation/copy; this checks the ownership boundary without chown, another account or an actual multi-user attack. A gated offline daemon demonstrates that RPC timeout and stop retain the writer lock until the backup finishes. No live account or network factory is used.
+A snapshot may predate later sends, receipts, or deletions. Missing keys in an older backup do not prove those actions never occurred or authorize resending. Reconcile the missing interval against newer evidence before separately approved live recovery. Credentials may no longer be valid.
 
-Copying is asynchronous in batches; integrity checking runs synchronously on the artifact and can delay commands/events. Hashing streams bounded chunks instead of loading the whole database. Expect roughly one database-sized write plus copy/integrity/hash reads and space for the snapshot (including SQLite free pages); there is no compression, pruning, retention change or throughput guarantee. Stop/shutdown may exceed the existing CLI wait while a large backup finishes; wait for normal completion/PID exit. Do not run repeated heavy backups speculatively.
+## Resource use
 
-A bounded Linux x64 observation on Node 24.18.0 / SQLite 3.53.1 used two new generated stores, each seeded in one transaction with fictional 64 KiB values and active WAL. One snapshot per store, including conversion/integrity/hash/publication, took **130.67 ms for 8,540,160 artifact bytes** (8 MiB seed payload) and **310.89 ms for 33,918,976 bytes** (32 MiB payload). These are n=1 observations with uncontrolled/warm OS cache, not latency distributions, event-loop stall measurements, cold-disk throughput or account-specific sizing. They do not validate disk hardware, power loss, live catch-up or macOS.
+Copying runs asynchronously in batches, while artifact integrity checking is synchronous and can delay commands and events. Allow disk space for a database-sized snapshot, including free pages. Copying, integrity checking, and hashing each read the database artifact or source. There is no compression, pruning, throughput, or power-loss durability guarantee.
+
+Large backups may exceed the CLI stop wait; allow normal completion and PID exit.

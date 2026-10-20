@@ -44,7 +44,7 @@ Reading stored message history does not mark a conversation as read.
 
 [Understanding command results](evidence.md) distinguishes command success, SDK return, acceptance, delivery, and read evidence.
 
-[JSON output](output.md) documents full and compact response shapes, stable error codes, and measured payload differences.
+[JSON output](output.md) covers full and compact response shapes, stable error codes, and compact field defaults.
 
 ## Operate the account
 

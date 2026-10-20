@@ -1,12 +1,10 @@
 # Contributing
 
-whatscli-next is a small WhatsApp CLI for agents. Keep contributions focused on that purpose. Organization policies, contact approval, scheduling, customer records, and downstream integrations belong in consumer repositories.
+Keep contributions focused on a small, single-account WhatsApp CLI for agents. Organization policies, approved-contact lists, scheduling, customer records, and downstream integrations belong in consumer repositories.
 
-## Development setup
+## Setup and checks
 
-Requires **Node.js 24.18+ (24.x)** and **pnpm 10.24.0**.
-
-From a checkout:
+Use **Node.js 24.18+ (24.x)** and **pnpm 10.24.0**:
 
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
@@ -14,30 +12,9 @@ pnpm build
 node dist/src/cli.js help
 ```
 
-Before changing the runtime, read the [architecture overview](docs/internals/overview.md) and [repository instructions](AGENTS.md). The [roadmap](docs/roadmap.md) documents delivery history and scope boundaries.
+Read the [architecture overview](docs/internals/overview.md) and [repository instructions](AGENTS.md) before changing runtime behavior.
 
-## Making a change
-
-Keep each PR focused on one problem. Include the code, relevant regression tests, and documentation needed for the change.
-
-Follow the existing TypeScript conventions and pinned Baileys API. Add abstractions or dependencies only when there is a concrete need.
-
-Preserve these core contracts:
-
-- One runtime and SQLite writer per data directory.
-- JSON responses on stdout; diagnostics on stderr.
-- Exact recipient identity.
-- Durable send intent recorded before invocation.
-- No automatic resend of uncertain operations.
-- Separate evidence for SDK return, acceptance, delivery, read, and phone confirmation.
-
-In your PR, explain the problem, what changed, which checks you ran, and what remains unverified.
-
-Do not include credentials, databases, logs, pairing images, private messages, or account identifiers in PRs. Use fictional examples and the smallest useful reproduction in bug reports.
-
-## Checks
-
-Run these checks before handing off a change:
+Before submitting a change, run:
 
 ```sh
 pnpm lint
@@ -47,40 +24,43 @@ pnpm test
 pnpm verify:build
 ```
 
-`pnpm test` builds the project before running the offline test suite. Run `verify:build` after the final build/test to catch missing, stale, or unexpected output.
+`pnpm test` builds the project before running the offline suite. Run `verify:build` after the final build/test to detect missing, stale, or unexpected output. Use `pnpm format` for mechanical formatting, and review those changes separately from behavior changes.
 
-Use `pnpm format` for mechanical formatting, and review formatting changes separately from behavior changes.
+The [CI workflow](.github/workflows/ci.yml) runs these checks without an account or secrets.
 
-The [CI workflow](.github/workflows/ci.yml) runs these checks on pull requests and pushes to `main`. It uses Ubuntu 24.04, Node.js 24.18.0, and the pnpm version specified in `packageManager`. CI runs without an account/session or repository secrets and does not upload artifacts.
+## Making a change
 
-### Testing boundaries
+Keep each PR focused on one problem, with relevant regression tests and usage documentation. Follow existing TypeScript conventions and the pinned Baileys API. Add abstractions or dependencies only when needed.
 
-Automated tests use fictional fixtures and injected I/O. They must not contact WhatsApp.
+Preserve the core contracts:
 
-Live tests require a separately agreed account and exact conversations. Do not start a second runtime against an active session directory, delete a session, or kill an unfamiliar process to make a test pass.
+- One writer per data directory.
+- Exact recipient identity.
+- Durable send intent before invocation.
+- No automatic resend of uncertain operations.
+- Separate evidence for SDK return, acceptance, delivery, read, and phone confirmation.
+- JSON responses on stdout and diagnostics on stderr.
+
+Explain the problem, resulting behavior, checks run, and anything left unverified. Follow the [independent review process](AGENTS.md#feature-delivery-and-independent-review). Do not merge or enable auto-merge without permission.
+
+## Testing and privacy
+
+Automated tests use fictional fixtures and injected I/O. They must never contact WhatsApp. Test behavior and failure boundaries rather than duplicating implementation details.
+
+Live testing requires a separately agreed account and exact conversations. Offline checks do not establish phone effects or complete remote history.
+
+Never include credentials, databases, logs, pairing images, private messages, or account identifiers in commits or bug reports. Do not start a second runtime against active state, delete sessions, or kill unfamiliar processes to make tests pass.
 
 ## Documentation
 
-Write public documentation in English and use working commands with fictional identifiers.
+Write in English, using working commands and fictional identifiers. Keep the README short and make guides discoverable through the [documentation index](docs/README.md).
 
-Keep the README short: purpose, installation, key limits, and links. Place documentation according to its audience:
+- `docs/user/`: workflows, commands, and output contracts.
+- `docs/operations/`: runtime, privacy, backup, and deployment procedures.
+- `docs/internals/`: current architecture and implementation constraints.
 
-- `docs/user/` — user workflows and command guidance.
-- `docs/operations/` — runtime and operational procedures.
-- `docs/internals/` — implementation details, design notes, and historical evidence.
+Document what helps someone use or change the project. Leave local measurements, test-session reports, and development history out of guides. State limitations without presenting individual test results as guarantees.
 
-Add new guides to the [documentation index](docs/README.md).
+Update links and package inclusion when files move.
 
-State uncertainty clearly and distinguish historical validation from current guarantees. If files move, update links and the package file allowlist. Include new guides in the formatting scripts.
-
-## Agent-assisted feature work
-
-The feature delivery process in [AGENTS.md](AGENTS.md#feature-delivery-and-independent-review) requires at least two fresh, independent review rounds.
-
-Each review must cover the committed HEAD, remain read-only, and make no live WhatsApp calls. Fix valid blocking findings and request a fresh review after implementation changes.
-
-Feature workers must not merge or enable auto-merge. The coordinator decides when the broader goals have been met.
-
-## License
-
-The project uses the [MIT license](LICENSE).
+Contributions use the project's [MIT license](LICENSE).

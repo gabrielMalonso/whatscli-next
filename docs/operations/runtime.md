@@ -161,7 +161,7 @@ Older daemons may close their control socket before cleanup finishes. During an 
 
 `start` with `alreadyRunning: true` returns the existing daemon. It does not replace or upgrade it.
 
-Compare `status.data.build.fingerprint` with the intended build. See [fixed-version installation and upgrades](release.md).
+Compare `status.data.build.fingerprint` with the intended build. See [builds and upgrades](release.md).
 
 ### Preserve session data
 

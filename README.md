@@ -48,7 +48,7 @@ Browse the [documentation index](docs/README.md) or start with:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, checks, and project scope. For implementation details, read the [architecture overview](docs/internals/overview.md). The [roadmap](docs/roadmap.md) tracks completed work and remaining limits.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, checks, and project scope. For implementation details, read the [architecture overview](docs/internals/overview.md).
 
 ## License
 

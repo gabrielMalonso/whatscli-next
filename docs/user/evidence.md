@@ -10,7 +10,7 @@ Both formats return minified JSON.
 
 Compact output uses command-specific omissions and exact-context inheritance. It does not truncate text or change pagination, evidence, errors, or exit codes.
 
-Before consuming compact history output, review its different response shape and documented optional fields in the [compact contract and reproducible token/byte benchmark](output.md).
+Before consuming compact history output, check its different response shape and optional fields in the [compact output contract](output.md).
 
 To inspect an existing intent without repeating the operation, use:
 
@@ -67,7 +67,7 @@ Repeating a send key uses the original intent without another lookup, even offli
 
 Chat snapshots contain local observations, with unknown or pending fields where appropriate.
 
-In a real test, read-state changes reached the phone without promptly updating the client. A missing client-side update therefore does not establish that the phone's state remained unchanged.
+A missing client-side update does not establish that the phone's state remained unchanged.
 
 Message output includes:
 
