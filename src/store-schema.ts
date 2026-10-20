@@ -3,7 +3,10 @@ import type { DatabaseSync } from 'node:sqlite';
 /** Additive schema: SDK bodies and private audit stay outside the narrow search table. */
 export function createSchema(db: DatabaseSync): void {
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-  if (version !== 0 && version !== 1) throw new Error('Unsupported Store schema; use a compatible version or a NEW --data-dir. Existing state was preserved.');
+  if (version !== 0 && version !== 1)
+    throw new Error(
+      'Unsupported Store schema; use a compatible version or a NEW --data-dir. Existing state was preserved.',
+    );
   db.exec(`
     PRAGMA journal_mode=WAL;
     PRAGMA synchronous=FULL;

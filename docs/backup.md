@@ -4,11 +4,11 @@
 
 ## Scope
 
-| Included in `probe.sqlite` | Outside this snapshot |
-| --- | --- |
-| SDK-serialized credentials and key categories, including sessions and app-state keys | Lifetime `writer-lock.sqlite` and its sidecars; control socket |
-| Immutable intents, message IDs, routes, receipts and pending chat state | `daemon.log` and other logs |
-| Messages, private deletion audit, tombstones and chat-delete boundaries | Pairing QR PNGs |
+| Included in `probe.sqlite`                                                                      | Outside this snapshot                                               |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| SDK-serialized credentials and key categories, including sessions and app-state keys            | Lifetime `writer-lock.sqlite` and its sidecars; control socket      |
+| Immutable intents, message IDs, routes, receipts and pending chat state                         | `daemon.log` and other logs                                         |
+| Messages, private deletion audit, tombstones and chat-delete boundaries                         | Pairing QR PNGs                                                     |
 | Chat/contact/identity evidence, search projection, events, migration markers, schema and rowids | Downloaded media, original sent files and every other external file |
 
 This is **SQLite only**, not a complete copy of the data directory. The database contains sensitive credentials, message bodies, audit and intent evidence, **without encryption at rest**. Keep the entire output private and out of version control. File manifests retain the original local paths/hashes; they do not include the files. Recovery cannot recreate those external files or make media remotely available.

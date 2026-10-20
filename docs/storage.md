@@ -62,65 +62,65 @@ Warm latency cells are **min / median / max milliseconds, n=6**. These are direc
 
 ### 22,973 messages, 726 chats, 5,000 requests
 
-| Query | Base ms | Candidate ms |
-| --- | ---: | ---: |
-| global-miss | 170.854 / 174.116 / 319.816 | 4.099 / 4.137 / 4.712 |
-| global-result | 210.951 / 211.981 / 213.931 | 0.635 / 0.712 / 2.163 |
-| unicode | 178.465 / 179.474 / 184.499 | 0.606 / 0.631 / 0.685 |
-| short-1 | 177.517 / 180.070 / 301.983 | 0.700 / 0.707 / 0.736 |
-| short-2 | 177.345 / 179.208 / 181.900 | 0.686 / 0.739 / 0.920 |
+| Query            |                     Base ms |          Candidate ms |
+| ---------------- | --------------------------: | --------------------: |
+| global-miss      | 170.854 / 174.116 / 319.816 | 4.099 / 4.137 / 4.712 |
+| global-result    | 210.951 / 211.981 / 213.931 | 0.635 / 0.712 / 2.163 |
+| unicode          | 178.465 / 179.474 / 184.499 | 0.606 / 0.631 / 0.685 |
+| short-1          | 177.517 / 180.070 / 301.983 | 0.700 / 0.707 / 0.736 |
+| short-2          | 177.345 / 179.208 / 181.900 | 0.686 / 0.739 / 0.920 |
 | excluded-context | 173.076 / 174.636 / 176.251 | 4.678 / 4.707 / 4.882 |
-| jid-miss | 38.882 / 39.509 / 40.415 | 1.324 / 1.377 / 1.428 |
-| jid-result | 43.861 / 44.826 / 45.757 | 0.590 / 0.628 / 0.680 |
-| history | 8.527 / 8.623 / 8.949 | 0.525 / 0.540 / 0.552 |
-| chats-filtered | 2.275 / 2.340 / 2.386 | 2.436 / 2.534 / 2.558 |
-| chats-unknown | 2.210 / 2.245 / 2.260 | 2.356 / 2.375 / 3.331 |
-| receipt | 21.773 / 28.667 / 76.784 | 1.856 / 1.968 / 2.056 |
+| jid-miss         |    38.882 / 39.509 / 40.415 | 1.324 / 1.377 / 1.428 |
+| jid-result       |    43.861 / 44.826 / 45.757 | 0.590 / 0.628 / 0.680 |
+| history          |       8.527 / 8.623 / 8.949 | 0.525 / 0.540 / 0.552 |
+| chats-filtered   |       2.275 / 2.340 / 2.386 | 2.436 / 2.534 / 2.558 |
+| chats-unknown    |       2.210 / 2.245 / 2.260 | 2.356 / 2.375 / 3.331 |
+| receipt          |    21.773 / 28.667 / 76.784 | 1.856 / 1.968 / 2.056 |
 
-| Resource / work | Base | Candidate |
-| --- | ---: | ---: |
-| Query process peak RSS, MiB | 477.961 | 115.164 |
-| Maximum sampled query heap, MiB | 273.955 | 28.781 |
-| Checkpointed files before mutation, MiB | 29.730 | 35.176 |
-| Checkpointed files after mutation, MiB | 29.730 | 35.176 |
-| Bulk ingest, ms (n=1) | 1323.212 | 1495.495 |
-| Store open before queries, ms (n=1) | 0.686 | 1.145 |
-| Store reopen after mutations, ms (n=1) | 0.651 | 0.733 |
-| 50 edits, ms (min/median/max, n=5) | 11.133 / 13.549 / 18.095 | 13.758 / 24.941 / 32.308 |
-| 50 deletes, ms (min/median/max, n=5) | 4.433 / 6.835 / 9.985 | 4.043 / 13.196 / 27.402 |
-| Standalone insert, ms (min/median/max, n=5) | 4.058 / 4.410 / 4.866 | 2.407 / 2.967 / 6.047 |
+| Resource / work                             |                     Base |                Candidate |
+| ------------------------------------------- | -----------------------: | -----------------------: |
+| Query process peak RSS, MiB                 |                  477.961 |                  115.164 |
+| Maximum sampled query heap, MiB             |                  273.955 |                   28.781 |
+| Checkpointed files before mutation, MiB     |                   29.730 |                   35.176 |
+| Checkpointed files after mutation, MiB      |                   29.730 |                   35.176 |
+| Bulk ingest, ms (n=1)                       |                 1323.212 |                 1495.495 |
+| Store open before queries, ms (n=1)         |                    0.686 |                    1.145 |
+| Store reopen after mutations, ms (n=1)      |                    0.651 |                    0.733 |
+| 50 edits, ms (min/median/max, n=5)          | 11.133 / 13.549 / 18.095 | 13.758 / 24.941 / 32.308 |
+| 50 deletes, ms (min/median/max, n=5)        |    4.433 / 6.835 / 9.985 |  4.043 / 13.196 / 27.402 |
+| Standalone insert, ms (min/median/max, n=5) |    4.058 / 4.410 / 4.866 |    2.407 / 2.967 / 6.047 |
 
 Candidate additive upgrade: **566.3 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 121.2 MiB. Generated mean/max message JSON: 1007.6 / 448,410 bytes.
 
 ### 68,919 messages, 726 chats, 15,000 requests
 
-| Query | Base ms | Candidate ms |
-| --- | ---: | ---: |
-| global-miss | 549.992 / 563.253 / 574.038 | 14.383 / 14.431 / 14.850 |
-| global-result | 662.561 / 670.549 / 815.317 | 0.694 / 0.737 / 2.418 |
-| unicode | 546.477 / 563.821 / 816.876 | 0.651 / 0.673 / 0.725 |
-| short-1 | 538.873 / 552.556 / 573.565 | 0.690 / 0.711 / 0.773 |
-| short-2 | 546.936 / 569.132 / 664.915 | 0.690 / 0.741 / 0.944 |
+| Query            |                     Base ms |             Candidate ms |
+| ---------------- | --------------------------: | -----------------------: |
+| global-miss      | 549.992 / 563.253 / 574.038 | 14.383 / 14.431 / 14.850 |
+| global-result    | 662.561 / 670.549 / 815.317 |    0.694 / 0.737 / 2.418 |
+| unicode          | 546.477 / 563.821 / 816.876 |    0.651 / 0.673 / 0.725 |
+| short-1          | 538.873 / 552.556 / 573.565 |    0.690 / 0.711 / 0.773 |
+| short-2          | 546.936 / 569.132 / 664.915 |    0.690 / 0.741 / 0.944 |
 | excluded-context | 550.588 / 556.454 / 564.344 | 14.889 / 15.011 / 15.322 |
-| jid-miss | 119.533 / 121.168 / 123.304 | 4.230 / 4.247 / 4.266 |
-| jid-result | 142.624 / 143.063 / 145.176 | 0.586 / 0.631 / 0.692 |
-| history | 34.720 / 35.097 / 35.637 | 0.529 / 0.538 / 0.543 |
-| chats-filtered | 2.362 / 2.465 / 2.499 | 2.544 / 2.606 / 3.723 |
-| chats-unknown | 2.212 / 2.242 / 2.312 | 2.429 / 2.444 / 3.454 |
-| receipt | 67.958 / 69.172 / 69.634 | 1.806 / 1.928 / 2.151 |
+| jid-miss         | 119.533 / 121.168 / 123.304 |    4.230 / 4.247 / 4.266 |
+| jid-result       | 142.624 / 143.063 / 145.176 |    0.586 / 0.631 / 0.692 |
+| history          |    34.720 / 35.097 / 35.637 |    0.529 / 0.538 / 0.543 |
+| chats-filtered   |       2.362 / 2.465 / 2.499 |    2.544 / 2.606 / 3.723 |
+| chats-unknown    |       2.212 / 2.242 / 2.312 |    2.429 / 2.444 / 3.454 |
+| receipt          |    67.958 / 69.172 / 69.634 |    1.806 / 1.928 / 2.151 |
 
-| Resource / work | Base | Candidate |
-| --- | ---: | ---: |
-| Query process peak RSS, MiB | 690.859 | 116.727 |
-| Maximum sampled query heap, MiB | 414.055 | 28.698 |
-| Checkpointed files before mutation, MiB | 88.203 | 104.602 |
-| Checkpointed files after mutation, MiB | 88.203 | 104.602 |
-| Bulk ingest, ms (n=1) | 3166.760 | 4286.751 |
-| Store open before queries, ms (n=1) | 0.663 | 0.771 |
-| Store reopen after mutations, ms (n=1) | 2.300 | 0.777 |
-| 50 edits, ms (min/median/max, n=5) | 10.496 / 13.219 / 18.421 | 10.385 / 14.177 / 27.642 |
-| 50 deletes, ms (min/median/max, n=5) | 4.047 / 6.358 / 9.964 | 4.707 / 7.017 / 13.128 |
-| Standalone insert, ms (min/median/max, n=5) | 3.880 / 4.208 / 6.654 | 1.813 / 2.643 / 3.061 |
+| Resource / work                             |                     Base |                Candidate |
+| ------------------------------------------- | -----------------------: | -----------------------: |
+| Query process peak RSS, MiB                 |                  690.859 |                  116.727 |
+| Maximum sampled query heap, MiB             |                  414.055 |                   28.698 |
+| Checkpointed files before mutation, MiB     |                   88.203 |                  104.602 |
+| Checkpointed files after mutation, MiB      |                   88.203 |                  104.602 |
+| Bulk ingest, ms (n=1)                       |                 3166.760 |                 4286.751 |
+| Store open before queries, ms (n=1)         |                    0.663 |                    0.771 |
+| Store reopen after mutations, ms (n=1)      |                    2.300 |                    0.777 |
+| 50 edits, ms (min/median/max, n=5)          | 10.496 / 13.219 / 18.421 | 10.385 / 14.177 / 27.642 |
+| 50 deletes, ms (min/median/max, n=5)        |    4.047 / 6.358 / 9.964 |   4.707 / 7.017 / 13.128 |
+| Standalone insert, ms (min/median/max, n=5) |    3.880 / 4.208 / 6.654 |    1.813 / 2.643 / 3.061 |
 
 Candidate additive upgrade: **1508.4 ms, n=1** on this volume's closed, generated baseline DB after mutations; peak RSS 155.5 MiB. Generated mean/max message JSON: 995.9 / 448,662 bytes.
 

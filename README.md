@@ -107,11 +107,11 @@ Filters apply **before** limit/offset. Keep filters fixed and request offsets `0
 
 Message results add these fields:
 
-| Field | Contract |
-| --- | --- |
-| `quote` | `null` without quote evidence; otherwise an exact available `reference` (`jid`, `id`, `participant`, `fromMe: null`), `source: embedded` or `null`, `state: available/unknown/deleted`, `text` and `contentType`. Missing identifiers stay null. The enclosing chat supplies the JID only when the quote has no explicit remote JID. |
-| `contacts` | `null` without card content; otherwise `source: shared-content`, `state: available/missing` and `cards`. Each card has `displayName`, vCard `name`, shared `phones` and `state: available/incomplete/missing/malformed`. |
-| `deletion` | `status: deleted/unknown`, `source: messages.delete/revoke/chat-delete-boundary/null`, and `observedAt` (local milliseconds or null). `unknown` with a null source means no deletion was observed, not proof that a message still exists remotely. |
+| Field      | Contract                                                                                                                                                                                                                                                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `quote`    | `null` without quote evidence; otherwise an exact available `reference` (`jid`, `id`, `participant`, `fromMe: null`), `source: embedded` or `null`, `state: available/unknown/deleted`, `text` and `contentType`. Missing identifiers stay null. The enclosing chat supplies the JID only when the quote has no explicit remote JID. |
+| `contacts` | `null` without card content; otherwise `source: shared-content`, `state: available/missing` and `cards`. Each card has `displayName`, vCard `name`, shared `phones` and `state: available/incomplete/missing/malformed`.                                                                                                             |
+| `deletion` | `status: deleted/unknown`, `source: messages.delete/revoke/chat-delete-boundary/null`, and `observedAt` (local milliseconds or null). `unknown` with a null source means no deletion was observed, not proof that a message still exists remotely.                                                                                   |
 
 Quotes expose only one embedded level, after the SDK's bounded wrapper normalization. They are received snapshots, not a fetch of the original or proof of its author/current content. There is no fallback lookup of a missing quoted body. A known deleted quoted target hides its embedded text/type; an incomplete reference that could match a deletion stays unknown with hidden content. Different exact chats/authors are kept separate. No display-name addressing, raw context object, thumbnails, URLs, nested quotes or cryptographic fields are returned.
 
@@ -203,14 +203,14 @@ Events are paginated by sequence (100 per request). The diagnostic `drop-connect
 
 `status` and successful daemon/probe responses add `recovery` and `receiveContinuity` to the existing envelope, identically in full and compact output. Existing `connection` retains its coarse connection status; use `recovery.state` for the current runtime decision:
 
-| `recovery.state` | Meaning and next step |
-| --- | --- |
-| `offline` | Intentionally offline; local queries work. Network access requires a normal stop and start without `--offline`. |
-| `connecting` | Initial connection, retry, or replacement/cleanup in progress; wait for its outcome. |
-| `open` | SDK reported open; inspect independent observations/receipts for receiving or delivery evidence. |
-| `waiting-retry` | One retry is scheduled at `nextRetryAt`; allow automatic recovery to proceed. |
-| `intervention-required` | Automatic recovery stopped; investigate `reason`/`code` before explicit reconnect or restart. |
-| `stopping` | Cleanup is in progress; wait for successful stop and process exit before starting new code. |
+| `recovery.state`        | Meaning and next step                                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `offline`               | Intentionally offline; local queries work. Network access requires a normal stop and start without `--offline`. |
+| `connecting`            | Initial connection, retry, or replacement/cleanup in progress; wait for its outcome.                            |
+| `open`                  | SDK reported open; inspect independent observations/receipts for receiving or delivery evidence.                |
+| `waiting-retry`         | One retry is scheduled at `nextRetryAt`; allow automatic recovery to proceed.                                   |
+| `intervention-required` | Automatic recovery stopped; investigate `reason`/`code` before explicit reconnect or restart.                   |
+| `stopping`              | Cleanup is in progress; wait for successful stop and process exit before starting new code.                     |
 
 `recovery` always includes `reason`, `code`, `attempt` and `nextRetryAt`. Unknown/inapplicable values are null. `attempt` counts automatic retries since the last open/manual reconnect: while waiting it names the upcoming retry, while connecting it names the retry being made; initial/manual attempts are zero. `nextRetryAt` is a local Unix time in milliseconds, present only while waiting. Opens reset current recovery; `issues` remains historical and may include `connection-stopped-review-required` from a prior failure.
 

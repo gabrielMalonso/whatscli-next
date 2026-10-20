@@ -69,14 +69,14 @@ Reusing the same key and arguments returns its stored result without another res
 
 Use `request --output full --key KEY` to inspect the complete public intent without repeating an operation. Full is also useful for chat metadata observation times and the original history array shape. Neither mode truncates text. Interpret a request record using separate evidence fields:
 
-| Field | Meaning |
-| --- | --- |
-| `attempt: uncertain` | Intent was persisted; the network outcome is unknown. It will not be resubmitted automatically. |
-| `attempt: sdk-returned` | Baileys returned the expected message. This alone does not establish acceptance or delivery. |
-| `acceptance: server-ack` | A matching SDK server acknowledgment was observed. |
-| `delivery: delivered` | A matching SDK delivery status was observed. |
-| `read: read` | A matching SDK read status was observed. |
-| `errorObserved: true` | An invocation error or SDK error status was observed. This does not establish nondelivery. |
+| Field                    | Meaning                                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `attempt: uncertain`     | Intent was persisted; the network outcome is unknown. It will not be resubmitted automatically. |
+| `attempt: sdk-returned`  | Baileys returned the expected message. This alone does not establish acceptance or delivery.    |
+| `acceptance: server-ack` | A matching SDK server acknowledgment was observed.                                              |
+| `delivery: delivered`    | A matching SDK delivery status was observed.                                                    |
+| `read: read`             | A matching SDK read status was observed.                                                        |
+| `errorObserved: true`    | An invocation error or SDK error status was observed. This does not establish nondelivery.      |
 
 Missing receipt evidence remains `unknown`. Group participant receipts are separate events and cannot establish every participant's outcome. Phone confirmation is independent evidence; it does not rewrite SDK-derived receipt fields.
 

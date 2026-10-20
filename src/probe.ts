@@ -13,18 +13,28 @@ process.umask(0o077);
 installConsoleDiagnostics();
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: {
-    'data-dir': { type: 'string', default: '.private/probe' },
-    connect: { type: 'boolean', default: false },
-    'test-jid': { type: 'string' },
-  } });
-  const runtime = createRuntime({
-    dataDir: values['data-dir'], connect: values.connect, requireAllowedJid: true,
-    ...(values['test-jid'] === undefined ? {} : { allowedJid: values['test-jid'] }),
+  const { values } = parseArgs({
+    options: {
+      'data-dir': { type: 'string', default: '.private/probe' },
+      connect: { type: 'boolean', default: false },
+      'test-jid': { type: 'string' },
+    },
   });
-  installConsoleDiagnostics(() => runtime.observability.record('diagnostic', { label: 'dependency' }));
+  const runtime = createRuntime({
+    dataDir: values['data-dir'],
+    connect: values.connect,
+    requireAllowedJid: true,
+    ...(values['test-jid'] === undefined
+      ? {}
+      : { allowedJid: values['test-jid'] }),
+  });
+  installConsoleDiagnostics(() =>
+    runtime.observability.record('diagnostic', { label: 'dependency' }),
+  );
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  const stopInput = (): void => { void runtime.stop().then(() => input.close()); };
+  const stopInput = (): void => {
+    void runtime.stop().then(() => input.close());
+  };
   process.once('SIGINT', stopInput);
   process.once('SIGTERM', stopInput);
   try {
@@ -38,28 +48,55 @@ async function main(): Promise<void> {
       const respond = (response: Record<string, unknown>): void => {
         const output = encode(response) + '\n';
         process.stdout.write(output);
-        if (capture) runtime.observability.record(parsed ? 'transport' : 'parser', { ...fields, durationMs: performance.now() - started,
-          requestBytes: Buffer.byteLength(line), stdoutBytes: Buffer.byteLength(output), ok: response.ok === true,
-          code: response.ok === true ? 'OK' : obsCode(response.code) }, 'probe');
+        if (capture)
+          runtime.observability.record(
+            parsed ? 'transport' : 'parser',
+            {
+              ...fields,
+              durationMs: performance.now() - started,
+              requestBytes: Buffer.byteLength(line),
+              stdoutBytes: Buffer.byteLength(output),
+              ok: response.ok === true,
+              code: response.ok === true ? 'OK' : obsCode(response.code),
+            },
+            'probe',
+          );
       };
       try {
         const request = parseRequest(line);
         parsed = true;
         id = request.id;
-        fields = { ...commandFields(runtime.observability, request.command), ...wireFields(runtime.observability, id) };
+        fields = {
+          ...commandFields(runtime.observability, request.command),
+          ...wireFields(runtime.observability, id),
+        };
         capture = request.command.command !== 'observability';
-        const data = await runtime.execute(request.command, wireFields(runtime.observability, id));
+        const data = await runtime.execute(
+          request.command,
+          wireFields(runtime.observability, id),
+        );
         respond({ id, ok: true, data, ...runtime.snapshot() });
         if (request.command.command === 'stop') break;
       } catch (error) {
-        if (error instanceof RequestError) { fields = { action: obsAction(error.action), ...wireFields(runtime.observability, error.id) }; }
-        respond({ id: error instanceof RequestError ? error.id : id, ...errorResponse(error) });
+        if (error instanceof RequestError) {
+          fields = {
+            action: obsAction(error.action),
+            ...wireFields(runtime.observability, error.id),
+          };
+        }
+        respond({
+          id: error instanceof RequestError ? error.id : id,
+          ...errorResponse(error),
+        });
       }
     }
-  } finally { input.close(); await runtime.close(); }
+  } finally {
+    input.close();
+    await runtime.close();
+  }
 }
 
-main().catch(error => {
+main().catch((error) => {
   process.stderr.write(encode(errorResponse(error)) + '\n');
   process.exitCode = 1;
 });
