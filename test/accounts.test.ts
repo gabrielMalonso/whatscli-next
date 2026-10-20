@@ -22,7 +22,10 @@ import { Store } from '../src/store.js';
 process.umask(0o077);
 
 function fixture(homeSuffix = '') {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'wa-')));
+  // macOS tmpdir() can leave too little room for the account's Unix socket.
+  const parent =
+    process.platform === 'darwin' ? realpathSync('/tmp') : tmpdir();
+  const root = realpathSync(mkdtempSync(join(parent, 'wa-')));
   const home = join(root, homeSuffix);
   const preload = join(root, 'home.mjs');
   // Inject a fictional home without changing HOME or using an existing session.
