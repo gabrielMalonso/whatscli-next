@@ -20,7 +20,7 @@ process.once('exit', () => {
   const dropped = states.reduce((sum, state) => sum + state.dropped, 0);
   // The same compiled hook also runs against the exact legacy production modules.
   // Omitted modern counters mean unsupported, never inferred zero/completeness.
-  const modern = states.every((state) => typeof state.uncertain === 'number' && state.buffer);
+  const modern = states.length > 0 && states.every((state) => typeof state.uncertain === 'number' && state.buffer);
   const capture = modern ? {
     uncertain: states.reduce((sum, state) => sum + state.uncertain, 0),
     admitted: states.reduce((sum, state) => sum + state.buffer.admitted, 0),
