@@ -11,6 +11,7 @@ Requires **Node.js 24.18+ (24.x)** and **pnpm 10.24.0**. Linux was tested; macOS
 ```sh
 pnpm install --frozen-lockfile --ignore-scripts
 pnpm build
+pnpm verify:build
 node dist/src/cli.js help
 ```
 
@@ -20,7 +21,9 @@ Command failures retain human-readable `error` and add a stable `code` where the
 
 Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. `pnpm-lock.yaml` fixes the dependency graph and integrity hashes. Installation scripts for Baileys (a Node version check) and protobufjs are disabled; the published code is used directly.
 
-For a fixed candidate, use the [source-by-commit installation and local package checks](docs/release.md), including a fresh build and a recorded startup PID. Building or calling `start` does not update an existing daemon. The [supervised pilot runbook](docs/pilot.md) requires a separately approved account and exact conversations; preparation alone does not complete roadmap 08.
+`pnpm verify:build` compares the complete `dist` file set and bytes with a fresh in-memory TypeScript emission and the expected stamp. It writes nothing; a mismatch requires preserving the candidate and using a new source/build directory. It needs source and development dependencies, and does not verify Git, dependency integrity or authenticity.
+
+For a fixed candidate, use the [source-by-commit installation and local package checks](docs/release.md), including a fresh verified build and a recorded startup PID. Building or calling `start` does not update an existing daemon. The [supervised pilot runbook](docs/pilot.md) requires a separately approved account and exact conversations; preparation alone does not complete roadmap 08.
 
 ## Start and pair
 
