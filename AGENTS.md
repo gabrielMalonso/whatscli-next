@@ -24,7 +24,7 @@
 
 The user has authorized feature implementation and independent review by agents for this project.
 
-1. Work on one scoped feature in its T3-bound worktree. Read `docs/roadmap.md`, the feature brief, and the current implementation. Preserve existing behavior and scope.
+1. Work on one scoped feature in its T3-bound worktree. Read the feature brief and current implementation, and preserve existing behavior and scope.
 2. Implement the feature, meaningful regression tests and generic usage documentation. Commit and push the branch; open a PR against this repository's `main`, and register it with `link_pull_request`.
 3. Request a fresh independent review using a new `delegate_task` for each round. Reviewers inspect the current committed HEAD and must not edit files or make live WhatsApp calls.
 4. Each review prompt must contain the original brief, base/head SHAs, the current diff scope, prior findings, fixes, unresolved objections and relevant test evidence. Do not reuse the same reviewer's context as a new independent round.
