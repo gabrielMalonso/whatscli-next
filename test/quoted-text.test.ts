@@ -179,6 +179,35 @@ test('safe text/caption snapshots exclude SDK secrets, media payloads and nested
   }
 });
 
+test('quoted snapshots retain only the text of the SDK-selected content field', async () => {
+  for (const [content, contentType, expected] of [
+    [{ imageMessage: { caption: 'Observed image caption' }, extendedTextMessage: { text: 'Other text' } }, 'imageMessage', 'Observed image caption'],
+    [{ documentMessage: { caption: 'Observed document caption' }, imageMessage: { caption: 'Other caption' } }, 'documentMessage', 'Observed document caption'],
+    [{ videoMessage: { caption: 'Observed video caption' }, extendedTextMessage: { text: 'Other text' } }, 'videoMessage', 'Observed video caption'],
+  ] as const) {
+    const f = fixture([{ ...original(), message: content }]);
+    try {
+      const result = await f.runtime.execute(command) as RequestRecord;
+      assert.equal(result.quote?.contentType, contentType);
+      assert.equal(result.quote?.text, expected);
+      assert.equal(result.attempt, 'sdk-returned');
+      const quote = f.generated[0]?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      assert.ok(quote);
+      const selected = quote[contentType];
+      assert.equal(selected?.caption, expected);
+      assert.equal(Object.keys(quote).length, 1);
+      assert.doesNotMatch(JSON.stringify([result.quote, f.sends[0]?.[2]?.quoted, quote]), /Other text|Other caption/);
+    } finally { await f.runtime.close(); }
+  }
+  // A missing selected caption must not borrow eligible text from a secondary field.
+  const f = fixture([{ ...original(), message: { imageMessage: {}, extendedTextMessage: { text: 'Other text' } } }]);
+  try {
+    await assert.rejects(f.runtime.execute(command), code('PRECONDITION_FAILED'));
+    assert.equal(f.sends.length, 0);
+    assert.equal(await f.request(), null);
+  } finally { await f.runtime.close(); }
+});
+
 test('missing, deleted, boundary, unsupported, empty and oversized targets fail before route/intent/invoke', async () => {
   const target = original({ remoteJid: pn, id: 'original', fromMe: false });
   const variants: { messages: WAMessage[]; seed?: (store: Store) => void }[] = [

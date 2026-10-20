@@ -2,7 +2,6 @@ import { getContentType, normalizeMessageContent } from 'baileys';
 import type { WAMessage } from 'baileys';
 import { CommandError } from './errors.js';
 import { contactJid, isLid, isPn } from './identity.js';
-import { messageText } from './output.js';
 import type { QuoteSelector } from './protocol.js';
 import { receiptUserJid } from './send-route.js';
 import type { Store } from './store.js';
@@ -42,13 +41,20 @@ export function prepareQuote(store: Store, jid: string, ref: QuoteSelector, self
   contactJid(author);
   const content = normalizeMessageContent(target.message);
   const contentType = getContentType(content);
-  const text = messageText(content);
-  if (!contentType || !['conversation', 'extendedTextMessage', 'imageMessage', 'videoMessage', 'documentMessage'].includes(contentType)
-    || typeof text !== 'string' || !text.length || Buffer.byteLength(text) > 65536) {
+  // rc14 selects one field. Never combine that type with another field's text/caption.
+  let text: string | null | undefined;
+  switch (contentType) {
+    case 'conversation': text = content?.conversation; break;
+    case 'extendedTextMessage': text = content?.extendedTextMessage?.text; break;
+    case 'imageMessage': text = content?.imageMessage?.caption; break;
+    case 'videoMessage': text = content?.videoMessage?.caption; break;
+    case 'documentMessage': text = content?.documentMessage?.caption; break;
+    default: throw new CommandError('PRECONDITION_FAILED', 'Quote requires stored text or an image/video/document caption up to 64 KiB');
+  }
+  if (typeof text !== 'string' || !text.length || Buffer.byteLength(text) > 65536) {
     throw new CommandError('PRECONDITION_FAILED', 'Quote requires stored text or an image/video/document caption up to 64 KiB');
   }
-  // Narrow the SDK's broad content discriminator at this validated boundary.
-  return { reference: { jid, id: ref.id, fromMe: ref.fromMe, participant }, author, contentType: contentType as QuoteContentType, text };
+  return { reference: { jid, id: ref.id, fromMe: ref.fromMe, participant }, author, contentType, text };
 }
 
 /** Reconstruct only the minimum SDK quote; cryptographic/media fields and quoted chains never enter it. */
