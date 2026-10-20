@@ -212,6 +212,9 @@ test('pending state is filtered as unknown across restart until matching fresh f
       async () => {},
     );
     store.observeChat({ id: pn, unreadCount: 2 });
+    assert.equal(store.chatView(pn)?.unread, null);
+    assert.equal(store.chatView(pn)?.pending.unread?.key, 'unread');
+    store.observeChat({ id: pn, markedAsUnread: true });
     assert.equal(store.chatView(pn)?.unread, true);
     assert.equal(store.chatView(pn)?.unreadCount, null);
     await perform(
