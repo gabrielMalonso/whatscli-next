@@ -897,7 +897,15 @@ test('disk-full injection drops safely; next successful record reports loss with
   observer.record('command', { action: 'help' });
   assert.equal(logs(directory).at(-1)?.dropped, 0);
   assert.equal(logs(directory).at(-1)?.uncertain, 1);
-  assert.equal(observer.status().degraded, false);
+  // The global write fault also left an empty witness; stream recovery does not
+  // establish that witness retention is healthy.
+  assert.equal(observer.status().components.captureDegraded, false);
+  assert.equal(observer.status().components.retentionDegraded, true);
+  assert.equal(observer.status().degraded, true);
+  assert.equal(
+    queryObservability(directory, {}).gaps.lossEvidenceUnreadable,
+    true,
+  );
   assert.doesNotMatch(raw(directory), new RegExp(canary));
 });
 
