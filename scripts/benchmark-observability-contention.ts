@@ -46,16 +46,32 @@ const expected = new Map<string, string>();
 async function command(directory: string, args: string[], compare = true) {
   const start = performance.now();
   const { stdout, stderr, firstStdoutMs } = await new Promise<{
-    stdout: string; stderr: string; firstStdoutMs: number;
+    stdout: string;
+    stderr: string;
+    firstStdoutMs: number;
   }>((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', hook, join(compiled, 'src/cli.js'), '--data-dir', directory, ...args]);
-    let stdout = '', stderr = '';
+    const child = spawn(process.execPath, [
+      '--import',
+      hook,
+      join(compiled, 'src/cli.js'),
+      '--data-dir',
+      directory,
+      ...args,
+    ]);
+    let stdout = '',
+      stderr = '';
     let firstStdoutMs: number | undefined;
-    child.stdout.on('data', (data) => { firstStdoutMs ??= performance.now() - start; stdout += String(data); });
-    child.stderr.on('data', (data) => { stderr += String(data); });
+    child.stdout.on('data', (data) => {
+      firstStdoutMs ??= performance.now() - start;
+      stdout += String(data);
+    });
+    child.stderr.on('data', (data) => {
+      stderr += String(data);
+    });
     child.once('error', reject);
     child.once('close', (code) => {
-      if (code !== 0 || firstStdoutMs === undefined) reject(new Error(`Fictional benchmark child failed: ${stderr}`));
+      if (code !== 0 || firstStdoutMs === undefined)
+        reject(new Error(`Fictional benchmark child failed: ${stderr}`));
       else resolve({ stdout, stderr, firstStdoutMs });
     });
   });
@@ -74,8 +90,14 @@ async function command(directory: string, args: string[], compare = true) {
     if (prior) assert.equal(hash, prior);
     else expected.set(key, hash);
   }
-  return { ms, firstStdoutMs, exitAfterStdoutMs: ms - firstStdoutMs,
-    bytes: Buffer.byteLength(stdout), hash, ...metrics(stderr) };
+  return {
+    ms,
+    firstStdoutMs,
+    exitAfterStdoutMs: ms - firstStdoutMs,
+    bytes: Buffer.byteLength(stdout),
+    hash,
+    ...metrics(stderr),
+  };
 }
 const scenarios = [
   {

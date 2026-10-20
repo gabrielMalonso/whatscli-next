@@ -79,7 +79,13 @@ function raw(directory: string): string {
 function scheduledChild(
   directory: string,
   entry: 'cli' | 'daemon',
-  mode: 'daemon-lock' | 'daemon-waits' | 'daemon-waits-drain' | 'daemon-recovery' | 'cli-lock' | 'rpc-waits',
+  mode:
+    | 'daemon-lock'
+    | 'daemon-waits'
+    | 'daemon-waits-drain'
+    | 'daemon-recovery'
+    | 'cli-lock'
+    | 'rpc-waits',
   args: string[],
 ) {
   const child = spawn(
@@ -184,9 +190,12 @@ for (const holdThroughClientExit of [false, true])
   test(`independent client contention recovers or proves expired loss (hold through client exit: ${holdThroughClientExit})`, async () => {
     const directory = temporary();
     configureObservability(directory, true);
-    const daemon = scheduledChild(directory, 'daemon', holdThroughClientExit ? 'daemon-waits-drain' : 'daemon-recovery', [
-      '--offline',
-    ]);
+    const daemon = scheduledChild(
+      directory,
+      'daemon',
+      holdThroughClientExit ? 'daemon-waits-drain' : 'daemon-recovery',
+      ['--offline'],
+    );
     let client: ReturnType<typeof scheduledChild> | undefined;
     let holder: ReturnType<typeof scheduledChild> | undefined;
     try {
@@ -229,10 +238,15 @@ for (const holdThroughClientExit of [false, true])
       assert.deepEqual(
         new Set(rows.map((row) => row.origin)),
         new Set(
-          holdThroughClientExit ? ['runtime'] : ['runtime', 'daemon', 'rpc', 'cli'],
+          holdThroughClientExit
+            ? ['runtime']
+            : ['runtime', 'daemon', 'rpc', 'cli'],
         ),
       );
-      assert.equal(page.gaps.lossEvidence?.origin, holdThroughClientExit ? 'daemon' : undefined);
+      assert.equal(
+        page.gaps.lossEvidence?.origin,
+        holdThroughClientExit ? 'daemon' : undefined,
+      );
       assert.equal(page.gaps.captureCompleteness, 'unknown');
       const status = await rpc(
         directory,
@@ -241,7 +255,10 @@ for (const holdThroughClientExit of [false, true])
         undefined,
         false,
       );
-      assert.equal((status.data as { dropped: number }).dropped, holdThroughClientExit ? 1 : 0);
+      assert.equal(
+        (status.data as { dropped: number }).dropped,
+        holdThroughClientExit ? 1 : 0,
+      );
       assert.doesNotMatch(raw(directory), new RegExp(canary));
     } finally {
       daemon.release.end();

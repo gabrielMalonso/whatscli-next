@@ -7,8 +7,12 @@ const [directory, mode] = process.argv.slice(2);
 if (!directory) throw new Error('Missing fictional fixture directory');
 let now = Date.now();
 let elapsed = 0;
-const observer = new Observability(directory, 'runtime', () => now,
-  mode === 'real-expired' ? undefined : () => elapsed);
+const observer = new Observability(
+  directory,
+  'runtime',
+  () => now,
+  mode === 'real-expired' ? undefined : () => elapsed,
+);
 const timestamp = new Date(now).toISOString();
 const started = performance.now();
 const identities: string[] = [];
@@ -16,7 +20,9 @@ for (let index = 0; index < (mode === 'overflow' ? 17 : 2); index++) {
   const query = (index + 1).toString(16).padStart(32, '0');
   identities.push(query);
   const fields: ObsFields & { text: string } = {
-    action: 'chats', query, text: 'FICTIONAL_BUFFER_PRIVATE_CANARY',
+    action: 'chats',
+    query,
+    text: 'FICTIONAL_BUFFER_PRIVATE_CANARY',
   };
   observer.record('execution', fields);
   fields.action = 'search';
@@ -31,8 +37,13 @@ now = mode === 'real-expired' ? Date.now() : now + 1000;
 if (mode === 'expired') elapsed = 25;
 await observer.close();
 const page = queryObservability(directory, { limit: 500 });
-process.stdout.write(JSON.stringify({
-  timestamp, identities, elapsedMs: performance.now() - started, status: observer.status(),
-  records: page.records.filter((row) => identities.includes(row.query ?? '')),
-  gaps: page.gaps,
-}) + '\n');
+process.stdout.write(
+  JSON.stringify({
+    timestamp,
+    identities,
+    elapsedMs: performance.now() - started,
+    status: observer.status(),
+    records: page.records.filter((row) => identities.includes(row.query ?? '')),
+    gaps: page.gaps,
+  }) + '\n',
+);
