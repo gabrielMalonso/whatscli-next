@@ -5,6 +5,10 @@ import { CommandError } from './errors.js';
 import { checkAncestors, checkPrivatePath, ensurePrivateDirectory, isMissing } from './private-paths.js';
 
 export const OBS_LIMITS = { days: 5, bytes: 8 * 1024 * 1024, files: 32, segment: 256 * 1024, line: 4096, sampleMs: 60_000 } as const;
+const dayMs = 86400000;
+// A segment contains one UTC day's records. Expire only after that whole day
+// leaves the query window; per-record timestamps enforce its exact five days.
+function segmentEnd(time: number): number { return (Math.floor(time / dayMs) + 1) * dayMs; }
 const segmentName = /^v1-(\d{13})-([a-f0-9-]{36})\.jsonl$/;
 const codes = ['OK', 'INVALID_ARGUMENT', 'KEY_CONFLICT', 'PRECONDITION_FAILED', 'LOCAL_STATE', 'UNKNOWN', 'NOT_RUNNING', 'TIMEOUT', 'PROTOCOL'] as const;
 const actions = ['unknown', 'help', 'start', 'status', 'stop', 'backup', 'pair', 'pair-qr', 'pair-code', 'chats', 'chat', 'messages', 'search', 'contact', 'resolve', 'group', 'send', 'send-file', 'send-contact', 'request', 'events', 'download', 'archive', 'unarchive', 'read', 'unread', 'mark-read', 'reconnect', 'resync', 'drop-connection', 'observability'] as const;
@@ -216,7 +220,7 @@ export class Observability {
         if (files.some(file => file.generation !== this.configuration.preference?.generation)) throw new Error('Unrecognized generation');
         let retained = 0;
         for (const file of files) {
-          if (file.time <= this.now() - OBS_LIMITS.days * 86400000) { unlinkSync(join(directory, file.name)); this.expired++; }
+          if (segmentEnd(file.time) <= this.now() - OBS_LIMITS.days * dayMs) { unlinkSync(join(directory, file.name)); this.expired++; }
           else retained++;
         }
         return retained > 0;
@@ -245,10 +249,10 @@ export class Observability {
           files = files.filter(item => item !== file);
         };
         if (files.some(file => file.generation !== this.configuration.preference?.generation)) throw new Error('Unrecognized segment generation');
-        for (const file of [...files]) if (file.time <= now - OBS_LIMITS.days * 86400000) { remove(file); expired++; }
+        for (const file of [...files]) if (segmentEnd(file.time) <= now - OBS_LIMITS.days * dayMs) { remove(file); expired++; }
         let last = files.at(-1);
         // Reserve a maximum line, so aggregate file/byte limits hold across short clients.
-        if (last && (last.partial || last.bytes + OBS_LIMITS.line > OBS_LIMITS.segment || last.time < now - 1800000)) last = undefined;
+        if (last && (last.partial || last.bytes + OBS_LIMITS.line > OBS_LIMITS.segment || segmentEnd(last.time) !== segmentEnd(now))) last = undefined;
         while (files.length && (files.reduce((sum, file) => sum + file.bytes, 0) + OBS_LIMITS.line > OBS_LIMITS.bytes || (!last && files.length >= OBS_LIMITS.files))) {
           const first = files[0]!; remove(first); evicted++; if (last === first) last = undefined;
         }
@@ -281,6 +285,7 @@ export function queryObservability(directory: string, query: ObsQuery) {
     || (query.origin && !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(query.origin))
     || (query.correlation && !/^[a-f0-9]{32}$/.test(query.correlation))) throw new CommandError('INVALID_ARGUMENT', 'Invalid observability filter');
   let cutoff = Date.now();
+  const retainedAfter = cutoff - OBS_LIMITS.days * dayMs;
   let position = '';
   if (query.cursor) {
     if (!/^\d{13}:v1-\d{13}-[a-f0-9-]{36}\.jsonl:\d{1,7}$/.test(query.cursor)) throw new CommandError('INVALID_ARGUMENT', 'Invalid observability cursor');
@@ -299,7 +304,7 @@ export function queryObservability(directory: string, query: ObsQuery) {
   let lastPosition = position;
   const maximumScan = 2000;
   outer: for (const file of files) {
-    if (file.time > cutoff || file.time <= Date.now() - OBS_LIMITS.days * 86400000 || (position && file.name < position.split(':')[0]!)) continue;
+    if (file.time > cutoff || segmentEnd(file.time) <= retainedAfter || (position && file.name < position.split(':')[0]!)) continue;
     let text: string;
     try { text = readPrivate(join(root, file.name), OBS_LIMITS.segment); } catch (error) { if (isMissing(error)) { missing++; continue; } invalid++; continue; }
     const lines = text.split('\n');
@@ -315,10 +320,11 @@ export function queryObservability(directory: string, query: ObsQuery) {
         const value: unknown = JSON.parse(line);
         if (!value || typeof value !== 'object') throw new Error();
         const row = value as Partial<ObsRecord>;
-        if (row.schema !== 1 || typeof row.timestamp !== 'string' || !Number.isFinite(Date.parse(row.timestamp)) || !/^[a-f0-9]{32}$/.test(row.span ?? '') || !/^[a-f0-9]{32}$/.test(row.generation ?? '') || !/^[a-f0-9]{32}$/.test(row.session ?? '')
+        const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+        if (row.schema !== 1 || typeof row.timestamp !== 'string' || !Number.isFinite(timestamp) || !/^[a-f0-9]{32}$/.test(row.span ?? '') || !/^[a-f0-9]{32}$/.test(row.generation ?? '') || !/^[a-f0-9]{32}$/.test(row.session ?? '')
           || !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(row.origin ?? '') || !['command', 'transport', 'execution', 'parser', 'lifecycle', 'diagnostic', 'sample'].includes(row.category ?? '')) throw new Error();
-        if (Date.parse(row.timestamp) > cutoff || (query.from && row.timestamp < query.from) || (query.to && row.timestamp > query.to)) continue;
-        const record: ObsRecord = { schema: 1, timestamp: new Date(Date.parse(row.timestamp)).toISOString(), origin: row.origin!, category: row.category!, span: row.span!, generation: row.generation!, session: row.session!,
+        if (timestamp <= retainedAfter || timestamp > cutoff || (query.from && row.timestamp < query.from) || (query.to && row.timestamp > query.to)) continue;
+        const record: ObsRecord = { schema: 1, timestamp: new Date(timestamp).toISOString(), origin: row.origin!, category: row.category!, span: row.span!, generation: row.generation!, session: row.session!,
           ...safeObsFields(row), dropped: safeCounter(row.dropped), evicted: safeCounter(row.evicted), expired: safeCounter(row.expired) };
         if ((query.action && record.action !== query.action) || (query.origin && record.origin !== query.origin) || (query.code && record.code !== query.code) || (query.correlation && record.correlation !== query.correlation)) continue;
         records.push(record);
@@ -338,7 +344,7 @@ export function queryObservability(directory: string, query: ObsQuery) {
     return { ...group, latencyMs: durations.length ? { n: durations.length, min: durations[0], p50: durations[Math.ceil(durations.length * 0.5) - 1], p95: durations[Math.ceil(durations.length * 0.95) - 1], max: durations.at(-1) } : null };
   });
   return { records, next, cutoff: new Date(cutoff).toISOString(), scanned, invalid, missing, summary, summaryScope: 'returned-page-only',
-    gaps: { retentionOrCapPossible: true, incompleteHeaders, cursorSegmentMissing: !!position && !files.some(file => position.startsWith(file.name + ':') && file.time > Date.now() - OBS_LIMITS.days * 86400000) },
+    gaps: { retentionOrCapPossible: true, incompleteHeaders, cursorSegmentMissing: !!position && !files.some(file => position.startsWith(file.name + ':') && segmentEnd(file.time) > retainedAfter) },
     coverage: 'best-effort-local', untrustedData: true };
 }
 function safeCounter(value: unknown): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0; }

@@ -82,23 +82,51 @@ for (const enabled of [false, true]) {
 }
 // Focused retention + sampler cost, separate from the CLI/daemon comparison above.
 const maintenance = await run(process.execPath, ['--import', metrics, '--input-type=module', '-e', String.raw`
-  import { configureObservability, Observability, queryObservability } from './dist/src/observability.js';
+  import assert from 'node:assert/strict';
+  import { configureObservability, Observability, queryObservability, OBS_LIMITS } from './dist/src/observability.js';
   import { observeProcess } from './dist/src/observability-runtime.js';
-  import { mkdirSync } from 'node:fs';
+  import { mkdirSync, readdirSync, statSync } from 'node:fs';
+  import { join } from 'node:path';
+  const day = 86400000;
   const directory = process.argv[1]; mkdirSync(directory, {mode:0o700});
   configureObservability(directory, true);
-  let now = Date.now() - 86400000;
+  let now = Math.floor(Date.now()/day)*day-day+day/2;
   const observer = new Observability(directory, 'runtime', () => now);
+  const sample = {elapsedMs:60000,cpuUserUs:0,cpuSystemUs:0,rssBytes:104857600,heapBytes:52428800,lagMs:0};
+  const volumeRoot = join(directory,'observability');
   const cpu = process.cpuUsage(); const started = performance.now();
-  for(let i=0;i<36;i++) { observer.record('command',{action:'help'}); now += 1800001; }
-  const rotationMs = performance.now()-started;
-  now += 6*86400000; const expiryStart=performance.now(); observer.maintain();
+  let writes=0; let state=observer.status();
+  while(state.evicted<4 && writes<40000) {
+    for(let i=0;i<64;i++) { observer.record('sample',sample); now++; writes++; }
+    state=observer.status();
+  }
+  const volumeMs=performance.now()-started;
+  const volumeFiles=readdirSync(volumeRoot);
+  const volumeBytes=volumeFiles.reduce((sum,name)=>sum+statSync(join(volumeRoot,name)).size,0);
+  assert.equal(volumeFiles.length,OBS_LIMITS.files); assert.ok(state.evicted>=4);
+  assert.equal(state.dropped,0); assert.ok(volumeBytes<=OBS_LIMITS.bytes);
+  const volume={writes,ms:volumeMs,files:volumeFiles.length,bytes:volumeBytes,evicted:state.evicted};
+  now += 6*day; const expiryStart=performance.now(); observer.maintain();
   const expiryMs = performance.now()-expiryStart;
+  assert.equal(readdirSync(volumeRoot).length,0);
+  const sparseDirectory=directory+'-sparse'; mkdirSync(sparseDirectory,{mode:0o700});
+  configureObservability(sparseDirectory,true);
+  let sparseTime=Date.now()-4*day;
+  const sparseObserver=new Observability(sparseDirectory,'runtime',()=>sparseTime);
+  const sparseStart=performance.now();
+  for(let i=0;i<186;i++) { sparseObserver.record('sample',sample); sparseTime+=31*60000; }
+  const sparseMs=performance.now()-sparseStart;
+  const retained=queryObservability(sparseDirectory,{limit:500}).records;
+  const sparseRoot=join(sparseDirectory,'observability'); const sparseFiles=readdirSync(sparseRoot);
+  const sparseBytes=sparseFiles.reduce((sum,name)=>sum+statSync(join(sparseRoot,name)).size,0);
+  assert.equal(retained.length,186); assert.equal(sparseObserver.status().evicted,0);
+  const sparse={writes:186,retained:retained.length,ms:sparseMs,files:sparseFiles.length,bytes:sparseBytes,
+    oldestHours:(Date.now()-Date.parse(retained[0].timestamp))/3600000,evicted:sparseObserver.status().evicted};
   now = Date.now();
   const sampler = observeProcess(observer, 10);
   await new Promise(resolve=>setTimeout(resolve,65)); sampler.stop();
   const used=process.cpuUsage(cpu);
-  process.stdout.write(JSON.stringify({rotationMs,expiryMs,userMs:used.user/1000,systemMs:used.system/1000,
+  process.stdout.write(JSON.stringify({volume,expiryMs,sparse,userMs:used.user/1000,systemMs:used.system/1000,
     rssBytes:process.memoryUsage.rss(),samples:queryObservability(directory,{}).records.filter(r=>r.category==='sample').length,
     status:observer.status()})+'\n');
 `, join(fixtureRoot, 'maintenance')]);
@@ -109,7 +137,7 @@ const report = { generatedAt: new Date().toISOString(), environment: { node: pro
     calls: 'one first + five subsequent fresh CLI processes per scenario/mode; CPU totals include Node/imports; wall includes process + socket + formatting + optional telemetry drain',
     memory: 'current RSS/heap at child exit; no resourceUsage.maxRSS, GC, cold-cache or peak claim',
     equivalence: 'SHA256 of public response excluding randomized wire id and daemon PID; status excluded due explicit observability diagnostics',
-    maintenance: 'separate fresh process, 36 rotations with fake UTC time, five-day expiry, six ~10ms sampler ticks; accelerated ticks only in benchmark, production 60s' },
+    maintenance: 'separate fresh process: real sample-shaped writes within one UTC day until four file-cap evictions (40k safety bound, counters polled every 64 writes), whole-day TTL expiry, 186 sparse samples across four days, then ~65ms of 10ms sampler ticks; production 60s' },
   rows, daemons, maintenance: { ...maintenanceResult, childMetrics: metric(maintenance.stderr) } };
 const out = process.argv[2] ?? '.tmp/observability-results.json';
 writeFileSync(out, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });

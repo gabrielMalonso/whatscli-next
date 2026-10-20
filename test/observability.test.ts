@@ -209,8 +209,16 @@ test('global file cap, TTL, rotation, partial tails and many short clients stay 
   writeFileSync(join(directory, 'probe.sqlite'), canary, { mode: 0o600 });
   let now = Date.now() - 4 * 86400000;
   const observer = new Observability(directory, 'cli', () => now);
-  for (let index = 0; index < 36; index++) { observer.record('command', { action: 'help' }); now += 1800001; }
   const root = join(directory, 'observability');
+  for (let index = 0; index < 36; index++) {
+    observer.record('command', { action: 'help' });
+    const path = join(root, readdirSync(root).sort().at(-1)!);
+    const line = readFileSync(path, 'utf8');
+    // Bulk copies of this fixture's generated JSONL create real byte pressure,
+    // independently of time rotation; leave room for the later partial-tail probe.
+    appendFileSync(path, line.repeat(Math.floor((OBS_LIMITS.segment - 64 - Buffer.byteLength(line)) / Buffer.byteLength(line))));
+    now++;
+  }
   assert.equal(readdirSync(root).length, OBS_LIMITS.files);
   assert.equal(observer.status().evicted, 4);
   const last = readdirSync(root).sort().at(-1)!;
@@ -436,9 +444,9 @@ test('query racing authorized expiry reports a missing segment without echoing o
 
 for (const existing of [false, true]) test(`query preserves prior evidence during ${existing ? 'rotation' : 'initial creation'} before the first append`, () => {
   const directory = temporary(); configureObservability(directory, true);
-  let now = Date.now() - 3600000;
+  let now = Math.floor(Date.now() / 86400000) * 86400000 - 1;
   const observer = new Observability(directory, 'cli', () => now);
-  if (existing) { observer.record('command', { action: 'help' }); now += 1800001; }
+  if (existing) { observer.record('command', { action: 'help' }); now++; }
   const open = fs.openSync;
   let concurrent: ReturnType<typeof queryObservability> | undefined;
   let queryError: unknown;
@@ -492,4 +500,76 @@ test('CLI reports short preference writes as LOCAL_STATE with exit 1 and keeps t
   assert.equal(statSync(join(directory, 'observability.pending.json')).size, 16);
   assert.equal(readObservability(directory).configured, true);
   assert.equal(existsSync(join(directory, 'probe.sqlite')), false);
+});
+
+test('four days of sparse samples remain queryable well below the byte and file caps', () => {
+  const directory = temporary(); configureObservability(directory, true);
+  let now = Date.now() - 4 * 86400000;
+  const observer = new Observability(directory, 'runtime', () => now);
+  for (let index = 0; index < 186; index++) {
+    observer.record('sample', { elapsedMs: 60000, cpuUserUs: 0, cpuSystemUs: 0, rssBytes: 104857600, heapBytes: 52428800, lagMs: 0 });
+    now += 31 * 60000;
+  }
+  assert.equal(logs(directory).length, 186);
+  assert.equal(observer.status().evicted, 0);
+  assert.equal(observer.status().expired, 0);
+  const root = join(directory, 'observability');
+  assert.ok(readdirSync(root).length <= 6);
+  assert.ok(readdirSync(root).reduce((sum, name) => sum + statSync(join(root, name)).size, 0) < OBS_LIMITS.segment);
+});
+
+test('the normal one-minute sampler retains almost five days when the volume fits', t => {
+  const directory = temporary(); configureObservability(directory, true);
+  const count = (OBS_LIMITS.days * 24 - 1) * 60;
+  let now = Date.now() - count * OBS_LIMITS.sampleMs;
+  const observer = new Observability(directory, 'runtime', () => now);
+  const scheduled: { sample?: () => void; delay?: number } = {};
+  const interval = globalThis.setInterval;
+  const schedule = t.mock.method(globalThis, 'setInterval', ((callback: () => void, delay?: number) => {
+    scheduled.sample = callback; if (delay !== undefined) scheduled.delay = delay;
+    return interval(callback, delay);
+  }) as typeof setInterval); // Capture the production callback; keep its real owned timer for normal stop.
+  const processObserver = observeProcess(observer);
+  schedule.mock.restore();
+  try {
+    assert.equal(scheduled.delay, OBS_LIMITS.sampleMs);
+    assert.ok(scheduled.sample);
+    for (let index = 0; index < count; index++) { now += OBS_LIMITS.sampleMs; scheduled.sample(); }
+    let retained = 0;
+    let cursor: string | undefined;
+    do {
+      const page = queryObservability(directory, { limit: 500, ...(cursor ? { cursor } : {}) });
+      assert.ok(page.records.every(row => row.category === 'sample' && row.rssBytes! > 0));
+      retained += page.records.length; cursor = page.next ?? undefined;
+    } while (cursor);
+    assert.equal(retained, count);
+    assert.equal(observer.status().evicted, 0);
+    const root = join(directory, 'observability');
+    assert.ok(readdirSync(root).length <= OBS_LIMITS.files);
+    assert.ok(readdirSync(root).reduce((sum, name) => sum + statSync(join(root, name)).size, 0) < OBS_LIMITS.bytes);
+  } finally { processObserver.stop(); }
+});
+
+test('per-record five-day cutoff preserves younger records until the entire UTC segment can expire', t => {
+  const day = 86400000;
+  const today = Math.floor(Date.now() / day) * day;
+  let wallTime = today + day / 2;
+  const cutoff = wallTime - OBS_LIMITS.days * day;
+  let now = cutoff - 1;
+  t.mock.method(Date, 'now', () => wallTime);
+  const directory = temporary(); configureObservability(directory, true);
+  const observer = new Observability(directory, 'cli', () => now);
+  observer.record('command', { action: 'help' });
+  now = cutoff + 1;
+  observer.record('command', { action: 'status' });
+  const root = join(directory, 'observability');
+  assert.equal(readdirSync(root).length, 1);
+  now = wallTime;
+  observer.maintain();
+  assert.deepEqual(logs(directory).map(row => row.action), ['status']);
+  assert.equal(readdirSync(root).length, 1, 'Do not expire younger records with the older first row');
+  wallTime = now = today + day;
+  observer.maintain();
+  assert.equal(readdirSync(root).length, 0);
+  assert.equal(observer.status().expired, 1);
 });
