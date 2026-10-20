@@ -54,7 +54,6 @@ async function main(): Promise<void> {
     let parsed = false;
     const respond = (value: Record<string, unknown>): void => {
       const line = JSON.stringify(value) + '\n';
-      if (!client.destroyed) client.end(line);
       if (capture)
         runtime.observability.record(
           parsed ? 'transport' : 'parser',
@@ -68,6 +67,9 @@ async function main(): Promise<void> {
           },
           'daemon',
         );
+      // Complete the synchronous append before waking this request's short client.
+      // Other clients can still contend; slow filesystems add response latency.
+      if (!client.destroyed) client.end(line);
     };
     client.on('data', (chunk) => {
       buffer += chunk;
