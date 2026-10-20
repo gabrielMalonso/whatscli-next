@@ -33,7 +33,7 @@ const { values } = parseArgs({ options: { output: { type: 'string' } } });
 const root = process.cwd();
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
 const scratch = mkdtempSync(join(root, '.tmp', 'cli-bench-'));
-// Unix socket paths must also work in long T3 worktree paths. Retain this fictional directory.
+// Use a separate temporary directory to keep Unix socket paths short, even with a long source path. Retain this fictional directory.
 const directory = mkdtempSync(join(tmpdir(), 'wcn-cli-bench-'));
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 function distribution(values: number[]) {

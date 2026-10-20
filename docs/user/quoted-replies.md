@@ -49,8 +49,6 @@ An existing key is checked before quote, credential, chat or route lookups. Exac
 
 Malformed selectors yield `INVALID_ARGUMENT`. Missing/deleted/ambiguous/unsupported targets and unsupported author/route cases yield `PRECONDITION_FAILED`. Intent/completion transaction failures retain `LOCAL_STATE`; SDK failures retain the existing uncertain intent. The public error boundary excludes SDK/SQL snippets and private paths. Existing attempt, acceptance, delivery and read evidence remains separate, and sending does not optimistically update observed chat state.
 
-## Offline verification boundary
+## Limits
 
-`test/quoted-text.test.ts` uses fictional private state, injected I/O, actual rc14 `generateWAMessage` and a protobuf encode/decode round trip. It covers exact direct/group authors and directions, safe captions, collisions, unsupported targets, PN/LID refusal, mutation during route preparation, same-key concurrency/conflicts, replay/restart, deletion visibility, search exclusion, receipt ordering, transaction failures and CLI/socket/JSONL projections/errors. No real socket factory, account or WhatsApp call is used.
-
-This proves local intent handling and SDK generation for the supported cases. It does not verify phone rendering, delivery/read/phone effect, receiving/decryption/catch-up, production operation or macOS. Historical checkpoints 06/08 do not validate this feature. Observations remain local/partial, app state unknown and receive continuity unproven.
+Phone rendering and live delivery of quoted replies remain unverified. Local validation and SDK generation do not establish a remote effect. Inspect the original key, and evaluate acceptance, delivery, and read evidence separately.
