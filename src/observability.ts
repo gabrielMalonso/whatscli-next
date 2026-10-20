@@ -95,7 +95,7 @@ export function configureObservability(directory: string, enabled: boolean): voi
 }
 
 type Segment = { name: string; time: number; bytes: number; generation: string; partial: boolean };
-function segments(directory: string, onMissing?: () => void): Segment[] {
+function segments(directory: string, onMissing?: () => void, onIncomplete?: () => void): Segment[] {
   safeDirectory(directory);
   const entries: string[] = [];
   const dir = opendirSync(directory);
@@ -116,7 +116,12 @@ function segments(directory: string, onMissing?: () => void): Segment[] {
         const head = Buffer.alloc(OBS_LIMITS.line);
         const count = readSync(fd, head, 0, head.length, 0);
         const end = head.subarray(0, count).indexOf(10);
-        if (end < 0) throw new Error('Unrecognized segment header');
+        if (end < 0) {
+          // Readers can race creation before the first append. Preserve the entry and
+          // report a gap; collectors still require a complete recognized header.
+          if (onIncomplete) { onIncomplete(); return []; }
+          throw new Error('Unrecognized segment header');
+        }
         const first: unknown = JSON.parse(head.subarray(0, end).toString('utf8'));
         if (!first || typeof first !== 'object' || !('schema' in first) || first.schema !== 1
           || !('generation' in first) || typeof first.generation !== 'string' || !/^[a-f0-9]{32}$/.test(first.generation)) throw new Error('Unrecognized segment header');
@@ -281,7 +286,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
   const root = join(directory, 'observability');
   let files: Segment[];
   let missing = 0;
-  try { files = segments(root, () => { missing++; }); } catch (error) { if (isMissing(error)) files = []; else throw new CommandError('LOCAL_STATE', 'Observability area cannot be safely read; entries preserved'); }
+  let incompleteHeaders = 0;
+  try { files = segments(root, () => { missing++; }, () => { incompleteHeaders++; }); } catch (error) { if (isMissing(error)) files = []; else throw new CommandError('LOCAL_STATE', 'Observability area cannot be safely read; entries preserved'); }
   const records: ObsRecord[] = [];
   let invalid = 0;
   let scanned = 0;
@@ -328,7 +334,7 @@ export function queryObservability(directory: string, query: ObsQuery) {
     return { ...group, latencyMs: durations.length ? { n: durations.length, min: durations[0], p50: durations[Math.ceil(durations.length * 0.5) - 1], p95: durations[Math.ceil(durations.length * 0.95) - 1], max: durations.at(-1) } : null };
   });
   return { records, next, cutoff: new Date(cutoff).toISOString(), scanned, invalid, missing, summary, summaryScope: 'returned-page-only',
-    gaps: { retentionOrCapPossible: true, cursorSegmentMissing: !!position && !files.some(file => position.startsWith(file.name + ':') && file.time > Date.now() - OBS_LIMITS.days * 86400000) },
+    gaps: { retentionOrCapPossible: true, incompleteHeaders, cursorSegmentMissing: !!position && !files.some(file => position.startsWith(file.name + ':') && file.time > Date.now() - OBS_LIMITS.days * 86400000) },
     coverage: 'best-effort-local', untrustedData: true };
 }
 function safeCounter(value: unknown): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0; }

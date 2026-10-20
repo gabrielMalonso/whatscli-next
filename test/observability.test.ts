@@ -433,3 +433,31 @@ test('query racing authorized expiry reports a missing segment without echoing o
     assert.equal(page.missing, 1); assert.deepEqual(page.records, []);
   } finally { Object.defineProperty(fs, 'lstatSync', { value: inspect }); syncBuiltinESMExports(); }
 });
+
+for (const existing of [false, true]) test(`query preserves prior evidence during ${existing ? 'rotation' : 'initial creation'} before the first append`, () => {
+  const directory = temporary(); configureObservability(directory, true);
+  let now = Date.now() - 3600000;
+  const observer = new Observability(directory, 'cli', () => now);
+  if (existing) { observer.record('command', { action: 'help' }); now += 1800001; }
+  const open = fs.openSync;
+  let concurrent: ReturnType<typeof queryObservability> | undefined;
+  let queryError: unknown;
+  let intercepted = false;
+  const replacement: typeof fs.openSync = (path, flags, mode) => {
+    const fd = open(path, flags, mode);
+    if (!intercepted && String(path).endsWith('.jsonl') && typeof flags === 'number' && (flags & fs.constants.O_CREAT)) {
+      intercepted = true;
+      try { concurrent = queryObservability(directory, {}); } catch (error) { queryError = error; }
+    }
+    return fd;
+  };
+  fs.openSync = replacement; syncBuiltinESMExports();
+  try { observer.record('command', { action: 'status' }); }
+  finally { fs.openSync = open; syncBuiltinESMExports(); }
+  assert.equal(intercepted, true);
+  assert.equal(queryError, undefined);
+  assert.equal(concurrent?.records.length, existing ? 1 : 0);
+  assert.equal(concurrent && 'incompleteHeaders' in concurrent.gaps ? concurrent.gaps.incompleteHeaders : undefined, 1);
+  assert.equal(logs(directory).length, existing ? 2 : 1);
+  assert.equal(observer.status().degraded, false);
+});
