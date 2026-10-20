@@ -13,7 +13,7 @@
 
 ## Verification and private state
 
-- Run `pnpm install --frozen-lockfile --ignore-scripts` when dependencies are missing, `pnpm test` for meaningful behavior checks, and `pnpm check` for types.
+- Run `pnpm install --frozen-lockfile --ignore-scripts` when dependencies are missing, `pnpm lint` and `pnpm format:check` for code quality, `pnpm check` for types, and `pnpm test` for meaningful behavior checks. Run `pnpm verify:build` after the final build/test. Use `pnpm format` for mechanical formatting; keep formatting separate from behavioral changes.
 - Automated tests must use fictional fixtures and injected I/O. They must not depend on real WhatsApp.
 - Live tests require an explicitly agreed account and exact conversation. Do not send to other contacts or operate a downstream production account without that agreement.
 - Do not copy credentials, private databases, messages, logs or pairing images into worktrees or commits. `.private/`, `.tmp/`, `node_modules/` and `dist/` remain local and ignored.

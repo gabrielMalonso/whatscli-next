@@ -259,9 +259,14 @@ Credentials and messages are **not encrypted at rest**. Keep the entire director
 ## Verification and limits
 
 ```sh
-pnpm test
+pnpm lint
+pnpm format:check
 pnpm check
+pnpm test
+pnpm verify:build
 ```
+
+`pnpm format` applies Prettier to TypeScript sources/tests/scripts, the listed root configuration files and Markdown documentation. ESLint uses the recommended JavaScript/TypeScript checks plus strict equality (allowing `== null`), without type-aware or formatting rules; `pnpm check` remains the TypeScript check. Both tools are development dependencies only. Private/generated state and historical `docs/*-results.json` measurements are excluded. Embedded code blocks and template payloads are left to their authors (`embeddedLanguageFormatting: off`); review literals and fixtures when formatting.
 
 Automated tests use fictional fixtures, offline daemons, local Unix sockets, and injected I/O failures; they never connect to real WhatsApp. See [the validation report](docs/validation.md) for real-account evidence and [the agent quick reference](docs/agents.md) for a compact workflow.
 
