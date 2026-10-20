@@ -1969,6 +1969,1027 @@
       ],
       "label": "integrated-candidate",
       "source": "1bd220de90f7c0c49fe90f9cbf03949171ffe9bc"
+    },
+    {
+      "generatedAt": "2026-10-20T17:42:10.123Z",
+      "node": "v24.18.0",
+      "method": "OFF then ON per scenario; four sequential uncertain replays / four batches of four concurrent search clients; 30 fictional 2KB messages; fresh offline daemon each row; current exit RSS, CPU includes Node startup; hashes exclude random wire id/PID; no peak claim; uncontrolled OS cache/scheduling; artifacts retained",
+      "rows": [
+        {
+          "enabled": false,
+          "scenario": "sequential-replay",
+          "width": 1,
+          "batches": 4,
+          "elapsedIncludingStopMs": 926.6775919999999,
+          "samples": [
+            {
+              "ms": 161.83836999999994,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 139.83,
+              "systemMs": 23.475,
+              "rssBytes": 54579200,
+              "dropped": 0
+            },
+            {
+              "ms": 173.19876999999997,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 148.952,
+              "systemMs": 24.992,
+              "rssBytes": 53919744,
+              "dropped": 0
+            },
+            {
+              "ms": 154.3714500000001,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 124.557,
+              "systemMs": 30.628,
+              "rssBytes": 54026240,
+              "dropped": 0
+            },
+            {
+              "ms": 152.66744599999993,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 129.289,
+              "systemMs": 27.272,
+              "rssBytes": 55037952,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 401.2,
+            "systemMs": 68.051,
+            "rssBytes": 113254400,
+            "dropped": 0
+          },
+          "telemetryFiles": 0,
+          "telemetryBytes": 0,
+          "retainedRows": 0,
+          "queryGaps": {
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": false,
+          "scenario": "concurrent-search",
+          "width": 4,
+          "batches": 4,
+          "elapsedIncludingStopMs": 951.896123,
+          "samples": [
+            {
+              "ms": 165.12032799999997,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 125.3,
+              "systemMs": 32.816,
+              "rssBytes": 54550528,
+              "dropped": 0
+            },
+            {
+              "ms": 163.83723899999995,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 136.047,
+              "systemMs": 29.791,
+              "rssBytes": 54501376,
+              "dropped": 0
+            },
+            {
+              "ms": 173.39209500000015,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 145.699,
+              "systemMs": 26.125,
+              "rssBytes": 54251520,
+              "dropped": 0
+            },
+            {
+              "ms": 159.0894760000001,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 131.023,
+              "systemMs": 28.887,
+              "rssBytes": 54362112,
+              "dropped": 0
+            },
+            {
+              "ms": 135.95130900000004,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 117.132,
+              "systemMs": 21.389,
+              "rssBytes": 54140928,
+              "dropped": 0
+            },
+            {
+              "ms": 155.5971969999996,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 125.224,
+              "systemMs": 25.246,
+              "rssBytes": 54714368,
+              "dropped": 0
+            },
+            {
+              "ms": 146.12839699999995,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 116.879,
+              "systemMs": 26.197,
+              "rssBytes": 54841344,
+              "dropped": 0
+            },
+            {
+              "ms": 129.85549400000036,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 107.654,
+              "systemMs": 21.929,
+              "rssBytes": 54816768,
+              "dropped": 0
+            },
+            {
+              "ms": 146.26112700000022,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 126.308,
+              "systemMs": 19.833,
+              "rssBytes": 54591488,
+              "dropped": 0
+            },
+            {
+              "ms": 149.23578199999974,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 130.179,
+              "systemMs": 19.946,
+              "rssBytes": 54398976,
+              "dropped": 0
+            },
+            {
+              "ms": 148.67623700000013,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 123.06,
+              "systemMs": 23.586,
+              "rssBytes": 54677504,
+              "dropped": 0
+            },
+            {
+              "ms": 140.4577479999998,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 116.893,
+              "systemMs": 25.976,
+              "rssBytes": 54370304,
+              "dropped": 0
+            },
+            {
+              "ms": 153.0240200000003,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 120.825,
+              "systemMs": 33.79,
+              "rssBytes": 54513664,
+              "dropped": 0
+            },
+            {
+              "ms": 155.66077499999983,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 123.145,
+              "systemMs": 33.229,
+              "rssBytes": 54747136,
+              "dropped": 0
+            },
+            {
+              "ms": 156.11018999999987,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 129.626,
+              "systemMs": 29.14,
+              "rssBytes": 54595584,
+              "dropped": 0
+            },
+            {
+              "ms": 146.98401700000022,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 120.996,
+              "systemMs": 28.469,
+              "rssBytes": 54439936,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 397.008,
+            "systemMs": 64.857,
+            "rssBytes": 114839552,
+            "dropped": 0
+          },
+          "telemetryFiles": 0,
+          "telemetryBytes": 0,
+          "retainedRows": 0,
+          "queryGaps": {
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": true,
+          "scenario": "sequential-replay",
+          "width": 1,
+          "batches": 4,
+          "elapsedIncludingStopMs": 979.1724709999999,
+          "samples": [
+            {
+              "ms": 177.133781,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 147.31,
+              "systemMs": 28.291,
+              "rssBytes": 55394304,
+              "dropped": 0
+            },
+            {
+              "ms": 184.1900080000005,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 155.06,
+              "systemMs": 30.604,
+              "rssBytes": 55427072,
+              "dropped": 0
+            },
+            {
+              "ms": 156.75667199999953,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 132.426,
+              "systemMs": 29.541,
+              "rssBytes": 56041472,
+              "dropped": 0
+            },
+            {
+              "ms": 163.45318299999963,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 148.164,
+              "systemMs": 19.15,
+              "rssBytes": 55910400,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 345.78,
+            "systemMs": 60.731,
+            "rssBytes": 114601984,
+            "dropped": 1
+          },
+          "telemetryFiles": 1,
+          "telemetryBytes": 16326,
+          "retainedRows": 27,
+          "queryGaps": {
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": true,
+          "scenario": "concurrent-search",
+          "width": 4,
+          "batches": 4,
+          "elapsedIncludingStopMs": 895.6844369999999,
+          "samples": [
+            {
+              "ms": 165.65153199999986,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 132.168,
+              "systemMs": 29.036,
+              "rssBytes": 55193600,
+              "dropped": 1
+            },
+            {
+              "ms": 157.8072660000007,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 136.239,
+              "systemMs": 25.229,
+              "rssBytes": 54460416,
+              "dropped": 2
+            },
+            {
+              "ms": 149.40092399999958,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 125.207,
+              "systemMs": 24.834,
+              "rssBytes": 55394304,
+              "dropped": 1
+            },
+            {
+              "ms": 156.54788800000006,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 134.93,
+              "systemMs": 23.159,
+              "rssBytes": 55828480,
+              "dropped": 0
+            },
+            {
+              "ms": 142.79228700000021,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 108.958,
+              "systemMs": 34.986,
+              "rssBytes": 55226368,
+              "dropped": 1
+            },
+            {
+              "ms": 154.39402700000028,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 120.907,
+              "systemMs": 25.188,
+              "rssBytes": 55783424,
+              "dropped": 0
+            },
+            {
+              "ms": 136.4256230000001,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 101.816,
+              "systemMs": 36.291,
+              "rssBytes": 55963648,
+              "dropped": 0
+            },
+            {
+              "ms": 137.7458340000003,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 110.952,
+              "systemMs": 22.19,
+              "rssBytes": 56160256,
+              "dropped": 1
+            },
+            {
+              "ms": 164.4015099999997,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 129.72,
+              "systemMs": 36.201,
+              "rssBytes": 55095296,
+              "dropped": 0
+            },
+            {
+              "ms": 152.64736999999968,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 129.312,
+              "systemMs": 24.246,
+              "rssBytes": 56078336,
+              "dropped": 1
+            },
+            {
+              "ms": 153.4126550000001,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 119.524,
+              "systemMs": 27.82,
+              "rssBytes": 54624256,
+              "dropped": 2
+            },
+            {
+              "ms": 150.60088200000064,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 131.576,
+              "systemMs": 22.096,
+              "rssBytes": 55762944,
+              "dropped": 0
+            },
+            {
+              "ms": 163.00421300000016,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 143.95,
+              "systemMs": 27.179,
+              "rssBytes": 54960128,
+              "dropped": 0
+            },
+            {
+              "ms": 153.07844300000033,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 123.55,
+              "systemMs": 32.88,
+              "rssBytes": 55377920,
+              "dropped": 1
+            },
+            {
+              "ms": 148.7550540000002,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 124.147,
+              "systemMs": 26.03,
+              "rssBytes": 54857728,
+              "dropped": 2
+            },
+            {
+              "ms": 147.83712800000012,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 123.878,
+              "systemMs": 24.775,
+              "rssBytes": 55480320,
+              "dropped": 1
+            }
+          ],
+          "daemon": {
+            "userMs": 601.479,
+            "systemMs": 84.347,
+            "rssBytes": 115150848,
+            "dropped": 22
+          },
+          "telemetryFiles": 1,
+          "telemetryBytes": 21853,
+          "retainedRows": 41,
+          "queryGaps": {
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        }
+      ],
+      "label": "final-main-add-reference",
+      "source": "add294a5895081544adea0dd55495cda42afb697"
+    },
+    {
+      "generatedAt": "2026-10-20T17:42:30.425Z",
+      "node": "v24.18.0",
+      "method": "OFF then ON per scenario; four sequential uncertain replays / four batches of four concurrent search clients; 30 fictional 2KB messages; fresh offline daemon each row; current exit RSS, CPU includes Node startup; hashes exclude random wire id/PID; no peak claim; uncontrolled OS cache/scheduling; artifacts retained",
+      "rows": [
+        {
+          "enabled": false,
+          "scenario": "sequential-replay",
+          "width": 1,
+          "batches": 4,
+          "elapsedIncludingStopMs": 861.1192429999999,
+          "samples": [
+            {
+              "ms": 125.91111599999999,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 107.19,
+              "systemMs": 23.258,
+              "rssBytes": 54370304,
+              "dropped": 0
+            },
+            {
+              "ms": 160.48260900000014,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 142.828,
+              "systemMs": 21.821,
+              "rssBytes": 53989376,
+              "dropped": 0
+            },
+            {
+              "ms": 148.1735880000001,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 130.55,
+              "systemMs": 23.458,
+              "rssBytes": 54784000,
+              "dropped": 0
+            },
+            {
+              "ms": 165.94831799999997,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 145.363,
+              "systemMs": 24.89,
+              "rssBytes": 54206464,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 401.868,
+            "systemMs": 61.068,
+            "rssBytes": 114253824,
+            "dropped": 0
+          },
+          "telemetryFiles": 0,
+          "telemetryBytes": 0,
+          "retainedRows": 0,
+          "queryGaps": {
+            "captureCompleteness": "unknown",
+            "lossEvidence": null,
+            "lossEvidenceScope": "retained-data-directory",
+            "lossEvidenceUnreadable": false,
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": false,
+          "scenario": "concurrent-search",
+          "width": 4,
+          "batches": 4,
+          "elapsedIncludingStopMs": 860.4309189999999,
+          "samples": [
+            {
+              "ms": 160.27352500000006,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 136.288,
+              "systemMs": 19.751,
+              "rssBytes": 54337536,
+              "dropped": 0
+            },
+            {
+              "ms": 159.35471499999994,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 139.081,
+              "systemMs": 22.498,
+              "rssBytes": 54771712,
+              "dropped": 0
+            },
+            {
+              "ms": 152.11428699999988,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 132.938,
+              "systemMs": 20.142,
+              "rssBytes": 54525952,
+              "dropped": 0
+            },
+            {
+              "ms": 155.2489300000002,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 135.575,
+              "systemMs": 21.246,
+              "rssBytes": 54861824,
+              "dropped": 0
+            },
+            {
+              "ms": 118.91620899999998,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 98.264,
+              "systemMs": 25.067,
+              "rssBytes": 54337536,
+              "dropped": 0
+            },
+            {
+              "ms": 117.13814699999966,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 99.802,
+              "systemMs": 21.606,
+              "rssBytes": 54386688,
+              "dropped": 0
+            },
+            {
+              "ms": 116.45629999999983,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 99.925,
+              "systemMs": 17.986,
+              "rssBytes": 54693888,
+              "dropped": 0
+            },
+            {
+              "ms": 107.2975419999998,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 92.143,
+              "systemMs": 19.029,
+              "rssBytes": 55066624,
+              "dropped": 0
+            },
+            {
+              "ms": 122.22739600000023,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 103.313,
+              "systemMs": 21.646,
+              "rssBytes": 54575104,
+              "dropped": 0
+            },
+            {
+              "ms": 123.91879900000004,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 104.676,
+              "systemMs": 23.837,
+              "rssBytes": 54366208,
+              "dropped": 0
+            },
+            {
+              "ms": 122.82084099999975,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 96.879,
+              "systemMs": 26.966,
+              "rssBytes": 54333440,
+              "dropped": 0
+            },
+            {
+              "ms": 121.0228530000004,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 102.656,
+              "systemMs": 20.738,
+              "rssBytes": 54824960,
+              "dropped": 0
+            },
+            {
+              "ms": 140.4502550000002,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 117.41,
+              "systemMs": 28.586,
+              "rssBytes": 54059008,
+              "dropped": 0
+            },
+            {
+              "ms": 139.6523259999999,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 128.074,
+              "systemMs": 15.368,
+              "rssBytes": 54001664,
+              "dropped": 0
+            },
+            {
+              "ms": 135.83035199999995,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 109.403,
+              "systemMs": 30.963,
+              "rssBytes": 54296576,
+              "dropped": 0
+            },
+            {
+              "ms": 148.22890199999983,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 119.251,
+              "systemMs": 26.391,
+              "rssBytes": 54472704,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 376.994,
+            "systemMs": 71.056,
+            "rssBytes": 114802688,
+            "dropped": 0
+          },
+          "telemetryFiles": 0,
+          "telemetryBytes": 0,
+          "retainedRows": 0,
+          "queryGaps": {
+            "captureCompleteness": "unknown",
+            "lossEvidence": null,
+            "lossEvidenceScope": "retained-data-directory",
+            "lossEvidenceUnreadable": false,
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": true,
+          "scenario": "sequential-replay",
+          "width": 1,
+          "batches": 4,
+          "elapsedIncludingStopMs": 908.5222880000001,
+          "samples": [
+            {
+              "ms": 172.98515099999986,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 146.505,
+              "systemMs": 25.086,
+              "rssBytes": 55189504,
+              "dropped": 0
+            },
+            {
+              "ms": 174.60402800000065,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 147.494,
+              "systemMs": 27.655,
+              "rssBytes": 55222272,
+              "dropped": 0
+            },
+            {
+              "ms": 149.5678399999997,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 126.097,
+              "systemMs": 23.829,
+              "rssBytes": 55037952,
+              "dropped": 0
+            },
+            {
+              "ms": 156.8507300000001,
+              "bytes": 645,
+              "hash": "ff6f2f723e40043b2ae023b0cf42000b69210b91c9337c437b772c0a64613bde",
+              "userMs": 131.311,
+              "systemMs": 29.619,
+              "rssBytes": 55799808,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 393.102,
+            "systemMs": 65.344,
+            "rssBytes": 114089984,
+            "dropped": 1
+          },
+          "telemetryFiles": 2,
+          "telemetryBytes": 16473,
+          "retainedRows": 27,
+          "queryGaps": {
+            "captureCompleteness": "unknown",
+            "lossEvidence": {
+              "schema": 1,
+              "kind": "capture-loss",
+              "timestamp": "2026-10-20T17:42:28.899Z",
+              "generation": "d167cbfecb3dae88ba482228f0c88851",
+              "origin": "runtime"
+            },
+            "lossEvidenceScope": "retained-data-directory",
+            "lossEvidenceUnreadable": false,
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        },
+        {
+          "enabled": true,
+          "scenario": "concurrent-search",
+          "width": 4,
+          "batches": 4,
+          "elapsedIncludingStopMs": 832.6247279999998,
+          "samples": [
+            {
+              "ms": 146.3846539999995,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 115.041,
+              "systemMs": 23.801,
+              "rssBytes": 55701504,
+              "dropped": 1
+            },
+            {
+              "ms": 135.1403309999996,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 103.199,
+              "systemMs": 26.305,
+              "rssBytes": 55676928,
+              "dropped": 1
+            },
+            {
+              "ms": 151.25385199999982,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 115.826,
+              "systemMs": 24.749,
+              "rssBytes": 55394304,
+              "dropped": 1
+            },
+            {
+              "ms": 147.54212499999994,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 106.034,
+              "systemMs": 27.008,
+              "rssBytes": 56053760,
+              "dropped": 2
+            },
+            {
+              "ms": 121.30621299999984,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 101.384,
+              "systemMs": 24.849,
+              "rssBytes": 55746560,
+              "dropped": 1
+            },
+            {
+              "ms": 121.09052599999995,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 101.956,
+              "systemMs": 21.777,
+              "rssBytes": 55824384,
+              "dropped": 1
+            },
+            {
+              "ms": 111.60215100000005,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 93.924,
+              "systemMs": 20.642,
+              "rssBytes": 55668736,
+              "dropped": 2
+            },
+            {
+              "ms": 115.32652299999972,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 82.95,
+              "systemMs": 29.625,
+              "rssBytes": 55529472,
+              "dropped": 1
+            },
+            {
+              "ms": 140.41181499999948,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 112.981,
+              "systemMs": 25.767,
+              "rssBytes": 55865344,
+              "dropped": 1
+            },
+            {
+              "ms": 127.60474000000067,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 107.382,
+              "systemMs": 25.021,
+              "rssBytes": 55439360,
+              "dropped": 0
+            },
+            {
+              "ms": 125.9076100000002,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 97.908,
+              "systemMs": 28.262,
+              "rssBytes": 56352768,
+              "dropped": 2
+            },
+            {
+              "ms": 120.0427609999997,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 96.922,
+              "systemMs": 25.24,
+              "rssBytes": 56057856,
+              "dropped": 1
+            },
+            {
+              "ms": 108.00097199999982,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 87.162,
+              "systemMs": 23.585,
+              "rssBytes": 55975936,
+              "dropped": 0
+            },
+            {
+              "ms": 106.91471300000012,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 87.701,
+              "systemMs": 19.603,
+              "rssBytes": 56037376,
+              "dropped": 1
+            },
+            {
+              "ms": 107.20763299999999,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 81.672,
+              "systemMs": 25.129,
+              "rssBytes": 55685120,
+              "dropped": 1
+            },
+            {
+              "ms": 110.62880499999937,
+              "bytes": 23107,
+              "hash": "c3d34c1217fc17d2671fa75342cf898af17ff2b7973f65310b69427f8fd2b838",
+              "userMs": 90.391,
+              "systemMs": 16.623,
+              "rssBytes": 55918592,
+              "dropped": 0
+            }
+          ],
+          "daemon": {
+            "userMs": 448.744,
+            "systemMs": 67.065,
+            "rssBytes": 114814976,
+            "dropped": 15
+          },
+          "telemetryFiles": 2,
+          "telemetryBytes": 24030,
+          "retainedRows": 44,
+          "queryGaps": {
+            "captureCompleteness": "unknown",
+            "lossEvidence": {
+              "schema": 1,
+              "kind": "capture-loss",
+              "timestamp": "2026-10-20T17:42:29.714Z",
+              "generation": "22c1b3ecafcefe3ce852314213a1d611",
+              "origin": "daemon"
+            },
+            "lossEvidenceScope": "retained-data-directory",
+            "lossEvidenceUnreadable": false,
+            "retentionOrCapPossible": true,
+            "incompleteHeaders": 0,
+            "cursorSegmentMissing": false
+          }
+        }
+      ],
+      "label": "final-integrated-candidate",
+      "source": "1be481737b9720aeb7196b43d21210586a7c7264"
     }
-  ]
+  ],
+  "finalProvenance": {
+    "base": "add294a5895081544adea0dd55495cda42afb697",
+    "baseFingerprint": "sha256:0fec87ad6f440616611daec7882565764f0fd7ae2db755fa990130e5a8aae7e5",
+    "candidateProductionCommit": "1be481737b9720aeb7196b43d21210586a7c7264",
+    "candidateFingerprint": "sha256:d0ff27a75da5ab3af32139af07b99dfbaea38b954647e4da50be96b4a055ae16",
+    "compiledSHA256": {
+      "base": {
+        "auth.js": "aa715fe16268e77cec3393be8873997384ecad5db94d2f01f9942b11227f12fc",
+        "backup.js": "717d6797ffcc88d6136a24acbbaf11df5dbbdb72e3a449654596bfdc9f879fcb",
+        "cli.js": "dfa1507f22437de3984bbd3e57cf2ef2344fdb8fad6ee065d3434b223110f7cd",
+        "contact-card.js": "889affcea2ae7c472f2a2816891fc265189e418c6a2b56568d06134e7fa5acaf",
+        "daemon.js": "04659f7324e20cfd85344d8e7f64c6ba8508246abc6eac310992853ed6a05db5",
+        "diagnostics.js": "18bf03c1dc1a08ef1ade99decbb12872df6ed64c2d6b50c430e02a427f602d0c",
+        "errors.js": "c2060cd9b4ac0c75b4be429306bba3f4331d0fe3d9c06eabd095973519f824f8",
+        "health.js": "345e6901eaecdc77175b1659f7ec0e2262a96268e708172df5cfb4ab877f7061",
+        "identity.js": "6cf9597f2b683e1b07bc25022350267e280ee80b4c878ff5a5fa8a5885e828a8",
+        "media.js": "dde6e593c2d7fadc99f6e9ffb1c307f217285d362fdba03932ad8024768e9f2e",
+        "observability-context.js": "3b77b3041d9f0f9be7dc56f25827692e08c31c50a36ad7d13104476bf973f2a3",
+        "observability-runtime.js": "b99423d56a9e76041dbeb34b5b9d4eea83be095f66f5cf6f4dd4b046efcd05a8",
+        "observability.js": "72cb5a7783d45f811b80d79e5b49b2b38b48004f9d9b0845e953a4c05299e3ab",
+        "operations.js": "20e4995840cba362cf4659d3daa0f4cb0f7609c6bae6d04d29b03a6932b88a3d",
+        "output.js": "f5cf73b9bb7a4fa407a506935138bd6ccdd3bce074e0890d316bfc564ea7986f",
+        "pairing.js": "7398e7bd5b70da01217c3488cf369c0834457fd42fa733c8ec01aac763eba86f",
+        "paths.js": "40ec7c3726ae2162464c3515c06348ac44ecba9ce22e15b4177cbc061fba1393",
+        "private-paths.js": "183a53a31242d56d381ce5acae9e3023143b7ecc85335c0c800a300d9d1807f1",
+        "probe.js": "f0af197a74de4424152c824eb711cf4bc20b72b3ce0115c8bc37dc4bb464c694",
+        "protocol.js": "18463fee23d8709ab80b9091e6c13b8554b9c66b6511bcd87070ba6b373ac0b8",
+        "quoted-text.js": "cee49b9752d626ee4d1fe22c84901487c61b9e754aeb87102145ea2db75f1226",
+        "response.js": "8ebd12c722816314704b924f674f0316df2b7cf0ab8f8999b1580676b9846fa6",
+        "rpc.js": "b6ccb6bada47d0846ec4efaf634a315f2f612965446cd3a279efab18bf9abdd3",
+        "runtime.js": "2362c8f283156ba416c529a3dab631901df1b17ba06589d88ffde84b37c37726",
+        "send-route.js": "9b515e19b7a92dc42e9643965affd51bf74899e377f8ca1567e66e458582ee6c",
+        "store-codec.js": "ee77aad8170bbfefa5e3b6db1ba57bf498574e3aabdebd86e4d75c86340c7999",
+        "store-schema.js": "84b7a28ed14b4b5e0e953489edadd4c05553e5a25b043143bd9ecf2d966d42d8",
+        "store.js": "67f5fc0e820c6c81e2f97f6e618c602a4a0d693b03d1b451698877239ab1fdc8"
+      },
+      "candidate": {
+        "auth.js": "aa715fe16268e77cec3393be8873997384ecad5db94d2f01f9942b11227f12fc",
+        "backup.js": "717d6797ffcc88d6136a24acbbaf11df5dbbdb72e3a449654596bfdc9f879fcb",
+        "cli.js": "dfa1507f22437de3984bbd3e57cf2ef2344fdb8fad6ee065d3434b223110f7cd",
+        "contact-card.js": "889affcea2ae7c472f2a2816891fc265189e418c6a2b56568d06134e7fa5acaf",
+        "daemon.js": "0ef6f2845c29e760206b3abed3f4958e6deb0acc6871b7eeb61083ee6550a6e1",
+        "diagnostics.js": "18bf03c1dc1a08ef1ade99decbb12872df6ed64c2d6b50c430e02a427f602d0c",
+        "errors.js": "c2060cd9b4ac0c75b4be429306bba3f4331d0fe3d9c06eabd095973519f824f8",
+        "health.js": "345e6901eaecdc77175b1659f7ec0e2262a96268e708172df5cfb4ab877f7061",
+        "identity.js": "6cf9597f2b683e1b07bc25022350267e280ee80b4c878ff5a5fa8a5885e828a8",
+        "media.js": "dde6e593c2d7fadc99f6e9ffb1c307f217285d362fdba03932ad8024768e9f2e",
+        "observability-context.js": "3b77b3041d9f0f9be7dc56f25827692e08c31c50a36ad7d13104476bf973f2a3",
+        "observability-runtime.js": "b99423d56a9e76041dbeb34b5b9d4eea83be095f66f5cf6f4dd4b046efcd05a8",
+        "observability.js": "087dc201c24b9b431843b535483a8a7a1026111b3eaf37ad9aa41c14aa606930",
+        "operations.js": "20e4995840cba362cf4659d3daa0f4cb0f7609c6bae6d04d29b03a6932b88a3d",
+        "output.js": "f5cf73b9bb7a4fa407a506935138bd6ccdd3bce074e0890d316bfc564ea7986f",
+        "pairing.js": "7398e7bd5b70da01217c3488cf369c0834457fd42fa733c8ec01aac763eba86f",
+        "paths.js": "40ec7c3726ae2162464c3515c06348ac44ecba9ce22e15b4177cbc061fba1393",
+        "private-paths.js": "183a53a31242d56d381ce5acae9e3023143b7ecc85335c0c800a300d9d1807f1",
+        "probe.js": "f0af197a74de4424152c824eb711cf4bc20b72b3ce0115c8bc37dc4bb464c694",
+        "protocol.js": "18463fee23d8709ab80b9091e6c13b8554b9c66b6511bcd87070ba6b373ac0b8",
+        "quoted-text.js": "cee49b9752d626ee4d1fe22c84901487c61b9e754aeb87102145ea2db75f1226",
+        "response.js": "8ebd12c722816314704b924f674f0316df2b7cf0ab8f8999b1580676b9846fa6",
+        "rpc.js": "b6ccb6bada47d0846ec4efaf634a315f2f612965446cd3a279efab18bf9abdd3",
+        "runtime.js": "f4d085abd8be9cad8d244a6384043469a52fd227609695e0ce787220d9fdbbdd",
+        "send-route.js": "9b515e19b7a92dc42e9643965affd51bf74899e377f8ca1567e66e458582ee6c",
+        "store-codec.js": "ee77aad8170bbfefa5e3b6db1ba57bf498574e3aabdebd86e4d75c86340c7999",
+        "store-schema.js": "84b7a28ed14b4b5e0e953489edadd4c05553e5a25b043143bd9ecf2d966d42d8",
+        "store.js": "67f5fc0e820c6c81e2f97f6e618c602a4a0d693b03d1b451698877239ab1fdc8"
+      }
+    },
+    "method": "Same benchmark/hook/data/compiler/dependencies as prior rounds; versioned approved add294a source reference compiled and stamped locally, no Git checkout/worktree switch. Original measurements remain unchanged above; this pair measures final read-unread integration. No live account/SDK/session.",
+    "benchmarkSHA256": "802b350bf9eb745cb3f7f47bfa6d7982769f3ea3cbed20930cbadd5321dedad4",
+    "hookSHA256": "57948b43ec4c4aee8791010fe7a051171ea5f84d96a594b570fe041033a966ad"
+  }
 }
