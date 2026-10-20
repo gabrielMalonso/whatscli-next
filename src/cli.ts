@@ -40,17 +40,25 @@ const argumentsBeforeTerminator = process.argv.slice(
   2,
   process.argv.indexOf('--', 2) < 0 ? undefined : process.argv.indexOf('--', 2),
 );
-const selectors = argumentsBeforeTerminator.flatMap((arg, index, args) =>
-  arg === '--data-dir'
-    ? args[index + 1] && !args[index + 1]!.startsWith('-')
-      ? [args[index + 1]!]
-      : ['']
-    : arg.startsWith('--data-dir=')
-      ? [arg.slice(11)]
-      : [],
-);
-if (selectors.length === 1 && selectors[0])
-  observer = new Observability(dataDirectory(selectors[0]), 'cli');
+const selectors = argumentsBeforeTerminator.flatMap<
+  { path: string } | { account: string }
+>((arg, index, args) => {
+  const name = arg.split('=', 1)[0];
+  if (name !== '--data-dir' && name !== '--account') return [];
+  const value = arg.includes('=')
+    ? arg.slice(arg.indexOf('=') + 1)
+    : args[index + 1] && !args[index + 1]!.startsWith('-')
+      ? args[index + 1]!
+      : '';
+  return [name === '--account' ? { account: value } : { path: value }];
+});
+if (selectors.length === 1) {
+  try {
+    observer = new Observability(dataDirectory(selectors[0]), 'cli');
+  } catch {
+    // Invalid selectors are reported as JSON by main, without touching another account.
+  }
+}
 const call = (directory: string, command: Command, timeout?: number) =>
   rpc(
     directory,
@@ -61,10 +69,12 @@ const call = (directory: string, command: Command, timeout?: number) =>
 
 function options() {
   try {
-    return parseArgs({
+    const parsed = parseArgs({
       allowPositionals: true,
+      tokens: true,
       options: {
         'data-dir': { type: 'string' },
+        account: { type: 'string' },
         offline: { type: 'boolean' },
         'allow-jid': { type: 'string' },
         jid: { type: 'string' },
@@ -98,7 +108,20 @@ function options() {
         name: { type: 'string' },
       },
     });
-  } catch {
+    if (
+      parsed.tokens.filter(
+        (token) =>
+          token.kind === 'option' &&
+          (token.name === 'account' || token.name === 'data-dir'),
+      ).length > 1
+    )
+      throw new CommandError(
+        'INVALID_ARGUMENT',
+        'Use --account or --data-dir once; selectors cannot be repeated or combined',
+      );
+    return parsed;
+  } catch (error) {
+    if (error instanceof CommandError) throw error;
     throw new CommandError(
       'INVALID_ARGUMENT',
       'Invalid command-line options; use help for the JSON command reference',
@@ -108,7 +131,10 @@ function options() {
 
 async function main(): Promise<Record<string, unknown>> {
   const { values, positionals } = options();
-  const directory = dataDirectory(values['data-dir']);
+  const directory = dataDirectory({
+    path: values['data-dir'],
+    account: values.account,
+  });
   if (observer?.directory !== directory)
     observer = new Observability(directory, 'cli');
   fields.action = obsAction(positionals[0] ?? 'help');
@@ -120,7 +146,7 @@ async function main(): Promise<Record<string, unknown>> {
       '--output must be compact or full',
     );
   fields.output = mode;
-  const response = await execute(values, positionals);
+  const response = await execute(values, positionals, directory);
   Object.assign(fields, resultFields(response.data));
   return formatResponse(positionals[0] ?? 'help', response, mode, values.jid);
 }
@@ -128,9 +154,9 @@ async function main(): Promise<Record<string, unknown>> {
 async function execute(
   values: ReturnType<typeof options>['values'],
   positionals: string[],
+  directory: string,
 ): Promise<Record<string, unknown>> {
   const action = positionals[0] ?? 'help';
-  const directory = dataDirectory(values['data-dir']);
   const required = (value: string | undefined, name: string): string => {
     if (!value)
       throw new CommandError('INVALID_ARGUMENT', `--${name} is required`);
@@ -138,7 +164,12 @@ async function execute(
   };
   const only = (...allowed: string[]): void => {
     for (const key of Object.keys(values))
-      if (key !== 'data-dir' && key !== 'output' && !allowed.includes(key))
+      if (
+        key !== 'data-dir' &&
+        key !== 'account' &&
+        key !== 'output' &&
+        !allowed.includes(key)
+      )
         throw new CommandError(
           'INVALID_ARGUMENT',
           `--${key} is not valid for ${action}`,
@@ -191,7 +222,7 @@ async function execute(
           'observability query':
             '[--from UTC_ISO] [--to UTC_ISO] [--command ACTION] [--origin ORIGIN] [--code CODE] [--correlation ID] [--limit 100] [--cursor CURSOR]',
         },
-        globalOption: '--data-dir PATH',
+        globalOption: '--account NAME | --data-dir PATH',
         outputOption: '--output compact|full (default: full)',
       },
     };

@@ -10,6 +10,8 @@ agent → CLI → private Unix socket → daemon → Baileys
 
 Only the daemon owns the WhatsApp connection and writes to SQLite. A lifetime SQLite lock enforces one writer per data directory. The JSONL probe uses the same runtime and must not share a directory with an active daemon.
 
+The CLI resolves `--account NAME` to `accounts/<lowercase-name>` under the platform's default data location, then passes only the resolved directory to the daemon. There is no account registry or shared connection manager. `--data-dir PATH` remains an alternative; omitting both retains the default session.
+
 Startup recovers owned, private stale sockets while preserving active sockets and unfamiliar files. The complete Unix socket path must fit within 100 bytes.
 
 Each CLI invocation starts a new Node process without loading the SDK, Store, or connection runtime. RPC uses one newline-delimited response, an inclusive 8 MiB response cap, and a single transport attempt. Fragment assembly scans each decoded fragment once, then joins and parses the first complete line.

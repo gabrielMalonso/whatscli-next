@@ -2,7 +2,7 @@
 
 Run `node dist/src/cli.js --output compact ...` from the checkout. Commands return JSON on stdout; [JSON output](output.md) defines compact response shapes and defaults. All examples use fictional identifiers.
 
-For a custom session, include the same `--data-dir PATH` on every command. See [Getting started](getting-started.md) for pairing and trusted private paths.
+Select the same account on every command with `--account NAME` (for example, `--account central-ES`), or use `--data-dir PATH` for an explicit session directory. Do not combine the selectors. Omitting both uses the original default session. See [Getting started](getting-started.md) for account names, pairing, and trusted private paths.
 
 ## Check the account
 
