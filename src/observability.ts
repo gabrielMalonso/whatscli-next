@@ -26,6 +26,8 @@ export const OBS_LIMITS = {
   days: 5,
   bytes: 8 * 1024 * 1024,
   files: 32,
+  // One fixed loss witness shares the global cap; clients never get separate files.
+  segments: 31,
   segment: 256 * 1024,
   line: 4096,
   sampleMs: 60_000,
@@ -37,6 +39,7 @@ function segmentEnd(time: number): number {
   return (Math.floor(time / dayMs) + 1) * dayMs;
 }
 const segmentName = /^v1-(\d{13})-([a-f0-9-]{36})\.jsonl$/;
+const lossName = 'loss-v1.json';
 const codes = [
   'OK',
   'INVALID_ARGUMENT',
@@ -191,7 +194,8 @@ function readPrivate(path: string, max: number): string {
       throw new Error('Unsafe observability file');
     const bytes = Buffer.alloc(max + 1);
     const count = readSync(fd, bytes, 0, bytes.length, 0);
-    if (count > max) throw new Error('Oversized observability file');
+    if (count > max || count !== stat.size || fstatSync(fd).size !== stat.size)
+      throw new Error('Incomplete or changing observability file');
     return bytes.subarray(0, count).toString('utf8');
   } finally {
     closeSync(fd);
@@ -247,9 +251,13 @@ export function readObservability(directory: string): Configuration {
 /** One non-waiting filesystem critical section across processes. Never steal an existing lock.
  * A crash in this short section leaves a visible degradation, rather than unsafe lock recovery.
  */
-function exclusive<T>(directory: string, work: () => T): T {
+function exclusive<T>(
+  directory: string,
+  work: () => T,
+  name: 'observability.lock' | 'observability-loss.lock' = 'observability.lock',
+): T {
   safeDirectory(directory);
-  const lock = join(directory, 'observability.lock');
+  const lock = join(directory, name);
   mkdirSync(lock, { mode: 0o700 });
   try {
     return work();
@@ -264,40 +272,46 @@ export function configureObservability(
 ): void {
   try {
     ensurePrivateDirectory(directory);
-    exclusive(directory, () => {
-      const current = readObservability(directory);
-      if (current.degraded) throw new Error('Unsupported preference');
-      // Fixed pending name bounds crash remnants; an existing pending file is preserved.
-      const pending = join(directory, 'observability.pending.json');
-      const fd = openSync(
-        pending,
-        constants.O_CREAT |
-          constants.O_EXCL |
-          constants.O_WRONLY |
-          constants.O_NOFOLLOW,
-        0o600,
-      );
-      const preference: Preference = current.preference
-        ? { ...current.preference, enabled }
-        : {
-            version: 1,
-            enabled,
-            generation: randomBytes(16).toString('hex'),
-            secret: randomBytes(32).toString('hex'),
-          };
-      const line = JSON.stringify(preference) + '\n';
-      try {
-        if (writeSync(fd, line) !== Buffer.byteLength(line))
-          throw new Error('Incomplete preference write');
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      // Validate again before replacing a known preference. No permissions are repaired.
-      if (current.preference)
-        readPrivate(join(directory, 'observability.json'), 512);
-      renameSync(pending, join(directory, 'observability.json'));
-    });
+    exclusive(directory, () =>
+      exclusive(
+        directory,
+        () => {
+          const current = readObservability(directory);
+          if (current.degraded) throw new Error('Unsupported preference');
+          // Fixed pending name bounds crash remnants; an existing pending file is preserved.
+          const pending = join(directory, 'observability.pending.json');
+          const fd = openSync(
+            pending,
+            constants.O_CREAT |
+              constants.O_EXCL |
+              constants.O_WRONLY |
+              constants.O_NOFOLLOW,
+            0o600,
+          );
+          const preference: Preference = current.preference
+            ? { ...current.preference, enabled }
+            : {
+                version: 1,
+                enabled,
+                generation: randomBytes(16).toString('hex'),
+                secret: randomBytes(32).toString('hex'),
+              };
+          const line = JSON.stringify(preference) + '\n';
+          try {
+            if (writeSync(fd, line) !== Buffer.byteLength(line))
+              throw new Error('Incomplete preference write');
+            fsyncSync(fd);
+          } finally {
+            closeSync(fd);
+          }
+          // Validate again before replacing a known preference. No permissions are repaired.
+          if (current.preference)
+            readPrivate(join(directory, 'observability.json'), 512);
+          renameSync(pending, join(directory, 'observability.json'));
+        },
+        'observability-loss.lock',
+      ),
+    );
   } catch {
     throw new CommandError(
       'LOCAL_STATE',
@@ -313,6 +327,128 @@ type Segment = {
   generation: string;
   partial: boolean;
 };
+
+type LossEvidence = {
+  schema: 1;
+  kind: 'capture-loss';
+  timestamp: string;
+  generation: string;
+  origin: ObsOrigin;
+};
+
+/** A single retained witness, never a counter or a list of all affected clients. */
+function readLoss(
+  directory: string,
+  generation: string | undefined,
+): LossEvidence | null {
+  safeDirectory(directory);
+  const root = join(directory, 'observability');
+  try {
+    safeDirectory(root);
+    const text = readPrivate(join(root, lossName), OBS_LIMITS.line);
+    if (!text.endsWith('\n')) throw new Error('Incomplete loss witness');
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== 'object')
+      throw new Error('Invalid loss witness');
+    const row = value as Partial<LossEvidence>;
+    if (
+      Object.keys(value).sort().join(',') !==
+        'generation,kind,origin,schema,timestamp' ||
+      row.schema !== 1 ||
+      row.kind !== 'capture-loss' ||
+      typeof row.timestamp !== 'string' ||
+      !Number.isFinite(Date.parse(row.timestamp)) ||
+      new Date(row.timestamp).toISOString() !== row.timestamp ||
+      typeof row.generation !== 'string' ||
+      row.generation !== generation ||
+      !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(row.origin ?? '')
+    )
+      throw new Error('Unsupported loss witness');
+    return {
+      schema: 1,
+      kind: 'capture-loss',
+      timestamp: row.timestamp,
+      generation: row.generation,
+      origin: row.origin!,
+    };
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+}
+
+function expireLoss(directory: string, generation: string, now: number): void {
+  const loss = readLoss(directory, generation);
+  if (
+    !loss ||
+    segmentEnd(Date.parse(loss.timestamp)) > now - OBS_LIMITS.days * dayMs
+  )
+    return;
+  exclusive(
+    directory,
+    () => {
+      const current = readLoss(directory, generation);
+      if (
+        current &&
+        segmentEnd(Date.parse(current.timestamp)) <=
+          now - OBS_LIMITS.days * dayMs
+      )
+        unlinkSync(join(directory, 'observability', lossName));
+    },
+    'observability-loss.lock',
+  );
+}
+
+function persistLoss(directory: string, origin: ObsOrigin, now: number): void {
+  // Separate from the contended append lock. Configuration takes both locks in this order;
+  // failure capture takes only this one, rechecks opt-in, and never waits or retries.
+  exclusive(
+    directory,
+    () => {
+      const config = readObservability(directory);
+      if (!config.preference?.enabled || config.degraded) return;
+      const root = join(directory, 'observability');
+      ensurePrivateDirectory(root);
+      const previous = readLoss(directory, config.preference.generation);
+      if (previous) return; // Even expired evidence awaits ordinary maintenance; never replace it here.
+      // Legacy directories can already contain 32 segments. Admit no 33rd file;
+      // the ordinary writer reserves this slot on its next successful pass.
+      const files = segments(root);
+      if (
+        files.length > OBS_LIMITS.segments ||
+        files.some(
+          (file) => file.generation !== config.preference?.generation,
+        ) ||
+        files.reduce((sum, file) => sum + file.bytes, 0) + OBS_LIMITS.line >
+          OBS_LIMITS.bytes
+      )
+        throw new Error('No safe loss witness capacity');
+      const loss: LossEvidence = {
+        schema: 1,
+        kind: 'capture-loss',
+        timestamp: new Date(now).toISOString(),
+        generation: config.preference.generation,
+        origin,
+      };
+      const line = JSON.stringify(loss) + '\n';
+      const fd = openSync(
+        join(root, lossName),
+        constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_WRONLY |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        if (writeSync(fd, line) !== Buffer.byteLength(line))
+          throw new Error('Incomplete loss witness');
+      } finally {
+        closeSync(fd);
+      }
+    },
+    'observability-loss.lock',
+  );
+}
 function segments(
   directory: string,
   onMissing?: () => void,
@@ -332,6 +468,7 @@ function segments(
   }
   return entries
     .flatMap((name) => {
+      if (name === lossName) return [];
       try {
         const match = segmentName.exec(name);
         if (!match) throw new Error('Unrecognized observability entry');
@@ -569,6 +706,7 @@ export class Observability {
       limits: OBS_LIMITS,
       directory: join(resolve(this.directory), 'observability'),
       scope: 'process-counters',
+      captureCompleteness: 'unknown',
     };
   }
   opaque(
@@ -589,10 +727,15 @@ export class Observability {
       return undefined;
     }
   }
-  failure(): void {
+  failure(origin: ObsOrigin = this.origin): void {
     this.failed = true;
     this.dropped++;
     this.totalDropped++;
+    try {
+      if (this.enabled) persistLoss(this.directory, origin, this.now());
+    } catch {
+      // Witness persistence is also fallible. Query always exposes unknown completeness.
+    }
     if (!this.warned) {
       this.warned = true;
       try {
@@ -609,12 +752,14 @@ export class Observability {
    */
   maintain(): boolean {
     this.refresh();
-    if (!this.configuration.preference) return false;
+    const preference = this.configuration.preference;
+    if (!preference) return false;
     try {
       const directory = join(this.directory, 'observability');
       safeDirectory(directory);
       return exclusive(this.directory, () => {
         const files = segments(directory);
+        expireLoss(this.directory, preference.generation, this.now());
         if (
           files.some(
             (file) =>
@@ -629,7 +774,10 @@ export class Observability {
             this.expired++;
           } else retained++;
         }
-        return retained > 0;
+        return (
+          retained > 0 ||
+          readLoss(this.directory, preference.generation) !== null
+        );
       });
     } catch (error) {
       if (isMissing(error)) return false;
@@ -651,6 +799,16 @@ export class Observability {
         const directory = join(this.directory, 'observability');
         ensurePrivateDirectory(directory);
         let files = segments(directory);
+        // A busy/unsafe witness must not prevent stream capture; query reports unreadable evidence.
+        try {
+          expireLoss(
+            this.directory,
+            this.configuration.preference.generation,
+            this.now(),
+          );
+        } catch {
+          /* Preserve it. */
+        }
         let expired = 0;
         let evicted = 0;
         const now = this.now();
@@ -686,8 +844,9 @@ export class Observability {
         while (
           files.length &&
           (files.reduce((sum, file) => sum + file.bytes, 0) + OBS_LIMITS.line >
-            OBS_LIMITS.bytes ||
-            (!last && files.length >= OBS_LIMITS.files))
+            OBS_LIMITS.bytes - OBS_LIMITS.line ||
+            files.length > OBS_LIMITS.segments ||
+            (!last && files.length >= OBS_LIMITS.segments))
         ) {
           const first = files[0]!;
           remove(first);
@@ -748,7 +907,7 @@ export class Observability {
         this.expired += expired;
       });
     } catch {
-      this.failure();
+      this.failure(origin);
     }
   }
 }
@@ -973,6 +1132,21 @@ export function queryObservability(directory: string, query: ObsQuery) {
         : null,
     };
   });
+  let lossEvidence: LossEvidence | null = null;
+  let lossEvidenceUnreadable: boolean;
+  try {
+    const config = readObservability(directory);
+    const witness = readLoss(directory, config.preference?.generation);
+    if (
+      witness &&
+      Date.parse(witness.timestamp) > retainedAfter &&
+      Date.parse(witness.timestamp) <= cutoff
+    )
+      lossEvidence = witness;
+    lossEvidenceUnreadable = config.degraded;
+  } catch {
+    lossEvidenceUnreadable = true;
+  }
   return {
     records,
     next,
@@ -983,6 +1157,10 @@ export function queryObservability(directory: string, query: ObsQuery) {
     summary,
     summaryScope: 'returned-page-only',
     gaps: {
+      captureCompleteness: 'unknown',
+      lossEvidence,
+      lossEvidenceScope: 'retained-data-directory',
+      lossEvidenceUnreadable,
       retentionOrCapPossible: true,
       incompleteHeaders,
       cursorSegmentMissing:

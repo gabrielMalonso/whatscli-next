@@ -79,7 +79,7 @@ function raw(directory: string): string {
 function scheduledChild(
   directory: string,
   entry: 'cli' | 'daemon',
-  mode: 'daemon-lock' | 'daemon-waits' | 'rpc-lock' | 'rpc-waits',
+  mode: 'daemon-lock' | 'daemon-waits' | 'cli-lock' | 'rpc-waits',
   args: string[],
 ) {
   const child = spawn(
@@ -130,94 +130,124 @@ function scheduledChild(
   };
 }
 
-for (const holder of ['daemon', 'rpc'] as const)
-  test(`response-first scheduling with the ${holder} holding the telemetry lock`, async () => {
+test('daemon capture completes before its response wakes the short client', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const daemon = scheduledChild(directory, 'daemon', 'daemon-lock', [
+    '--offline',
+  ]);
+  let client: ReturnType<typeof scheduledChild> | undefined;
+  try {
+    await daemon.stage('ready');
+    client = scheduledChild(directory, 'cli', 'rpc-waits', [
+      'send-contact',
+      '--jid',
+      lid,
+      '--key',
+      canary,
+      '--name',
+      canary,
+      '--phone',
+      '+12025550103',
+    ]);
+    await daemon.stage('daemon-before-lock');
+    daemon.release.write('x');
+    await daemon.stage('daemon-locked');
+    assert.equal(existsSync(join(directory, 'observability.lock')), true);
+    daemon.release.write('x');
+    await daemon.stage('daemon-recorded');
+    await client.stage('rpc-before-lock');
+    client.release.write('x');
+    const result = await client.result();
+    assert.equal(result.response.code, 'PRECONDITION_FAILED');
+    assert.deepEqual(result.status, [1, null]);
+    assert.equal(result.stderr, '');
+    const records = logs(directory).filter(
+      (row) => row.action === 'send-contact',
+    );
+    assert.deepEqual(
+      new Set(records.map((row) => row.origin)),
+      new Set(['runtime', 'daemon', 'rpc', 'cli']),
+    );
+    assert.equal(new Set(records.map((row) => row.correlation)).size, 1);
+    assert.equal(queryObservability(directory, {}).gaps.lossEvidence, null);
+  } finally {
+    daemon.release.end();
+    client?.release.end();
+    if (client) await client.exited;
+    await cli(directory, 'stop');
+    assert.deepEqual(await daemon.exited, [0, null]);
+  }
+});
+
+for (const holdThroughClientExit of [false, true])
+  test(`real independent client contention persists loss (hold through client exit: ${holdThroughClientExit})`, async () => {
     const directory = temporary();
     configureObservability(directory, true);
-    const action = holder === 'daemon' ? 'send-contact' : 'search';
-    const args =
-      holder === 'daemon'
-        ? [
-            'send-contact',
-            '--jid',
-            lid,
-            '--key',
-            canary,
-            '--name',
-            canary,
-            '--phone',
-            '+12025550103',
-          ]
-        : ['search', '--query', canary];
-    const daemon = scheduledChild(
-      directory,
-      'daemon',
-      holder === 'daemon' ? 'daemon-lock' : 'daemon-waits',
-      ['--offline'],
-    );
+    const daemon = scheduledChild(directory, 'daemon', 'daemon-waits', [
+      '--offline',
+    ]);
     let client: ReturnType<typeof scheduledChild> | undefined;
+    let holder: ReturnType<typeof scheduledChild> | undefined;
     try {
       await daemon.stage('ready');
-      client = scheduledChild(
-        directory,
-        'cli',
-        holder === 'daemon' ? 'rpc-waits' : 'rpc-lock',
-        args,
-      );
-      if (holder === 'daemon') {
-        await daemon.stage('daemon-before-lock');
-        await client.stage('rpc-before-lock');
-        daemon.release.write('x');
-        await daemon.stage('daemon-locked');
-        assert.equal(existsSync(join(directory, 'observability.lock')), true);
-        client.release.write('x');
-        const result = await client.result();
-        assert.equal(result.response.ok, false);
-        assert.equal(result.response.code, 'PRECONDITION_FAILED');
-        assert.deepEqual(result.status, [1, null]);
-        assert.match(result.stderr, /OBSERVABILITY_DEGRADED/);
-        daemon.release.write('x');
-        await daemon.stage('daemon-recorded');
-      } else {
-        await daemon.stage('daemon-before-lock');
-        await client.stage('rpc-locked');
-        assert.equal(existsSync(join(directory, 'observability.lock')), true);
-        daemon.release.write('x');
-        await daemon.stage('daemon-recorded');
-        client.release.write('x');
-        const result = await client.result();
-        assert.equal(result.response.ok, true);
-        assert.deepEqual(result.status, [0, null]);
-        assert.equal(result.stderr, '');
+      client = scheduledChild(directory, 'cli', 'rpc-waits', [
+        'send-contact',
+        '--jid',
+        lid,
+        '--key',
+        canary,
+        '--name',
+        canary,
+        '--phone',
+        '+12025550103',
+      ]);
+      await daemon.stage('daemon-before-lock');
+      holder = scheduledChild(directory, 'cli', 'cli-lock', ['help']);
+      await holder.stage('cli-locked');
+      daemon.release.write('x');
+      await daemon.stage('daemon-recorded');
+      await client.stage('rpc-before-lock');
+      if (!holdThroughClientExit) {
+        holder.release.write('x');
+        await holder.result();
       }
-      const records = logs(directory).filter((row) => row.action === action);
+      client.release.write('x');
+      const result = await client.result();
+      assert.deepEqual(result.status, [1, null]);
+      assert.equal(result.response.code, 'PRECONDITION_FAILED');
+      if (holdThroughClientExit)
+        assert.match(result.stderr, /OBSERVABILITY_DEGRADED/);
+      else assert.equal(result.stderr, '');
+      if (holdThroughClientExit) {
+        holder.release.write('x');
+        await holder.result();
+      }
+      const page = queryObservability(directory, {});
+      const rows = page.records.filter((row) => row.action === 'send-contact');
       assert.deepEqual(
-        new Set(records.map((row) => row.origin)),
+        new Set(rows.map((row) => row.origin)),
         new Set(
-          holder === 'daemon'
-            ? ['runtime', 'daemon']
-            : ['runtime', 'rpc', 'cli'],
+          holdThroughClientExit ? ['runtime'] : ['runtime', 'rpc', 'cli'],
         ),
       );
-      assert.equal(new Set(records.map((row) => row.correlation)).size, 1);
-      assert.ok(records[0]?.correlation);
-      assert.equal(records.filter((row) => row.origin === 'runtime').length, 1);
-      if (holder === 'rpc') {
-        const status = await rpc(
-          directory,
-          { command: 'observability' },
-          1000,
-          undefined,
-          false,
-        );
-        assert.equal((status.data as { dropped: number }).dropped, 1);
-        assert.equal((status.data as { degraded: boolean }).degraded, true);
-      }
+      assert.equal(page.gaps.lossEvidence?.origin, 'daemon');
+      assert.equal(page.gaps.captureCompleteness, 'unknown');
+      const status = await rpc(
+        directory,
+        { command: 'observability' },
+        1000,
+        undefined,
+        false,
+      );
+      assert.equal((status.data as { dropped: number }).dropped, 1);
       assert.doesNotMatch(raw(directory), new RegExp(canary));
     } finally {
       daemon.release.end();
       client?.release.end();
+      holder?.release.end();
       if (client) await client.exited;
+      if (holder) await holder.exited;
       await cli(directory, 'stop');
       assert.deepEqual(await daemon.exited, [0, null]);
     }
@@ -264,14 +294,7 @@ test('CLI lifecycle, live preference reconciliation, correlation, all command fa
   store.close();
   const child = spawn(
     process.execPath,
-    [
-      '--import',
-      './dist/test/fixtures/observability-order-hooks.js?mode=ordered',
-      'dist/src/daemon.js',
-      '--offline',
-      '--data-dir',
-      directory,
-    ],
+    ['dist/src/daemon.js', '--offline', '--data-dir', directory],
     { stdio: 'pipe' },
   );
   const exited = once(child, 'exit');
@@ -730,8 +753,10 @@ test('global file cap, TTL, rotation, partial tails and many short clients stay 
     );
     now++;
   }
+  assert.equal(readdirSync(root).length, OBS_LIMITS.segments);
+  assert.equal(observer.status().evicted, 5);
+  observer.failure();
   assert.equal(readdirSync(root).length, OBS_LIMITS.files);
-  assert.equal(observer.status().evicted, 4);
   const last = readdirSync(root).sort().at(-1)!;
   appendFileSync(join(root, last), '{partial');
   observer.record('command', { action: 'status' });
@@ -1404,3 +1429,310 @@ test('per-record five-day cutoff preserves younger records until the entire UTC 
   assert.equal(readdirSync(root).length, 0);
   assert.equal(observer.status().expired, 1);
 });
+
+test('a terminated short client leaves bounded loss evidence and query never claims completeness', async () => {
+  const directory = temporary();
+  const args = ['dist/src/cli.js', '--data-dir', directory, 'help'];
+  const off = await run(process.execPath, args);
+  configureObservability(directory, true);
+  mkdirSync(join(directory, 'observability.lock'), { mode: 0o700 });
+  const on = await run(process.execPath, args);
+  assert.equal(on.stdout, off.stdout);
+  assert.match(on.stderr, /OBSERVABILITY_DEGRADED/);
+  const page = queryObservability(directory, { origin: 'runtime', code: 'OK' });
+  assert.equal(page.gaps.captureCompleteness, 'unknown');
+  assert.equal(page.gaps.lossEvidence?.origin, 'cli');
+  assert.equal(page.gaps.lossEvidenceScope, 'retained-data-directory');
+  assert.equal(page.gaps.lossEvidenceUnreadable, false);
+  assert.deepEqual(page.records, []);
+  assert.deepEqual(page.summary, []);
+});
+
+test('loss evidence is a first witness, bounded across concurrent terminated clients and independent of page filters', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  mkdirSync(join(directory, 'observability.lock'), { mode: 0o700 });
+  const args = ['dist/src/cli.js', '--data-dir', directory, 'help'];
+  const results = await Promise.all(
+    Array.from({ length: 6 }, () => run(process.execPath, args)),
+  );
+  assert.ok(results.every((result) => result.stdout === results[0]!.stdout));
+  const area = join(directory, 'observability');
+  assert.deepEqual(readdirSync(area), ['loss-v1.json']);
+  const before = readFileSync(join(area, 'loss-v1.json'));
+  await run(process.execPath, args);
+  assert.deepEqual(readFileSync(join(area, 'loss-v1.json')), before);
+  const page = queryObservability(directory, { action: 'search', limit: 1 });
+  assert.equal(page.gaps.lossEvidence?.origin, 'cli');
+  assert.equal(page.gaps.captureCompleteness, 'unknown');
+  assert.deepEqual(page.summary, []);
+  assert.equal(statSync(join(area, 'loss-v1.json')).mode & 0o777, 0o600);
+  assert.ok(before.byteLength <= OBS_LIMITS.line);
+});
+
+test('loss evidence short writes are preserved, unreadable gaps are automatic and later failures never overwrite', () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const observer = new Observability(directory, 'rpc');
+  observer.record('transport', { action: 'search' });
+  const write = fs.writeSync;
+  fs.writeSync = ((
+    fd: number,
+    data: string | NodeJS.ArrayBufferView,
+    ...args: unknown[]
+  ) => {
+    if (typeof data === 'string' && data.includes('"kind":"capture-loss"'))
+      return write(fd, data.slice(0, -2));
+    return Reflect.apply(write, fs, [fd, data, ...args]);
+  }) as typeof fs.writeSync;
+  syncBuiltinESMExports();
+  try {
+    observer.failure();
+  } finally {
+    fs.writeSync = write;
+    syncBuiltinESMExports();
+  }
+  const path = join(directory, 'observability', 'loss-v1.json');
+  const partial = readFileSync(path);
+  const page = queryObservability(directory, {});
+  assert.equal(page.records.length, 1);
+  assert.equal(page.gaps.lossEvidence, null);
+  assert.equal(page.gaps.lossEvidenceUnreadable, true);
+  assert.equal(page.gaps.captureCompleteness, 'unknown');
+  new Observability(directory, 'cli').failure();
+  assert.deepEqual(readFileSync(path), partial);
+  observer.record('command', { action: 'help' });
+  assert.equal(logs(directory).length, 2);
+  assert.equal(
+    queryObservability(directory, {}).gaps.lossEvidenceUnreadable,
+    true,
+  );
+});
+
+for (const kind of [
+  'symlink',
+  'hardlink',
+  'mode',
+  'generation',
+  'foreign-uid',
+] as const)
+  test(`unsafe ${kind} loss witness is preserved and cannot become query evidence`, () => {
+    const directory = temporary();
+    configureObservability(directory, true);
+    const observer = new Observability(directory, 'cli');
+    observer.record('command');
+    const path = join(directory, 'observability', 'loss-v1.json');
+    const sentinel = join(directory, 'sentinel');
+    writeFileSync(sentinel, canary, { mode: 0o600 });
+    if (kind === 'symlink') symlinkSync(sentinel, path);
+    else if (kind === 'hardlink') linkSync(sentinel, path);
+    else
+      writeFileSync(
+        path,
+        kind === 'generation'
+          ? JSON.stringify({
+              schema: 1,
+              kind: 'capture-loss',
+              timestamp: new Date().toISOString(),
+              generation: '0'.repeat(32),
+              origin: 'cli',
+            }) + '\n'
+          : canary,
+        { mode: kind === 'mode' ? 0o644 : 0o600 },
+      );
+    const inspect = fs.fstatSync;
+    if (kind === 'foreign-uid') {
+      fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+        const stat = inspect(...args);
+        Object.defineProperty(stat, 'uid', { value: -1 });
+        return stat;
+      }) as typeof fs.fstatSync;
+      syncBuiltinESMExports();
+    }
+    try {
+      observer.failure();
+      const page = queryObservability(directory, {});
+      assert.equal(page.gaps.lossEvidence, null);
+      assert.equal(page.gaps.lossEvidenceUnreadable, true);
+      assert.doesNotMatch(JSON.stringify(page), new RegExp(canary));
+    } finally {
+      fs.fstatSync = inspect;
+      syncBuiltinESMExports();
+    }
+    assert.equal(readFileSync(sentinel, 'utf8'), canary);
+    assert.equal(existsSync(path), true);
+  });
+
+test('evidence lock failure leaves unknown completeness and never bypasses opt-out or steals the lock', () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const lock = join(directory, 'observability-loss.lock');
+  mkdirSync(lock, { mode: 0o700 });
+  writeFileSync(join(lock, 'unfamiliar'), canary, { mode: 0o600 });
+  const observer = new Observability(directory, 'cli');
+  observer.failure();
+  assert.equal(
+    queryObservability(directory, {}).gaps.captureCompleteness,
+    'unknown',
+  );
+  assert.equal(queryObservability(directory, {}).gaps.lossEvidence, null);
+  assert.throws(() => configureObservability(directory, false), {
+    code: 'LOCAL_STATE',
+  });
+  assert.equal(readObservability(directory).configured, true);
+  assert.equal(readFileSync(join(lock, 'unfamiliar'), 'utf8'), canary);
+  const off = temporary();
+  configureObservability(off, false);
+  new Observability(off, 'cli').failure();
+  assert.equal(existsSync(join(off, 'observability')), false);
+  assert.equal(existsSync(join(off, 'observability-loss.lock')), false);
+});
+
+test('loss witness expiry has exact five-day query cutoff and whole-day physical cleanup, including disabled retention', (t) => {
+  const day = 86400000;
+  const today = Math.floor(Date.now() / day) * day;
+  let now = today - 4 * day + day / 2;
+  let wall = today + day / 2;
+  t.mock.method(Date, 'now', () => wall);
+  const directory = temporary();
+  configureObservability(directory, true);
+  const observer = new Observability(directory, 'cli', () => now);
+  observer.failure();
+  const path = join(directory, 'observability', 'loss-v1.json');
+  assert.ok(queryObservability(directory, {}).gaps.lossEvidence);
+  configureObservability(directory, false);
+  now = wall = today + day + day / 2;
+  assert.equal(queryObservability(directory, {}).gaps.lossEvidence, null);
+  assert.equal(observer.maintain(), true);
+  assert.equal(existsSync(path), true);
+  now = wall = today + 2 * day;
+  assert.equal(observer.maintain(), false);
+  assert.equal(existsSync(path), false);
+});
+
+test('legacy 32-segment directories remain readable and reserve witness capacity before creating a 33rd file', () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const observer = new Observability(directory, 'cli');
+  observer.record('command');
+  const root = join(directory, 'observability');
+  const [first] = readdirSync(root);
+  assert.ok(first);
+  const line = readFileSync(join(root, first));
+  const timestamp = first.slice(3, 16);
+  for (let index = 0; index < 31; index++)
+    writeFileSync(
+      join(
+        root,
+        `v1-${timestamp}-00000000-0000-0000-0000-${String(index).padStart(12, '0')}.jsonl`,
+      ),
+      line,
+      { mode: 0o600 },
+    );
+  assert.equal(logs(directory).length, 32);
+  observer.failure();
+  assert.equal(readdirSync(root).length, 32);
+  assert.equal(queryObservability(directory, {}).gaps.lossEvidence, null);
+  observer.record('command', { action: 'help' });
+  assert.equal(readdirSync(root).length, 31);
+  observer.failure();
+  assert.equal(readdirSync(root).length, 32);
+  assert.ok(queryObservability(directory, {}).gaps.lossEvidence);
+});
+
+test('configuration and loss capture serialize without writes after opt-out, including re-enable with the same generation', () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const observer = new Observability(directory, 'cli');
+  const generation = readObservability(directory).preference!.generation;
+  const rename = fs.renameSync;
+  let attempted = false;
+  fs.renameSync = (from, to) => {
+    rename(from, to);
+    if (String(to) === join(directory, 'observability.json')) {
+      attempted = true;
+      observer.failure(); // Stale enabled observer, after disable commit while both config locks are held.
+    }
+  };
+  syncBuiltinESMExports();
+  try {
+    configureObservability(directory, false);
+  } finally {
+    fs.renameSync = rename;
+    syncBuiltinESMExports();
+  }
+  assert.equal(attempted, true);
+  assert.equal(existsSync(join(directory, 'observability')), false);
+  observer.record('command');
+  observer.failure();
+  assert.equal(existsSync(join(directory, 'observability')), false);
+  configureObservability(directory, true);
+  observer.refresh();
+  observer.failure();
+  const witness = queryObservability(directory, {}).gaps.lossEvidence;
+  assert.equal(witness?.generation, generation);
+  configureObservability(directory, false);
+  configureObservability(directory, true);
+  assert.deepEqual(
+    queryObservability(directory, {}).gaps.lossEvidence,
+    witness,
+  );
+});
+
+test('a witness write holds the opt-out gate; configuration reports failure instead of silently racing the commit', () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const write = fs.writeSync;
+  let gated = false;
+  fs.writeSync = ((
+    fd: number,
+    data: string | NodeJS.ArrayBufferView,
+    ...args: unknown[]
+  ) => {
+    if (typeof data === 'string' && data.includes('"kind":"capture-loss"')) {
+      gated = true;
+      assert.throws(() => configureObservability(directory, false), {
+        code: 'LOCAL_STATE',
+      });
+      assert.equal(readObservability(directory).configured, true);
+    }
+    return Reflect.apply(write, fs, [fd, data, ...args]);
+  }) as typeof fs.writeSync;
+  syncBuiltinESMExports();
+  try {
+    new Observability(directory, 'cli').failure();
+  } finally {
+    fs.writeSync = write;
+    syncBuiltinESMExports();
+  }
+  assert.equal(gated, true);
+  const before = raw(directory);
+  configureObservability(directory, false);
+  new Observability(directory, 'cli').failure();
+  assert.equal(raw(directory), before);
+});
+
+for (const kind of ['unknown', 'oversized'] as const)
+  test(`witness admission never removes an ${kind} entry to reserve capacity`, () => {
+    const directory = temporary();
+    configureObservability(directory, true);
+    const root = join(directory, 'observability');
+    mkdirSync(root, { mode: 0o700 });
+    const path = join(
+      root,
+      kind === 'unknown'
+        ? 'unfamiliar'
+        : `v1-${Date.now()}-00000000-0000-0000-0000-000000000000.jsonl`,
+    );
+    const bytes =
+      kind === 'unknown'
+        ? Buffer.from(canary)
+        : Buffer.alloc(OBS_LIMITS.segment + 1, 120);
+    writeFileSync(path, bytes, { mode: 0o600 });
+    new Observability(directory, 'cli').failure();
+    assert.deepEqual(readdirSync(root), [path.slice(root.length + 1)]);
+    assert.deepEqual(readFileSync(path), bytes);
+    assert.throws(() => queryObservability(directory, {}), {
+      code: 'LOCAL_STATE',
+    });
+  });

@@ -225,7 +225,7 @@ const maintenance = await run(process.execPath, [
   const volumeMs=performance.now()-started;
   const volumeFiles=readdirSync(volumeRoot);
   const volumeBytes=volumeFiles.reduce((sum,name)=>sum+statSync(join(volumeRoot,name)).size,0);
-  assert.equal(volumeFiles.length,OBS_LIMITS.files); assert.ok(state.evicted>=4);
+  assert.equal(volumeFiles.length,OBS_LIMITS.segments); assert.ok(state.evicted>=4);
   assert.equal(state.dropped,0); assert.ok(volumeBytes<=OBS_LIMITS.bytes);
   const volume={writes,ms:volumeMs,files:volumeFiles.length,bytes:volumeBytes,evicted:state.evicted};
   now += 6*day; const expiryStart=performance.now(); observer.maintain();
