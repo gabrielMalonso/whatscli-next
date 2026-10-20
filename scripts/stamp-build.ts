@@ -5,23 +5,29 @@ import { fileURLToPath } from 'node:url';
 
 const marker = /\/\* @build-fingerprint \*\/ (?:null|"sha256:[a-f0-9]{64}")/g;
 
-/** Fingerprint emitted first-party JS, normalizing the embedded value to avoid self-reference. */
-export function stampBuild(directory: string): string {
-  const names = readdirSync(directory).filter(name => name.endsWith('.js')).sort();
-  const runtimePath = join(directory, 'runtime.js');
-  const runtime = readFileSync(runtimePath, 'utf8');
+/** Compute the stamp without I/O, also used to compare an in-memory compiler emission. */
+export function stampedJavaScript(files: ReadonlyMap<string, Buffer>): { fingerprint: string; runtime: Buffer } {
+  const runtime = files.get('runtime.js')?.toString('utf8') ?? '';
   if ([...runtime.matchAll(marker)].length !== 1) throw new Error('Expected one runtime build fingerprint marker');
   const normalized = runtime.replace(marker, '/* @build-fingerprint */ null');
   const hash = createHash('sha256');
   // Length framing makes file boundaries unambiguous; no paths, times or Git state enter the hash.
-  for (const name of names) {
-    const bytes = name === 'runtime.js' ? Buffer.from(normalized) : readFileSync(join(directory, name));
+  for (const [name, original] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    const bytes = name === 'runtime.js' ? Buffer.from(normalized) : original;
     hash.update(JSON.stringify([name, bytes.length]) + '\n');
     hash.update(bytes);
   }
   const fingerprint = `sha256:${hash.digest('hex')}`;
-  writeFileSync(runtimePath, normalized.replace(marker, `/* @build-fingerprint */ ${JSON.stringify(fingerprint)}`));
-  return fingerprint;
+  return { fingerprint, runtime: Buffer.from(normalized.replace(marker, `/* @build-fingerprint */ ${JSON.stringify(fingerprint)}`)) };
+}
+
+/** Fingerprint emitted first-party JS, normalizing the embedded value to avoid self-reference. */
+export function stampBuild(directory: string): string {
+  const files = new Map(readdirSync(directory).filter(name => name.endsWith('.js'))
+    .map(name => [name, readFileSync(join(directory, name))]));
+  const stamped = stampedJavaScript(files);
+  writeFileSync(join(directory, 'runtime.js'), stamped.runtime);
+  return stamped.fingerprint;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
