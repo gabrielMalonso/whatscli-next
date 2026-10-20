@@ -6,7 +6,7 @@ Credentials, messages, immutable intents, deleted-body audit data, quoted-send s
 
 Every data-directory ancestor must be a directory owned by the runtime user or root, without symlinks or group/world write permission. Root-owned sticky temporary directories are allowed. A foreign-owned 0755 ancestor is unsafe because its owner can replace children.
 
-Owner write permission is allowed; a private directory inside a group- or world-writable worktree is insufficient.
+Owner write permission is allowed. A private leaf directory must still meet the ancestry rules above.
 
 The final directory and existing entries must belong to the runtime user and have private permissions: normally 0700 for directories and 0600 for files and sockets. Database and log entries must be regular files; the endpoint must be a socket.
 

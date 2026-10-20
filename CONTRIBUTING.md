@@ -41,7 +41,7 @@ Preserve the core contracts:
 - Separate evidence for SDK return, acceptance, delivery, read, and phone confirmation.
 - JSON responses on stdout and diagnostics on stderr.
 
-Explain the problem, resulting behavior, checks run, and anything left unverified. Follow the [independent review process](AGENTS.md#feature-delivery-and-independent-review). Do not merge or enable auto-merge without permission.
+Explain the problem, resulting behavior, checks run, and anything that remains unverified.
 
 ## Testing and privacy
 

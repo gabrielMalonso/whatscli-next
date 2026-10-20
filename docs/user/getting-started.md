@@ -42,7 +42,7 @@ The path must meet these requirements:
 - Root-owned sticky temporary directories are allowed.
 - The complete socket path must fit within 100 bytes.
 
-A private directory inside a group- or world-writable worktree is not sufficient. See [Privacy](../operations/privacy.md) if a path is rejected.
+A private directory does not make unsafe ancestors acceptable. See [Privacy](../operations/privacy.md) if a path is rejected.
 
 Credentials, messages, QR images, logs, and backups are private and **not encrypted at rest**. Keep them out of Git and public issue reports.
 
