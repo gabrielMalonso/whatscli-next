@@ -164,6 +164,7 @@ export type ObsRecord = ObsFields & {
   generation: string;
   session: string;
   dropped: number;
+  uncertain?: number;
   evicted: number;
   expired: number;
 };
@@ -658,6 +659,8 @@ export function safeObsFields(input: ObsFields): ObsFields {
   return output;
 }
 
+type CaptureOutcome = 'not-admitted' | 'not-written' | 'uncertain' | 'captured';
+
 export class Observability {
   private configuration: Configuration = {
     preference: null,
@@ -666,7 +669,13 @@ export class Observability {
   };
   private dropped = 0;
   private totalDropped = 0;
+  private uncertain = 0;
+  private totalUncertain = 0;
   private failed = false;
+  private cleanupFailed = false;
+  private cleanupFailures = 0;
+  private hashingFailed = false;
+  private hashingFailures = 0;
   private evicted = 0;
   private expired = 0;
   private warned = false;
@@ -695,12 +704,28 @@ export class Observability {
     } catch (error) {
       blocked = !isMissing(error);
     }
+    const degraded =
+      this.configuration.degraded ||
+      this.failed ||
+      blocked ||
+      this.cleanupFailed ||
+      this.hashingFailed;
     return {
       configured: this.configuration.configured,
       enabled: this.enabled,
-      effective: this.enabled && !this.failed && !blocked,
-      degraded: this.configuration.degraded || this.failed || blocked,
+      effective: this.enabled && !degraded,
+      degraded,
       dropped: this.totalDropped,
+      uncertain: this.totalUncertain,
+      cleanupFailures: this.cleanupFailures,
+      hashingFailures: this.hashingFailures,
+      components: {
+        captureDegraded: this.failed || blocked,
+        cleanupDegraded: this.cleanupFailed,
+        hashingDegraded: this.hashingFailed,
+      },
+      session: this.session,
+      generation: this.configuration.preference?.generation ?? null,
       evicted: this.evicted,
       expired: this.expired,
       limits: OBS_LIMITS,
@@ -717,30 +742,50 @@ export class Observability {
     if (!this.enabled || !preference || Buffer.byteLength(value) > 4096)
       return undefined;
     try {
-      return createHmac('sha256', Buffer.from(preference.secret, 'hex'))
+      const digest = createHmac('sha256', Buffer.from(preference.secret, 'hex'))
         .update(domain + '\0')
         .update(value)
         .digest('hex')
         .slice(0, 32);
+      this.hashingFailed = false;
+      return digest;
     } catch {
-      this.failure();
+      this.hashingFailed = true;
+      this.hashingFailures++;
+      this.warn();
       return undefined;
     }
   }
-  failure(origin: ObsOrigin = this.origin): void {
+  failure(
+    origin: ObsOrigin = this.origin,
+    outcome: 'dropped' | 'uncertain' = 'dropped',
+  ): void {
     this.failed = true;
-    this.dropped++;
-    this.totalDropped++;
+    if (outcome === 'dropped') {
+      this.dropped++;
+      this.totalDropped++;
+    } else {
+      this.uncertain++;
+      this.totalUncertain++;
+    }
     try {
       if (this.enabled) persistLoss(this.directory, origin, this.now());
     } catch {
       // Witness persistence is also fallible. Query always exposes unknown completeness.
     }
+    this.warn();
+  }
+  private cleanupFailure(): void {
+    this.cleanupFailed = true;
+    this.cleanupFailures++;
+    this.warn();
+  }
+  private warn(): void {
     if (!this.warned) {
       this.warned = true;
       try {
         process.stderr.write(
-          '{"level":"diagnostic","code":"OBSERVABILITY_DEGRADED","message":"Optional telemetry lost; inspect observability status"}\n',
+          '{"level":"diagnostic","code":"OBSERVABILITY_DEGRADED","message":"Optional telemetry degraded; inspect observability status"}\n',
         );
       } catch {
         /* No fallback. */
@@ -792,10 +837,19 @@ export class Observability {
   ): void {
     this.refresh();
     if (!this.enabled) return;
+    // A write exception cannot establish how many bytes reached the file. Only a
+    // complete byte count proves capture; close/release are separate outcomes.
+    const attempt: { outcome: CaptureOutcome; cleanupFailed: boolean } = {
+      outcome: 'not-written',
+      cleanupFailed: false,
+    };
     try {
       exclusive(this.directory, () => {
         this.refresh();
-        if (!this.enabled || !this.configuration.preference) return;
+        if (!this.enabled || !this.configuration.preference) {
+          attempt.outcome = 'not-admitted';
+          return;
+        }
         const directory = join(this.directory, 'observability');
         ensurePrivateDirectory(directory);
         let files = segments(directory);
@@ -863,6 +917,7 @@ export class Observability {
           session: this.session,
           ...safeObsFields(fields),
           dropped: this.dropped,
+          uncertain: this.uncertain,
           evicted,
           expired,
         };
@@ -896,18 +951,34 @@ export class Observability {
           0o600,
         );
         try {
-          if (writeSync(fd, line) !== Buffer.byteLength(line))
-            throw new Error('Partial write');
+          attempt.outcome = 'uncertain';
+          const count = writeSync(fd, line);
+          attempt.outcome =
+            count === Buffer.byteLength(line) ? 'captured' : 'not-written';
+          if (attempt.outcome !== 'captured') throw new Error('Partial write');
         } finally {
-          closeSync(fd);
+          try {
+            closeSync(fd);
+          } catch {
+            attempt.cleanupFailed = true;
+            this.cleanupFailure();
+          }
         }
         this.dropped = 0;
+        this.uncertain = 0;
         this.failed = false;
         this.evicted += evicted;
         this.expired += expired;
       });
+      if (!attempt.cleanupFailed) this.cleanupFailed = false;
     } catch {
-      this.failure(origin);
+      if (attempt.outcome === 'captured' || attempt.outcome === 'not-admitted')
+        this.cleanupFailure();
+      else
+        this.failure(
+          origin,
+          attempt.outcome === 'uncertain' ? 'uncertain' : 'dropped',
+        );
     }
   }
 }
@@ -1077,6 +1148,9 @@ export function queryObservability(directory: string, query: ObsQuery) {
           session: row.session!,
           ...safeObsFields(row),
           dropped: safeCounter(row.dropped),
+          ...(row.uncertain === undefined
+            ? {}
+            : { uncertain: safeCounter(row.uncertain) }),
           evicted: safeCounter(row.evicted),
           expired: safeCounter(row.expired),
         };

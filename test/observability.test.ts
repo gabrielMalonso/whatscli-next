@@ -891,10 +891,12 @@ test('disk-full injection drops safely; next successful record reports loss with
     fs.writeSync = write;
     syncBuiltinESMExports();
   }
-  assert.equal(observer.status().dropped, 1);
+  assert.equal(observer.status().dropped, 0);
+  assert.equal(observer.status().uncertain, 1);
   assert.equal(observer.status().degraded, true);
   observer.record('command', { action: 'help' });
-  assert.equal(logs(directory).at(-1)?.dropped, 1);
+  assert.equal(logs(directory).at(-1)?.dropped, 0);
+  assert.equal(logs(directory).at(-1)?.uncertain, 1);
   assert.equal(observer.status().degraded, false);
   assert.doesNotMatch(raw(directory), new RegExp(canary));
 });
