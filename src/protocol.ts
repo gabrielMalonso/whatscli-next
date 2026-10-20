@@ -16,6 +16,7 @@ export type Command =
   | { command: 'group'; jid: string }
   | { command: 'events'; after: number }
   | { command: 'request'; key: string }
+  | { command: 'backup'; path: string }
   | { command: 'pair-code'; phone: string }
   | { command: 'send'; key: string; jid: string; text: string }
   | { command: 'send-file'; key: string; jid: string; path: string; mime: string; caption: string }
@@ -70,6 +71,7 @@ export function parseCommand(value: Record<string, unknown>): Command {
     }
     case 'events': return { command: value.command, after: integer(value.after ?? 0, 0, Number.MAX_SAFE_INTEGER) };
     case 'request': return { command: value.command, key: string(value.key, 'key') };
+    case 'backup': return { command: value.command, path: string(value.path, 'path') };
     case 'pair-code': {
       const phone = string(value.phone, 'phone');
       if (!/^[1-9]\d{7,14}$/.test(phone)) throw new CommandError('INVALID_ARGUMENT', 'phone must contain country code and digits only');

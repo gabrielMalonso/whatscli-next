@@ -27,7 +27,9 @@ export function rpc(directory: string, command: Command, timeoutMs = 120000): Pr
       if (error) reject(error); else if (response) resolve(response);
     };
     socket.setEncoding('utf8');
-    socket.setTimeout(timeoutMs, () => finish(new RpcError('TIMEOUT', 'Daemon response timed out; query the idempotency key before considering another send')));
+    socket.setTimeout(timeoutMs, () => finish(new RpcError('TIMEOUT', command.command === 'backup'
+      ? 'Backup response timed out; work may continue. Inspect backup.json in the requested directory before choosing a NEW output directory'
+      : 'Daemon response timed out; query the idempotency key before considering another send')));
     socket.once('connect', () => socket.write(line));
     socket.on('data', (chunk: string) => {
       if (completed) return;

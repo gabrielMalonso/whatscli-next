@@ -10,6 +10,7 @@ import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
 import { CommandError } from './errors.js';
+import { createBackup } from './backup.js';
 import { unprovenRoute } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 import { contactCard } from './contact-card.js';
@@ -35,7 +36,7 @@ export type RuntimeOptions = {
 export function createRuntime(options: RuntimeOptions, socketFactory = makeWASocket, clock: RecoveryClock = {
   now: Date.now,
   schedule(callback, delay) { const timer = setTimeout(callback, delay); return () => clearTimeout(timer); },
-}) {
+}, backupDatabase = createBackup) {
   const allowedJid = options.allowedJid === undefined ? undefined : recipientJid(options.allowedJid);
   const store = new Store(options.dataDir);
   const auth = sqliteAuth(store);
@@ -52,6 +53,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   let replacing: Promise<void> | undefined;
   let ending: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
+  let backupWork: ReturnType<typeof createBackup> | undefined;
   let recovery: Recovery = { state: 'offline', reason: null, code: null, attempt: 0, nextRetryAt: null };
   let lastInterruption = store.get<ReceiveInterruption>('runtime', 'receive-interruption') ?? null;
   let qr: string | undefined;
@@ -260,6 +262,11 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
   }
   async function execute(command: Command): Promise<unknown> {
     switch (command.command) {
+      case 'backup': {
+        if (stopped || backupWork) throw new CommandError('PRECONDITION_FAILED', 'Runtime is stopping or another backup is in progress');
+        backupWork = backupDatabase(store.db, command.path);
+        try { return await backupWork; } finally { backupWork = undefined; }
+      }
       case 'status': return {
         build: { fingerprint: buildFingerprint },
         hasLinkedCredentials: hasLinkedCredentials(auth.state.creds),
@@ -463,6 +470,9 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     close() {
       closing ??= (async () => {
         await shutdown();
+        // SQLite's native backup is asynchronous and still owns the source handle.
+        // A disconnected/timed-out client never cancels it or releases ownership early.
+        await backupWork?.catch(() => {});
         auth.save({});
         store.close();
       })();

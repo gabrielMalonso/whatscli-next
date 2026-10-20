@@ -4,6 +4,10 @@ SQLite remains the durable store, owned by the single runtime. CLI and full/comp
 
 `store.ts` owns observation, visibility and identity/intent rules. `store-codec.ts` contains the pinned SDK serialization and enum recovery. `store-schema.ts` declares the SQLite tables and rejects unsupported schema versions before changing the message database.
 
+## Backup and recovery
+
+`backup --out NEW_DIRECTORY` uses the runtime-owned handle with Node's SQLite online backup API, preserves committed logical state/schema/rowids and verifies the actual artifact before publishing `backup.json`. SQLite holds auth/key categories, intents/IDs/routes/receipts/pending state, bodies/audit/tombstones, identities, projection and events. Logs, QR PNGs, external media/files, control socket and the separate writer-lock database are excluded. No source VACUUM/checkpoint, schema migration, retention change or restore-over-existing operation is introduced. See [the complete scope, private-output rules, failure handling and offline recovery guide](backup.md). Normal stop/PID exit followed by private full-directory copying remains a valid manual path.
+
 ## Queries
 
 - `messages.json` retains the original current SDK envelope. Redacted bodies become null; private deletion audit remains in `message_deletions.audit_json` and never enters search.
