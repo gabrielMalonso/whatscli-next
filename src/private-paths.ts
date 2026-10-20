@@ -37,7 +37,23 @@ export function checkPrivatePath(path: string, kind?: 'directory' | 'file' | 'so
 }
 
 export function ensurePrivateDirectory(directory: string): void {
-  checkAncestors(directory, lstatSync, true);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  directory = resolve(directory);
+  const missing: string[] = [];
+  let parent = directory;
+  for (;;) {
+    try { lstatSync(parent); break; }
+    catch (error) { if (!isMissing(error) || dirname(parent) === parent) throw error; }
+    missing.push(parent);
+    parent = dirname(parent);
+  }
+  checkAncestors(parent);
+  for (const path of missing.reverse()) {
+    // A missing component can be claimed by another UID under a sticky parent.
+    // Nonrecursive mkdir never follows that claim; validate EEXIST before descending.
+    try { mkdirSync(path, { mode: 0o700 }); }
+    catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error; }
+    checkPrivatePath(path, 'directory');
+  }
+  checkAncestors(directory);
   checkPrivatePath(directory, 'directory');
 }

@@ -16,13 +16,16 @@ export async function rpc(directory: string, command: Command, timeoutMs = 12000
   directory = resolvePath(directory);
   const path = socketPath(directory);
   try {
-    // Inspect even when the leaf is missing: start/status/stop must not trust an
-    // absent endpoint under a namespace another UID can replace.
-    checkAncestors(directory, undefined, true);
+    checkAncestors(directory);
     checkPrivatePath(directory, 'directory');
     checkPrivatePath(path, 'socket');
   } catch (error) {
-    if (isMissing(error)) throw new RpcError('NOT_RUNNING', 'Daemon is not running');
+    if (isMissing(error)) {
+      // Check remaining existing ancestors, but never promote a missing namespace
+      // into a requestable endpoint if something appears during that inspection.
+      checkAncestors(directory, undefined, true);
+      throw new RpcError('NOT_RUNNING', 'Daemon is not running');
+    }
     throw error;
   }
   const id = randomUUID();

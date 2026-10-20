@@ -17,6 +17,69 @@ const temporary = () => mkdtempSync(join(tmpdir(), 'wcn-private-'));
 const refused = (error: unknown) => error instanceof CommandError && error.code === 'PRECONDITION_FAILED';
 const runFile = promisify(execFile);
 
+for (const kind of ['symlink', 'foreign']) {
+  for (const entry of ['Store', 'CLI']) {
+    test(`${entry} refuses an ancestor ${kind} inserted during directory creation before opening state`, () => {
+      const root = temporary();
+      const redirected = join(root, 'redirected'); mkdirSync(redirected, { mode: 0o700 });
+      writeFileSync(join(redirected, 'preserved'), 'Fictional preserved content', { mode: 0o600 });
+      const parent = join(root, 'missing');
+      const hook = `
+        import fs from 'node:fs';
+        import { syncBuiltinESMExports } from 'node:module';
+        const [root, kind, entry] = JSON.parse(process.env.WCN_PRIVATE_FIXTURE);
+        const parent = root + '/missing';
+        const directory = parent + '/state';
+        const mkdir = fs.mkdirSync;
+        const inspect = fs.lstatSync;
+        const open = fs.openSync;
+        let inserted = false;
+        let opens = 0;
+        fs.mkdirSync = (path, options) => {
+          if (!inserted && (path === parent || path.startsWith(parent + '/'))) {
+            inserted = true;
+            if (kind === 'symlink') fs.symlinkSync(root + '/redirected', parent);
+            else { mkdir(parent, { mode: 0o700 }); fs.chmodSync(parent, 0o777); }
+          }
+          return mkdir(path, options);
+        };
+        fs.lstatSync = (...args) => {
+          const stat = inspect(...args);
+          return inserted && kind === 'foreign' && args[0] === parent
+            ? Object.assign(stat, { uid: 999999 }) : stat;
+        };
+        fs.openSync = (...args) => {
+          if (String(args[0]).includes('.sqlite') || String(args[0]).endsWith('/daemon.log')) {
+            opens++;
+            // Stop the base CLI at its unsafe open so no daemon is spawned by the probe.
+            if (entry === 'CLI') throw new Error('Fictional intercepted log open');
+          }
+          return open(...args);
+        };
+        syncBuiltinESMExports();
+        process.once('exit', () => fs.writeSync(2, JSON.stringify({ inserted, opens })));
+        if (entry === 'Store') {
+          const { Store } = await import('./dist/src/store.js');
+          try { new Store(directory).close(); process.stdout.write(JSON.stringify({ code: null })); }
+          catch (error) { process.stdout.write(JSON.stringify({ code: error.code })); }
+        }
+      `;
+      const args = entry === 'Store' ? ['--input-type=module', '-e', hook]
+        : ['--import', 'data:text/javascript,' + encodeURIComponent(hook), 'dist/src/cli.js', '--data-dir', join(parent, 'state'), 'start', '--offline'];
+      const child = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 10000,
+        env: { ...process.env, WCN_PRIVATE_FIXTURE: JSON.stringify([root, kind, entry]) } });
+      assert.equal(child.status, entry === 'Store' ? 0 : 1);
+      assert.equal(JSON.parse(child.stdout).code, 'PRECONDITION_FAILED', entry);
+      assert.deepEqual(JSON.parse(child.stderr), { inserted: true, opens: 0 }, entry);
+      assert.equal(existsSync(join(parent, 'state')), false);
+      assert.deepEqual(readdirSync(redirected), ['preserved']);
+      assert.equal(readFileSync(join(redirected, 'preserved'), 'utf8'), 'Fictional preserved content');
+      if (kind === 'symlink') assert.ok(lstatSync(parent).isSymbolicLink());
+      else { assert.equal(lstatSync(parent).mode & 0o777, 0o777); assert.deepEqual(readdirSync(parent), []); }
+    });
+  }
+}
+
 for (const kind of ['writable', 'foreign', 'symlink']) {
   test(`Store rejects ${kind} ancestors before creating directories or opening SQLite, preserving existing state`, () => {
     const root = temporary();
@@ -58,6 +121,54 @@ for (const kind of ['writable', 'foreign', 'symlink']) {
     assert.equal(lstatSync(root).mode & 0o777, kind === 'writable' ? 0o777 : 0o700);
   });
 }
+
+test('RPC never sends through a missing namespace introduced during validation', async () => {
+  const root = temporary();
+  const trusted = join(root, 'trusted'); mkdirSync(trusted, { mode: 0o700 });
+  const directory = join(trusted, 'state'); mkdirSync(directory, { mode: 0o700 });
+  let connections = 0;
+  let bytes = 0;
+  const sockets = new Set<Socket>();
+  const server = createServer(socket => {
+    connections++; sockets.add(socket); socket.on('error', () => {});
+    socket.once('close', () => sockets.delete(socket));
+    socket.once('data', data => {
+      bytes += data.length;
+      const request: unknown = JSON.parse(data.toString());
+      const id = request && typeof request === 'object' && 'id' in request ? request.id : null;
+      socket.end(JSON.stringify({ id, ok: true }) + '\n');
+    });
+  });
+  await new Promise<void>(done => server.listen(join(directory, 'control.sock'), done));
+  try {
+    const { stdout } = await runFile(process.execPath, ['--input-type=module', '-e', `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const root = process.argv[1];
+      const inspect = fs.lstatSync;
+      let inserted = false;
+      fs.lstatSync = (...args) => {
+        const stat = inspect(...args);
+        if (args[0] === root && !inserted) {
+          fs.symlinkSync(root + '/trusted', root + '/missing');
+          inserted = true;
+        }
+        return stat;
+      };
+      syncBuiltinESMExports();
+      const { rpc } = await import('./dist/src/rpc.js');
+      let code = null;
+      try { await rpc(root + '/missing/state', { command: 'send', jid: '123450001@lid', key: 'fictional', text: 'FICTIONAL_PRIVATE_BODY' }); }
+      catch (error) { code = error.code; }
+      process.stdout.write(JSON.stringify({ inserted, code }));
+    `, root], { timeout: 5000 });
+    assert.deepEqual(JSON.parse(stdout), { inserted: true, code: 'NOT_RUNNING' });
+    assert.equal(connections, 0); assert.equal(bytes, 0);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done()));
+  }
+});
 
 test('RPC refuses unsafe endpoints before connection/request bytes; owned private endpoint still works', async () => {
   const root = temporary();
