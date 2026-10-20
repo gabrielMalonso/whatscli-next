@@ -7,7 +7,7 @@ export type ChatFilters = { unread?: ChatStateFilter; archived?: ChatStateFilter
 export type QuoteSelector = { id: string; fromMe: boolean; participant?: string };
 
 export type Command =
-  | { command: 'status' | 'resync' | 'reconnect' | 'drop-connection' | 'pair-qr' | 'stop' }
+  | { command: 'status' | 'resync' | 'reconnect' | 'drop-connection' | 'pair-qr' | 'stop' | 'observability' }
   | ({ command: 'chats'; limit: number; offset: number } & ChatFilters)
   | { command: 'chat'; jid: string }
   | { command: 'contact'; jid: string }
@@ -53,7 +53,7 @@ function chatFilters(value: Record<string, unknown>): ChatFilters {
 
 export function parseCommand(value: Record<string, unknown>): Command {
   switch (value.command) {
-    case 'status': case 'resync': case 'reconnect': case 'drop-connection': case 'pair-qr': case 'stop':
+    case 'status': case 'resync': case 'reconnect': case 'drop-connection': case 'pair-qr': case 'stop': case 'observability':
       return { command: value.command };
     case 'chats': return { command: value.command, limit: integer(value.limit ?? 100, 1, 100), offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER), ...chatFilters(value) };
     case 'chat': return { command: value.command, jid: recipientJid(string(value.jid, 'jid')) };
@@ -117,11 +117,12 @@ export function parseCommand(value: Record<string, unknown>): Command {
 }
 
 export class RequestError extends CommandError {
-  constructor(readonly id: string | null, message: string) { super('INVALID_ARGUMENT', message); }
+  constructor(readonly id: string | null, message: string, readonly action: string = 'unknown') { super('INVALID_ARGUMENT', message); }
 }
 
 export function parseRequest(line: string): { id: string; command: Command } {
   let id: string | null = null;
+  let action = 'unknown';
   try {
     if (Buffer.byteLength(line) > 131072) throw new CommandError('INVALID_ARGUMENT', 'Request line exceeds 128 KiB');
     let parsed: unknown;
@@ -129,8 +130,9 @@ export function parseRequest(line: string): { id: string; command: Command } {
     catch { throw new CommandError('INVALID_ARGUMENT', 'Invalid JSON request'); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new CommandError('INVALID_ARGUMENT', 'Expected a JSON object');
     const value = object(parsed);
+    if (typeof value.command === 'string') action = value.command;
     id = string(value.id, 'id');
     if (id.length > 200) throw new CommandError('INVALID_ARGUMENT', 'id exceeds 200 characters');
     return { id, command: parseCommand(value) };
-  } catch (error) { throw new RequestError(id, error instanceof CommandError ? error.message : 'Invalid request'); }
+  } catch (error) { throw new RequestError(id, error instanceof CommandError ? error.message : 'Invalid request', action); }
 }
