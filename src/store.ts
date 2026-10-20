@@ -666,7 +666,12 @@ export class Store {
         merged.unreadCount = null;
     }
     if (typeof chat.archived === 'boolean') delete pending.archived;
-    if (freshUnread && chatOutput(merged).unread !== null)
+    // Positive counters can be increments/aggregates; alone they cannot settle pending state.
+    if (
+      chat.unreadCount === 0 ||
+      chat.unreadCount === -1 ||
+      chat.markedAsUnread === true
+    )
       delete pending.unread;
     this.set(
       'pending-chat',
