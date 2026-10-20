@@ -676,6 +676,7 @@ export class Observability {
   private cleanupFailures = 0;
   private hashingFailed = false;
   private hashingFailures = 0;
+  private maintenanceFailed = false;
   private evicted = 0;
   private expired = 0;
   private warned = false;
@@ -709,7 +710,8 @@ export class Observability {
       this.failed ||
       blocked ||
       this.cleanupFailed ||
-      this.hashingFailed;
+      this.hashingFailed ||
+      this.maintenanceFailed;
     return {
       configured: this.configuration.configured,
       enabled: this.enabled,
@@ -723,6 +725,7 @@ export class Observability {
         captureDegraded: this.failed || blocked,
         cleanupDegraded: this.cleanupFailed,
         hashingDegraded: this.hashingFailed,
+        retentionDegraded: this.maintenanceFailed,
       },
       session: this.session,
       generation: this.configuration.preference?.generation ?? null,
@@ -802,16 +805,21 @@ export class Observability {
     try {
       const directory = join(this.directory, 'observability');
       safeDirectory(directory);
-      return exclusive(this.directory, () => {
+      let witnessFailed = false;
+      const retained = exclusive(this.directory, () => {
+        this.refresh();
+        const current = this.configuration.preference;
+        if (!current) throw new Error('Unreadable preference');
         const files = segments(directory);
-        expireLoss(this.directory, preference.generation, this.now());
-        if (
-          files.some(
-            (file) =>
-              file.generation !== this.configuration.preference?.generation,
-          )
-        )
+        if (files.some((file) => file.generation !== current.generation))
           throw new Error('Unrecognized generation');
+        // A witness has its own provenance/gate. Preserve a bad witness without
+        // coupling it to expiration of recognized segments of this generation.
+        try {
+          expireLoss(this.directory, current.generation, this.now());
+        } catch {
+          witnessFailed = true;
+        }
         let retained = 0;
         for (const file of files) {
           if (segmentEnd(file.time) <= this.now() - OBS_LIMITS.days * dayMs) {
@@ -819,14 +827,23 @@ export class Observability {
             this.expired++;
           } else retained++;
         }
-        return (
-          retained > 0 ||
-          readLoss(this.directory, preference.generation) !== null
-        );
+        try {
+          return (
+            retained > 0 ||
+            readLoss(this.directory, current.generation) !== null
+          );
+        } catch {
+          witnessFailed = true;
+          return true;
+        }
       });
+      this.maintenanceFailed = witnessFailed;
+      if (witnessFailed) this.warn();
+      return retained || witnessFailed;
     } catch (error) {
       if (isMissing(error)) return false;
-      this.failed = true;
+      this.maintenanceFailed = true;
+      this.warn();
       return true;
     }
   }
@@ -860,8 +877,10 @@ export class Observability {
             this.configuration.preference.generation,
             this.now(),
           );
+          this.maintenanceFailed = false;
         } catch {
-          /* Preserve it. */
+          this.maintenanceFailed = true;
+          this.warn();
         }
         let expired = 0;
         let evicted = 0;
