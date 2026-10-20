@@ -945,6 +945,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
       'INVALID_ARGUMENT',
       'Observability from must precede to',
     );
+  const from = query.from ? Date.parse(query.from) : undefined;
+  const to = query.to ? Date.parse(query.to) : undefined;
   if (
     (query.action && obsAction(query.action) !== query.action) ||
     (query.code && obsCode(query.code) !== query.code) ||
@@ -1038,9 +1040,12 @@ export function queryObservability(directory: string, query: ObsQuery) {
           row.schema !== 1 ||
           typeof row.timestamp !== 'string' ||
           !Number.isFinite(timestamp) ||
-          !/^[a-f0-9]{32}$/.test(row.span ?? '') ||
-          !/^[a-f0-9]{32}$/.test(row.generation ?? '') ||
-          !/^[a-f0-9]{32}$/.test(row.session ?? '') ||
+          typeof row.span !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.span) ||
+          typeof row.generation !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.generation) ||
+          typeof row.session !== 'string' ||
+          !/^[a-f0-9]{32}$/.test(row.session) ||
           !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(
             row.origin ?? '',
           ) ||
@@ -1058,8 +1063,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
         if (
           timestamp <= retainedAfter ||
           timestamp > cutoff ||
-          (query.from && row.timestamp < query.from) ||
-          (query.to && row.timestamp > query.to)
+          (from !== undefined && timestamp < from) ||
+          (to !== undefined && timestamp > to)
         )
           continue;
         const record: ObsRecord = {
