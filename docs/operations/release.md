@@ -68,7 +68,23 @@ tar -tzvf "$candidate_dir/whatscli-next-0.1.0.tgz"
 sha256sum "$candidate_dir/whatscli-next-0.1.0.tgz"
 ```
 
-Audit the **actual archive**, not only `package.json.files`. Its only regular files should be `package/package.json`, `package/README.md`, `package/LICENSE`, `package/AGENTS.md`, the current top-level `docs/*.md`/`docs/*.json`, and each current production `src/*.ts` compiled as `package/dist/src/*.js` and `.js.map`. Check exact names against that source commit, reject links/unexpected paths, and inspect the text/code being included. The leaf file allowlist excludes nested fixture/state directories and unrelated file extensions. It cannot recognize a secret deliberately put into an allowed Markdown/JavaScript file.
+Audit the **actual archive**, not just `package.json.files`.
+
+The archive should contain only these regular files:
+
+- `package/package.json`
+- `package/README.md`
+- `package/LICENSE`
+- `package/AGENTS.md`
+- `package/CONTRIBUTING.md`
+- Top-level `docs/*.md` files
+- Markdown guides directly inside `docs/user/`, `docs/operations/`, and `docs/internals/`
+- JSON reports directly inside `docs/internals/*.json`
+- Each current production `src/*.ts` file, compiled into `package/dist/src/*.js` and `.js.map`
+
+Check exact filenames against the source commit. Reject links and unexpected paths, and inspect the included text and code.
+
+The leaf file allowlist excludes nested fixture and state directories, along with unrelated file extensions. It cannot detect a secret deliberately placed inside an otherwise allowed Markdown or JavaScript file.
 
 Reject any session, credential, database, SQLite WAL/SHM, lock, socket, QR, log, `.env`, test fixture, `dist/test`, `dist/scripts`, `node_modules`, `.private` or `.tmp` content. Exercise exclusions with **fictional canaries only**, in a disposable source copy, including state-like files under `dist/src/` and `docs/`. Never copy private data into a candidate to test exclusions. Keep the listing, per-file sizes/hashes and tarball checksum as the local manifest. No deterministic-tarball claim is made by a single successful pack.
 
@@ -125,4 +141,4 @@ The explicit source-side verifier above can detect stale/missing/unexpected buil
 4. Inspect `status` from that path/directory. Require `data.build.fingerprint` to match the recorded intended build; mismatch/unknown requires investigation, not an upgrade claim. For live work, require `hasLinkedCredentials`, `connection: open`, and the account JID approved by the owner; do not use raw `registered` as the pairing verdict. Confirm network mode/restriction and preserve `source: local`, `coverage: partial`, `appState: unknown`, `receiveContinuity.status: unproven`. Unexpected identity or QR pauses the procedure; do not pair a replacement automatically.
 5. Query known request keys and local observations. Repetition uses the same exact keys/arguments, preserving original IDs/routes/uncertainty without a new attempt. Preserve all state across restart. Stop normally and confirm PID exit before a private manual backup of the whole data directory; do not copy a live SQLite file alone. The explicit runtime `backup --out NEW_DIRECTORY` offers a verified SQLite-only alternative; [scope and NEW-directory offline recovery](backup.md) exclude locks/logs/QR/external files and preserve uncertainty. Recovery evidence is fictional/offline, without automatic downgrade, real-account restore or credential-validity guarantees.
 
-For disconnections, inspect current `recovery.reason`/`code` separately from historical issues. Known transient 408/428/503/515 retry at 1–30 seconds without an attempt limit. Terminal/unknown and socket creation/cleanup failures require investigation. An approved explicit `reconnect` or normal restart is a new connection attempt using retained credentials, never an excuse to resend uncertain intents. Open/pending-notification completion does not prove catch-up or resolve the historical decryption gap. See the [recovery contract](../README.md#recovery) and [pilot runbook](pilot.md) for the acceptance boundary.
+For disconnections, inspect current `recovery.reason`/`code` separately from historical issues. Known transient 408/428/503/515 retry at 1–30 seconds without an attempt limit. Terminal/unknown and socket creation/cleanup failures require investigation. An approved explicit `reconnect` or normal restart is a new connection attempt using retained credentials, never an excuse to resend uncertain intents. Open/pending-notification completion does not prove catch-up or resolve the historical decryption gap. See the [recovery contract](runtime.md) and [pilot runbook](pilot.md) for the acceptance boundary.

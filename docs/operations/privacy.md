@@ -14,7 +14,7 @@ A 0700 `.private/session` inside a group-writable source worktree is insufficien
 
 [Backup](backup.md) shares the ancestor rule with an existing 0700 parent and a NEW destination. QR files are exclusively created inside validated state. Explicit `send-file` inputs retain existing behavior; there is no general file sandbox. Downloads retain exclusive creation, 0600 and preserved partials.
 
-[Quoted text replies](quoted-replies.md) persist the selected visible text/caption as immutable send-intent evidence. Full/compact `request` can return that original snapshot after a later target deletion, as with existing outgoing text/caption intents. Current history/quote visibility remains redacted; deleted audit bodies, nested quotes, media payloads and cryptographic material are never copied to prepare a reply. Snapshots and backups remain private and unencrypted at rest.
+[Quoted text replies](../user/quoted-replies.md) persist the selected visible text/caption as immutable send-intent evidence. Full/compact `request` can return that original snapshot after a later target deletion, as with existing outgoing text/caption intents. Current history/quote visibility remains redacted; deleted audit bodies, nested quotes, media payloads and cryptographic material are never copied to prepare a reply. Snapshots and backups remain private and unencrypted at rest.
 
 ## Diagnostics
 

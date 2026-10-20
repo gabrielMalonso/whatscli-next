@@ -6,7 +6,7 @@ SQLite remains the durable store, owned by the single runtime. CLI and full/comp
 
 ## Backup and recovery
 
-`backup --out NEW_DIRECTORY` uses the runtime-owned handle with Node's SQLite online backup API, preserves committed logical state/schema/rowids and verifies the actual artifact before publishing `backup.json`. SQLite holds auth/key categories, intents/IDs/routes/receipts/pending state, bodies/audit/tombstones, identities, projection and events. Logs, QR PNGs, external media/files, control socket and the separate writer-lock database are excluded. No source VACUUM/checkpoint, schema migration, retention change or restore-over-existing operation is introduced. See [the complete scope, private-output rules, failure handling and offline recovery guide](backup.md). Normal stop/PID exit followed by private full-directory copying remains a valid manual path.
+`backup --out NEW_DIRECTORY` uses the runtime-owned handle with Node's SQLite online backup API, preserves committed logical state/schema/rowids and verifies the actual artifact before publishing `backup.json`. SQLite holds auth/key categories, intents/IDs/routes/receipts/pending state, bodies/audit/tombstones, identities, projection and events. Logs, QR PNGs, external media/files, control socket and the separate writer-lock database are excluded. No source VACUUM/checkpoint, schema migration, retention change or restore-over-existing operation is introduced. See [the complete scope, private-output rules, failure handling and offline recovery guide](../operations/backup.md). Normal stop/PID exit followed by private full-directory copying remains a valid manual path.
 
 ## Queries
 
@@ -25,7 +25,7 @@ Operation completion also commits the returned body/projection, request outcome 
 
 Chat filtering retains its existing AND tri-state/pending semantics and maximum activity provenance; it is included in the benchmark without an additional chat projection or cache.
 
-[Quoted text replies](quoted-replies.md) use additive request JSON: the exact caller selector in `operation.quote` and a minimal safe request `quote` snapshot committed before invocation. Snapshots contain only reference/author/type/text, without audit, nested quote or SDK secrets. They are immutable intent evidence, preserved by existing SQLite backup/restart, and never enter `message_text` or restore current content. No schema/version change is required.
+[Quoted text replies](../user/quoted-replies.md) use additive request JSON: the exact caller selector in `operation.quote` and a minimal safe request `quote` snapshot committed before invocation. Snapshots contain only reference/author/type/text, without audit, nested quote or SDK secrets. They are immutable intent evidence, preserved by existing SQLite backup/restart, and never enter `message_text` or restore current content. No schema/version change is required.
 
 ## Schema and upgrade
 
