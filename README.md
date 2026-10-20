@@ -42,7 +42,7 @@ Browse the [documentation index](docs/README.md) or start with:
 
 - [Getting started](docs/user/getting-started.md) — installation, pairing, and data directories.
 - [Agent quick reference](docs/user/agents.md) — common workflows and safe retry rules.
-- [Command guide](docs/user/commands.md) — identities, history, sends, media, and chat state.
+- [History and search](docs/user/history.md) — chat filters, pagination, and message visibility.
 - [JSON output](docs/user/output.md) — response formats, errors, and compact output.
 - [Runtime and recovery](docs/operations/runtime.md) — disconnections, shutdown, and receiving limits.
 

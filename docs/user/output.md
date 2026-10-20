@@ -7,7 +7,7 @@ node dist/src/cli.js --output compact messages --jid '12025550101@s.whatsapp.net
 node dist/src/cli.js --output full request --key 'example-message-001'
 ```
 
-Formatting happens after the response is produced, without database or network access. The socket payload is unchanged. To view an existing operation in another format, inspect its key rather than repeating the mutation. [Understanding command results](evidence.md) explains local, partial, and unknown state and the separate send and receipt evidence.
+Formatting happens after the response is produced, without database or network access. The socket payload is unchanged. [Command results and retry rules](evidence.md) covers evidence, durable keys, and interrupted operations.
 
 ## Projections and inheritance
 
@@ -43,22 +43,20 @@ Backup data is identical in full, compact, and JSONL output. Completion, SQLite-
 
 ## Command errors and safe next steps
 
-Current failures return `ok: false`, a safe human-readable `error`, and a string `code`. Branch on the code rather than the English message.
+Failures return `ok: false`, a safe human-readable `error`, and a string `code`. Branch on the code rather than English text. Codes describe the reporting boundary, not a remote outcome or permission to retry; see [failure handling](evidence.md#timeouts-and-failures) for next steps.
 
-CLI commands exit 0 on success and 1 on failure. The probe reports individual failures on stdout and continues, so its process may still exit 0. Parsed socket/probe correlation is preserved, or null when unavailable; local CLI errors do not invent an RPC ID.
+CLI commands exit 0 on success and 1 on failure. The probe continues after individual error responses and may exit 0. Socket/probe correlation is preserved when parsed, otherwise null; local CLI errors do not invent an RPC ID.
 
-| Code                  | Meaning                                                                                                                                                       | Next step                                                                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `INVALID_ARGUMENT`    | Invalid options, identity/card/key input, file/request size or shape, or socket path.                                                                         | Correct the input. Inspect an existing operation's original key first.                                                                  |
-| `KEY_CONFLICT`        | A durable key has different exact recipient, kind, content, or arguments.                                                                                     | Inspect the original intent and fix the caller. Do not use an alias or new key to bypass the conflict.                                  |
-| `PRECONDITION_FAILED` | Connection/pairing/recovery, exact target/restriction, missing or conflicting identity/message, file/media, privacy, configuration, or shutdown precondition. | Inspect status and exact local evidence; coordinate intervention. This does not authorize restart, pairing, reconnect, or resend.       |
-| `LOCAL_STATE`         | A classified local persistence, configuration, or backup failure. Other I/O failures may remain `UNKNOWN`.                                                    | Preserve state and inspect the original key and receipts. SDK effects may already exist. Fix storage problems before further mutations. |
-| `NOT_RUNNING`         | RPC connection returned ENOENT/ECONNREFUSED.                                                                                                                  | Check the directory and recorded process. An old daemon may still be cleaning up; wait for normal PID exit.                             |
-| `TIMEOUT`             | RPC response wait expired without cancelling the command.                                                                                                     | Inspect the original key and investigate or wait. Do not create a replacement send.                                                     |
-| `PROTOCOL`            | Invalid, mismatched, oversized, or incomplete RPC response.                                                                                                   | Treat the outcome as unknown. Inspect the key and transport, version, and size limits.                                                  |
-| `UNKNOWN`             | No classified cause at this boundary, including unclassified SDK, filesystem, or startup failures.                                                            | Inspect the key, status, and evidence without inferring nondelivery.                                                                    |
-
-Codes classify the reporting boundary, not the remote outcome or permission to retry. `attempt: uncertain` can appear in successful command data with `errorObserved: true`. Earlier independent receipts survive a failed completion transaction. See [Send evidence and failure handling](evidence.md) for retry rules.
+| Code                  | Reporting boundary                                                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_ARGUMENT`    | Invalid options, identity/card/key input, request/file size or shape, or socket path.                                                   |
+| `KEY_CONFLICT`        | A durable key was reused with a different exact recipient, kind, content, or arguments.                                                 |
+| `PRECONDITION_FAILED` | Unsatisfied connection, pairing/recovery, target/restriction, identity/message/media, privacy, configuration, or shutdown precondition. |
+| `LOCAL_STATE`         | Classified local persistence, configuration, or backup failure; other I/O errors may remain `UNKNOWN`.                                  |
+| `NOT_RUNNING`         | RPC connection returned ENOENT/ECONNREFUSED. This alone does not prove the old process finished cleanup.                                |
+| `TIMEOUT`             | Response wait expired without cancelling runtime work.                                                                                  |
+| `PROTOCOL`            | Invalid, mismatched, oversized, or incomplete RPC response.                                                                             |
+| `UNKNOWN`             | No classified cause at this boundary, including unclassified SDK, filesystem, or startup failures.                                      |
 
 ### Error disclosure and compatibility
 
@@ -66,7 +64,7 @@ Responses exclude arbitrary exception text, parser excerpts, supplied option val
 
 Unsafe state or socket paths fail before RPC bytes are sent, including for `status` and `stop`, without repairing permissions. Missing endpoints under trusted paths retain normal stopped behavior.
 
-An absent or unfamiliar code from an older or newer daemon remains unclassified. The CLI forwards it unchanged rather than guessing from error text. Apply the conservative `UNKNOWN` handling.
+An absent or unfamiliar code from an older or newer daemon remains unclassified. The CLI forwards it unchanged rather than guessing from error text. Treat it as unclassified, following the same failure rules.
 
 `status` and `stop` with no socket return `ok: true, running: false`. `start` may return an existing process without upgrading it.
 

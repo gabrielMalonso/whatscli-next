@@ -115,4 +115,4 @@ For local inspection without contacting WhatsApp, use `start --offline`.
 
 Changing network mode or `--allow-jid EXACT_JID` requires a normal stop before restarting. The allowlist restricts operations to one exact JID; it does not grant permission to send.
 
-Continue with the [command guide](commands.md) or [runtime and recovery](../operations/runtime.md).
+Continue with the [documentation index](../README.md) for command workflows or [runtime and recovery](../operations/runtime.md) for connection issues.

@@ -30,7 +30,7 @@ Authentication, observations, and immutable operation intents are stored in `pro
 
 Body/search updates, outcome changes, and their journals commit or roll back together. Deletion batches are atomic. SQLite transactions cannot undo remote effects or establish delivery.
 
-See [storage](storage.md) for schema and search rules, [command evidence](../user/evidence.md) for interpreting results, and [read/unread internals](read-unread.md) for SDK confirmation limits.
+See [storage](storage.md) for schema and search rules, [message content and observations](message-content.md) for card encoding and deletion/activity normalization, and [read/unread internals](read-unread.md) for SDK confirmation limits. [Command evidence](../user/evidence.md) explains how to interpret results.
 
 Credentials and messages are not encrypted at rest. [Privacy](../operations/privacy.md), [backup/recovery](../operations/backup.md), and [runtime recovery](../operations/runtime.md) cover operational requirements. [Observability](observability-architecture.md) is a separate best-effort recorder, not authoritative operation state.
 
