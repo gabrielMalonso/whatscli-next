@@ -5,6 +5,7 @@ import type { Operation, RequestRecord, Store } from './store.js';
 import { isSendOperation } from './store.js';
 import { unprovenRoute } from './send-route.js';
 import type { SendRoute } from './send-route.js';
+import { CommandError } from './errors.js';
 
 function sameOperation(prior: Operation, operation: Operation): boolean {
   if (prior.jid !== operation.jid) return false;
@@ -27,10 +28,10 @@ export async function perform(
   preparation?: { pending: Map<string, Promise<void>>; route: (jid: string) => Promise<SendRoute> },
 ): Promise<RequestRecord> {
   recipientJid(operation.jid);
-  if (!key || key.length > 200) throw new Error('A nonempty idempotency key (up to 200 characters) is required');
+  if (!key || key.length > 200) throw new CommandError('INVALID_ARGUMENT', 'A nonempty idempotency key (up to 200 characters) is required');
   const previous = store.request(key);
   if (previous) {
-    if (!sameOperation(previous.operation, operation)) throw new Error('Idempotency key already used with different arguments');
+    if (!sameOperation(previous.operation, operation)) throw new CommandError('KEY_CONFLICT', 'Idempotency key already used with different arguments');
     return previous;
   }
   const pending = preparation?.pending.get(key);
@@ -57,11 +58,13 @@ export async function perform(
       ...(route ? { route } : {}),
       attempt: 'uncertain', acceptance: 'unknown', delivery: 'unknown', read: 'unknown', errorObserved: false,
     };
-    store.transaction(() => {
+    try { store.transaction(() => {
       store.saveRequest(record);
       store.invalidateChatState(key, operation);
       store.event('operation-attempt', { key, kind: operation.kind, jid: operation.jid, messageId: record.messageId });
-    });
+    }); } catch (cause) {
+      throw new CommandError('LOCAL_STATE', 'Local operation intent could not be persisted; inspect the original idempotency key', { cause });
+    }
   } finally {
     preparation?.pending.delete(key);
     release();
@@ -77,7 +80,7 @@ export async function perform(
   } catch { outcome = { returned: false }; }
   // Local persistence errors must escape, not become SDK uncertainty. Commit the
   // body, request outcome and journal together, preserving earlier independent receipts.
-  return store.transaction(() => {
+  try { return store.transaction(() => {
     // An SDK return is local outgoing evidence, not an independently observed conversation.
     if (outcome.returned && outcome.message) store.observeMessage(outcome.message, false);
     const latest = store.request(key) ?? record;
@@ -86,5 +89,7 @@ export async function perform(
     store.saveRequest(latest);
     store.event(outcome.returned ? 'operation-sdk-returned' : 'operation-uncertain', { key });
     return latest;
-  });
+  }); } catch (cause) {
+    throw new CommandError('LOCAL_STATE', 'Local operation completion could not be persisted; inspect the original idempotency key', { cause });
+  }
 }

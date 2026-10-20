@@ -138,6 +138,12 @@ try {
         assert(stderr[0]!.startsWith('WHATSCLI_BENCH_METRICS '), result.stderr);
         const usage = JSON.parse(stderr[0]!.slice('WHATSCLI_BENCH_METRICS '.length)) as { userMs: number; systemMs: number; peakRssBytes: number };
         const payload = stable(result.stdout);
+        // The fixed pre-contract baseline has no local validation code. Assert the
+        // additive contract separately, then compare the remaining public result.
+        if (scenario.name === 'client-error') {
+          assert.equal(payload.code, variant ? 'INVALID_ARGUMENT' : undefined);
+          delete payload.code;
+        }
         const digest = hash(JSON.stringify(payload));
         expected ??= digest;
         assert.equal(digest, expected, 'base/candidate output mismatch');
@@ -203,7 +209,7 @@ try {
       fake: 'One fictional Unix socket server, authoritative parseRequest, fixed public fixture envelopes. Preencoded body, fresh correlated UUID prefix. No Store, runtime, SDK connection or WhatsApp.',
       raw: 'New process per scenario/variant. RPC time and CPU measured after imports; first + 10 sequential calls. RSS high-water includes imports and prior result hashing. No CLI formatting/stdout body.',
       limits: 'Fake transport isolates response assembly, not daemon/Store/network performance. All RAM effects are transient clients; persistent daemon RAM/disk/ingestion unchanged by this scope.',
-      equivalence: 'Every CLI output and raw result SHA256 asserted across variants after removing only random RPC id; also compared with expected full/compact public fixture.',
+      equivalence: 'Every CLI output and raw result SHA256 asserted across variants after removing random RPC id; client-error additionally asserts/removes only the candidate INVALID_ARGUMENT code absent in the fixed baseline. Also compared with expected full/compact public fixture.',
       scratch, fictionalSocketDirectory: directory }, startup, measurements, rawRpc };
   const output = resolve(values.output ?? join(scratch, 'report.json'));
   writeFileSync(output, JSON.stringify(report, null, 2) + '\n');

@@ -8,6 +8,7 @@ import { prepareFile, saveMedia } from '../src/media.js';
 import { perform } from '../src/operations.js';
 import { createRuntime } from '../src/runtime.js';
 import { Store } from '../src/store.js';
+import { CommandError, errorResponse } from '../src/errors.js';
 
 process.umask(0o077);
 mkdirSync('.tmp', { recursive: true, mode: 0o700 });
@@ -62,7 +63,15 @@ test('failed and oversized media streams are reported as partial and remain priv
   assert.ok(statSync(path).size <= 4);
   assert.equal(statSync(path).mode & 0o777, 0o600);
   const broken = join(directory, 'failed.bin');
-  await assert.rejects(saveMedia(broken, async () => { throw new Error('Fictional network failure'); }), /partial file preserved/);
+  await assert.rejects(saveMedia(broken, async () => { throw new Error('FICTIONAL_PRIVATE_NETWORK_BODY'); }), error => {
+    assert.ok(error instanceof CommandError);
+    assert.equal(error.code, 'UNKNOWN', 'download failure does not classify an arbitrary SDK/network cause');
+    assert.match(error.message, /partial file preserved/);
+    const response = JSON.stringify(errorResponse(error));
+    assert.equal(response.includes(broken), false);
+    assert.doesNotMatch(response, /FICTIONAL_PRIVATE_NETWORK_BODY|cause|stack/);
+    return true;
+  });
   assert.equal(statSync(broken).mode & 0o777, 0o600);
 });
 

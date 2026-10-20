@@ -16,6 +16,8 @@ node dist/src/cli.js help
 
 `help` returns a JSON command reference. You can also run `pnpm -s whatscli ...`. Use Node directly when another program must consume stdout without package-manager output.
 
+Command failures retain human-readable `error` and add a stable `code` where the cause is known, with an explicit `UNKNOWN` fallback. See the [error contract and safe next steps](docs/output.md#command-errors-and-safe-next-steps), including legacy daemons and local persistence failures. Codes never establish nondelivery or authorize a retry; inspect an operation's original key after an error.
+
 Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. `pnpm-lock.yaml` fixes the dependency graph and integrity hashes. Installation scripts for Baileys (a Node version check) and protobufjs are disabled; the published code is used directly.
 
 For a fixed candidate, use the [source-by-commit installation and local package checks](docs/release.md), including a fresh build and a recorded startup PID. Building or calling `start` does not update an existing daemon. The [supervised pilot runbook](docs/pilot.md) requires a separately approved account and exact conversations; preparation alone does not complete roadmap 08.

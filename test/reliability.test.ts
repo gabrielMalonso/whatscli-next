@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { proto } from 'baileys';
 import { perform } from '../src/operations.js';
+import { CommandError, errorResponse } from '../src/errors.js';
 import { Store } from '../src/store.js';
 import type { RequestRecord } from '../src/store.js';
 
@@ -14,6 +15,15 @@ const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'reliability-'))
 const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const operation = { kind: 'send' as const, jid: lid, text: 'Fictional durable intent' };
+
+function localFailure(error: unknown): boolean {
+  assert.ok(error instanceof CommandError);
+  assert.equal(error.code, 'LOCAL_STATE');
+  assert.ok(error.cause instanceof Error);
+  assert.match(error.cause.message, /fictional local failure/);
+  assert.doesNotMatch(JSON.stringify(errorResponse(error)), /fictional local failure|stack|cause/);
+  return true;
+}
 
 for (const boundary of ['message_text', 'operation-sdk-returned'] as const) {
   test(`local ${boundary} failure rolls back send completion without erasing independent evidence or resending`, async () => {
@@ -38,7 +48,7 @@ for (const boundary of ['message_text', 'operation-sdk-returned'] as const) {
       assert.ok(before?.messageId);
       const duplicate = await perform(store, 'send-key', operation, () => assert.fail('No second validation'), async () => assert.fail('No second send'));
       assert.deepEqual(duplicate, before);
-      const rejected = assert.rejects(sending, /fictional local failure/);
+      const rejected = assert.rejects(sending, localFailure);
       release();
       await rejected;
       assert.deepEqual(store.request('send-key'), before);
@@ -69,7 +79,7 @@ test('failed uncertainty journal rolls back the outcome while retaining pending 
       calls++;
       before = store.request('archive-key');
       throw new Error('Fictional SDK timeout');
-    }), /fictional local failure/);
+    }), localFailure);
     assert.ok(before);
     assert.deepEqual(store.request('archive-key'), before);
     const chat = store.chatView(pn);

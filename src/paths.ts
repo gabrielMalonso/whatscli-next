@@ -1,3 +1,4 @@
+import { CommandError } from './errors.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -10,6 +11,6 @@ export function dataDirectory(value?: string): string {
 
 export function socketPath(directory: string): string {
   const path = join(directory, 'control.sock');
-  if (Buffer.byteLength(path) > 100) throw new Error('Unix socket path is too long; use a shorter --data-dir (socket path limit: 100 bytes)');
+  if (Buffer.byteLength(path) > 100) throw new CommandError('INVALID_ARGUMENT', 'Unix socket path is too long; use a shorter --data-dir (socket path limit: 100 bytes)');
   return path;
 }

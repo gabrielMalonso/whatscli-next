@@ -4,6 +4,7 @@ import { installConsoleDiagnostics } from './diagnostics.js';
 import { parseRequest, RequestError } from './protocol.js';
 import { createRuntime } from './runtime.js';
 import { encode } from './store.js';
+import { errorResponse } from './errors.js';
 
 process.umask(0o077);
 installConsoleDiagnostics();
@@ -33,7 +34,7 @@ async function main(): Promise<void> {
         process.stdout.write(encode({ id, ok: true, data, ...runtime.snapshot() }) + '\n');
         if (request.command.command === 'stop') break;
       } catch (error) {
-        process.stdout.write(encode({ id: error instanceof RequestError ? error.id : id, ok: false, error: error instanceof Error ? error.message : 'Unknown error' }) + '\n');
+        process.stdout.write(encode({ id: error instanceof RequestError ? error.id : id, ...errorResponse(error) }) + '\n');
       }
     }
   } finally { input.close(); await runtime.close(); }

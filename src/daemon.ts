@@ -6,6 +6,7 @@ import { installConsoleDiagnostics } from './diagnostics.js';
 import { parseRequest, RequestError } from './protocol.js';
 import { dataDirectory, socketPath } from './paths.js';
 import { createRuntime } from './runtime.js';
+import { CommandError, errorResponse } from './errors.js';
 
 process.umask(0o077);
 installConsoleDiagnostics();
@@ -35,7 +36,7 @@ async function main(): Promise<void> {
     const respond = (value: unknown): void => { if (!client.destroyed) client.end(JSON.stringify(value) + '\n'); };
     client.on('data', chunk => {
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > 131072) { respond({ id: null, ok: false, error: 'Request exceeds 128 KiB' }); return; }
+      if (Buffer.byteLength(buffer) > 131072) { respond({ id: null, ...errorResponse(new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB')) }); return; }
       const end = buffer.indexOf('\n');
       if (end < 0) return;
       client.removeAllListeners('data');
@@ -45,11 +46,11 @@ async function main(): Promise<void> {
         try {
           const request = parseRequest(line);
           id = request.id;
-          if (stopping && request.command.command !== 'status') throw new Error('Daemon is stopping');
+          if (stopping && request.command.command !== 'status') throw new CommandError('PRECONDITION_FAILED', 'Daemon is stopping');
           const data = await runtime.execute(request.command);
           respond({ id, ok: true, data, running: true, pid: process.pid, ...runtime.snapshot() });
           if (request.command.command === 'stop') void shutdown();
-        } catch (error) { respond({ id: error instanceof RequestError ? error.id : id, ok: false, error: error instanceof Error ? error.message : 'Command failed' }); }
+        } catch (error) { respond({ id: error instanceof RequestError ? error.id : id, ...errorResponse(error) }); }
       })();
       active.add(work);
       void work.finally(() => active.delete(work));
