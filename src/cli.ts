@@ -21,6 +21,7 @@ function options() {
     jid: { type: 'string' }, key: { type: 'string' }, text: { type: 'string' }, file: { type: 'string' },
     mime: { type: 'string' }, caption: { type: 'string' }, out: { type: 'string' }, id: { type: 'string' },
     participant: { type: 'string' }, 'from-me': { type: 'string' }, query: { type: 'string' },
+    'quote-id': { type: 'string' }, 'quote-from-me': { type: 'string' }, 'quote-participant': { type: 'string' },
     limit: { type: 'string' }, offset: { type: 'string' }, after: { type: 'string' }, phone: { type: 'string' },
     unread: { type: 'string' }, archived: { type: 'string' }, output: { type: 'string' }, name: { type: 'string' },
   } }); }
@@ -54,7 +55,7 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
       chats: '[--unread true|false|unknown] [--archived true|false|unknown] [--limit 100] [--offset 0]', chat: '--jid JID',
       resolve: '--phone +INTERNATIONAL_DIGITS', contact: '--jid PN_OR_LID_JID',
       messages: '--jid JID [--limit 20] [--offset 0]', search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
-      send: '--jid JID --key KEY --text TEXT', 'send-file': '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
+      send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]]', 'send-file': '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
       'send-contact': '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS',
       download: '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
       archive: '--jid JID --key KEY', unarchive: '--jid JID --key KEY', read: '--jid JID --key KEY', unread: '--jid JID --key KEY',
@@ -130,7 +131,16 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
     case 'resolve': only('phone'); command = { command: action, phone: required(values.phone, 'phone') }; break;
     case 'messages': only('jid', 'limit', 'offset'); command = { command: action, jid: jid(), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
     case 'search': only('jid', 'query', 'limit', 'offset'); command = { command: action, query: required(values.query, 'query'), ...(values.jid ? { jid: values.jid } : {}), limit: Number(values.limit ?? 20), offset: Number(values.offset ?? 0) }; break;
-    case 'send': only('jid', 'key', 'text'); command = { command: action, jid: jid(), key: key(), text: required(values.text, 'text') }; break;
+    case 'send': {
+      only('jid', 'key', 'text', 'quote-id', 'quote-from-me', 'quote-participant');
+      const quoted = ['quote-id', 'quote-from-me', 'quote-participant'].some(field => field in values);
+      if (quoted && !['true', 'false'].includes(required(values['quote-from-me'], 'quote-from-me'))) throw new CommandError('INVALID_ARGUMENT', '--quote-from-me must be true or false');
+      command = { command: action, jid: jid(), key: key(), text: required(values.text, 'text'), ...(quoted ? {
+        quote: { id: required(values['quote-id'], 'quote-id'), fromMe: values['quote-from-me'] === 'true',
+          ...(values['quote-participant'] === undefined ? {} : { participant: values['quote-participant'] }) },
+      } : {}) };
+      break;
+    }
     case 'send-contact': only('jid', 'key', 'name', 'phone'); command = { command: action, jid: jid(), key: key(), name: required(values.name, 'name'), phone: required(values.phone, 'phone') }; break;
     case 'send-file': only('jid', 'key', 'file', 'mime', 'caption'); command = { command: action, jid: jid(), key: key(), path: resolve(required(values.file, 'file')), mime: values.mime ?? 'application/octet-stream', caption: values.caption ?? '' }; break;
     case 'download':

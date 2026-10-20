@@ -7,7 +7,8 @@ import { chatOutput, isUnreadCount, messageOutput, messageText } from './output.
 import type { Deletion, QuoteReference } from './output.js';
 import { contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
-import type { ChatFilters } from './protocol.js';
+import type { ChatFilters, QuoteSelector } from './protocol.js';
+import type { QuoteSnapshot } from './quoted-text.js';
 import { decode, decodeMessage, encode } from './store-codec.js';
 import { createSchema } from './store-schema.js';
 import { receiptUserJid } from './send-route.js';
@@ -18,7 +19,7 @@ import { checkPrivatePath, ensurePrivateDirectory, isMissing } from './private-p
 export { decode, encode } from './store-codec.js';
 
 export type Operation =
-  | { kind: 'send'; jid: string; text: string }
+  | { kind: 'send'; jid: string; text: string; quote?: QuoteSelector }
   | { kind: 'send-file'; jid: string; path: string; mime: string; caption: string; bytes: number; sha256: string }
   | { kind: 'send-contact'; jid: string; name: string; phone: string; vcard: string }
   | { kind: 'archive'; jid: string; value: boolean }
@@ -33,6 +34,7 @@ export type RequestRecord = {
   operation: Operation;
   messageId: string | null;
   readonly route?: SendRoute;
+  readonly quote?: QuoteSnapshot;
   attempt: 'uncertain' | 'sdk-returned';
   acceptance: 'unknown' | 'server-ack';
   delivery: 'unknown' | 'delivered';

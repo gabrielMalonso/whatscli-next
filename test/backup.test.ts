@@ -66,6 +66,11 @@ function seed(store: Store): RequestRecord {
     attempt: 'uncertain', acceptance: 'unknown', delivery: 'unknown', read: 'unknown', errorObserved: true,
   };
   store.saveRequest(record);
+  store.saveRequest({ ...record, key: 'quoted-reply', messageId: 'IMMUTABLE_QUOTED_ID', operation: { kind: 'send', jid: lid, text: 'Fictional reply',
+    quote: { id: 'original', fromMe: false } }, quote: {
+    reference: { jid: lid, id: 'original', fromMe: false, participant: null },
+    author: lid, contentType: 'conversation', text: 'Fictional quoted snapshot',
+  } });
   store.receipt({ remoteJid: lid, id: record.messageId, fromMe: true }, proto.WebMessageInfo.Status.DELIVERY_ACK);
   const pending: RequestRecord = { ...record, key: 'pending', operation: { kind: 'archive', jid: pn, value: true }, messageId: null };
   store.saveRequest(pending); store.invalidateChatState(pending.key, pending.operation);
@@ -138,6 +143,10 @@ test('online backup preserves WAL commits, every logical row/rowid, auth, uncert
         assert.deepEqual(await runtime.execute({ command: 'send', key: record.key, jid: pn, text: 'PRIVATE_INTENT_BODY' }), record);
         const file = object(await runtime.execute({ command: 'send-file', key: 'file', jid: pn, path: '/fictional/unavailable.txt', mime: 'text/plain', caption: '' }));
         assert.equal(file.messageId, 'IMMUTABLE_ID');
+        const reply = await runtime.execute({ command: 'send', key: 'quoted-reply', jid: lid, text: 'Fictional reply', quote: { id: 'original', fromMe: false } }) as RequestRecord;
+        assert.equal(reply.quote?.text, 'Fictional quoted snapshot');
+        assert.deepEqual(reply.quote?.reference, { jid: lid, id: 'original', fromMe: false, participant: null });
+        assert.equal(reply.attempt, 'uncertain');
         await assert.rejects(runtime.execute({ command: 'send', key: record.key, jid: pn, text: 'Different' }), hasCode('KEY_CONFLICT'));
         assert.equal(runtime.snapshot().receiveContinuity.status, 'unproven');
       } finally { await runtime.close(); }

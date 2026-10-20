@@ -78,6 +78,8 @@ Use `request --output full --key KEY` to inspect the complete public intent with
 
 Missing receipt evidence remains `unknown`. Group participant receipts are separate events and cannot establish every participant's outcome. Phone confirmation is independent evidence; it does not rewrite SDK-derived receipt fields.
 
+For a text reply, add `--quote-id MESSAGE_ID --quote-from-me true|false` to `send`; in groups also supply `--quote-participant EXACT_STORED_AUTHOR_JID`. Select only from the same exact conversation's stored history. [Quoted replies](quoted-replies.md) documents supported text/captions, own-LID and PN→LID route refusals, the wire selector and immutable safe snapshot. Replay keeps the original intent even after target edits/deletions; inspect the original key without changing it.
+
 Share one explicitly supplied contact card with the same durable-key rules:
 
 ```sh

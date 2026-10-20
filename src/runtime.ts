@@ -15,6 +15,7 @@ import { createBackup } from './backup.js';
 import { unprovenRoute } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 import { contactCard } from './contact-card.js';
+import { prepareQuote, quotedMessage } from './quoted-text.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
@@ -342,11 +343,15 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         }
         await reconnect();
         return { reconnecting: true };
-      case 'send': return perform(store, command.key, { kind: 'send', jid: command.jid, text: command.text },
-        () => validateTarget(command.jid, true), async (messageId, destination) => {
+      case 'send': {
+        const quote = command.quote;
+        return perform(store, command.key, { kind: 'send', jid: command.jid, text: command.text, ...(quote ? { quote } : {}) },
+        () => validateTarget(command.jid, true), async (messageId, destination, record) => {
           if (!messageId) throw new Error('Missing persisted message ID');
-          return connected().sendMessage(destination, { text: command.text, linkPreview: null }, { messageId });
-        }, sendPreparation);
+          return connected().sendMessage(destination, { text: command.text, linkPreview: null }, { messageId,
+            ...(record.quote ? { quoted: quotedMessage(record.quote) } : {}) });
+        }, quote ? { ...sendPreparation, quote: () => prepareQuote(store, command.jid, quote, auth.state.creds.me?.id) } : sendPreparation);
+      }
       case 'send-contact': {
         const card = contactCard(command.name, command.phone);
         return perform(store, command.key, { kind: 'send-contact', jid: command.jid, name: command.name, phone: command.phone, vcard: card.vcard },
