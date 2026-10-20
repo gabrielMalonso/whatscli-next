@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
@@ -24,14 +25,15 @@ function privatePath(path: string, kind: 'directory' | 'file') {
   return stat;
 }
 
-function checkParent(path: string): void {
+function checkParent(path: string, inspect: (path: string) => Stats): void {
   privatePath(path, 'directory');
   // A private leaf cannot protect against an ancestor another user can replace.
   for (let ancestor = path; ; ancestor = dirname(ancestor)) {
-    const stat = lstatSync(ancestor);
+    const stat = inspect(ancestor);
     const sharedTemporary = stat.uid === 0 && (stat.mode & 0o1000) !== 0;
-    if (!stat.isDirectory() || stat.isSymbolicLink() || ((stat.mode & 0o022) !== 0 && !sharedTemporary)) {
-      throw new CommandError('PRECONDITION_FAILED', 'Backup ancestors must be directories without symlinks or unsafe write permissions');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== 0 && stat.uid !== process.getuid?.())
+      || ((stat.mode & 0o022) !== 0 && !sharedTemporary)) {
+      throw new CommandError('PRECONDITION_FAILED', 'Backup ancestors must be owned by the runtime user or root, without symlinks or unsafe write permissions');
     }
     if (dirname(ancestor) === ancestor) break;
   }
@@ -40,13 +42,13 @@ function checkParent(path: string): void {
 /** Runtime-owned SQLite online backup. Only backup.json publishes successful verification.
  * Failed output stays private in the newly reserved directory; nothing is removed or reused.
  */
-export async function createBackup(source: DatabaseSync, directory: string, copy = backup): Promise<BackupResult> {
+export async function createBackup(source: DatabaseSync, directory: string, copy = backup, inspect: (path: string) => Stats = lstatSync): Promise<BackupResult> {
   if (!isAbsolute(directory) || resolve(directory) !== directory || directory.includes('\0')) {
     throw new CommandError('INVALID_ARGUMENT', 'Backup output must be an absolute normalized NEW directory path');
   }
   if (source.isTransaction) throw new CommandError('PRECONDITION_FAILED', 'Backup requires a committed SQLite state');
   try {
-    checkParent(dirname(directory));
+    checkParent(dirname(directory), inspect);
     mkdirSync(directory, { mode: 0o700 }); // Exclusive reservation, including dangling symlinks.
   } catch (cause) {
     if (cause instanceof CommandError) throw cause;

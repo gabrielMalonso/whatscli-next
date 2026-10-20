@@ -177,6 +177,28 @@ test('backup rejects existing output, symlinks and insecure parents without over
   } finally { store.close(); }
 });
 
+test('backup rejects a foreign-owned 0755 ancestor before reserving output or invoking the copy', async () => {
+  const root = temporary();
+  const store = new Store(join(root, 'source'));
+  const parent = join(root, 'parent'); mkdirSync(parent, { mode: 0o700 });
+  const output = join(parent, 'snapshot');
+  let copied = false;
+  try {
+    await assert.rejects(createBackup(store.db, output, async () => {
+      copied = true; throw new Error('Copy must not run');
+    }, path => {
+      const stat = lstatSync(path);
+      // Inject only ownership metadata; no chown, other account or multi-user attack.
+      return path === root ? Object.assign(stat, { uid: 999999, mode: (stat.mode & ~0o777) | 0o755 }) : stat;
+    }), hasCode('PRECONDITION_FAILED'));
+    assert.equal(copied, false);
+    assert.equal(existsSync(output), false);
+    assert.deepEqual(readdirSync(parent), []);
+    assert.equal(lstatSync(root).uid, process.getuid?.());
+    assert.equal(lstatSync(root).mode & 0o777, 0o700);
+  } finally { store.close(); }
+});
+
 test('copy, verification and publication failures preserve partials, source and writer lock with safe errors', async () => {
   const root = temporary();
   const store = new Store(join(root, 'source'));
