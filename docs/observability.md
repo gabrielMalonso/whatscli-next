@@ -1,5 +1,7 @@
 # Persistent, local opt-in observability
 
+For the current capture architecture, seven-point investigation and final bounded comparison, see [capture architecture evidence](observability-architecture.md).
+
 New data directories have observability **off**. Enable once for the selected directory; the preference survives CLI exit and normal daemon stop/start:
 
 ```sh
