@@ -4,6 +4,7 @@ import { CommandError } from './errors.js';
 
 export type ChatStateFilter = boolean | 'unknown';
 export type ChatFilters = { unread?: ChatStateFilter; archived?: ChatStateFilter };
+export type QuoteSelector = { id: string; fromMe: boolean; participant?: string };
 
 export type Command =
   | { command: 'status' | 'resync' | 'reconnect' | 'drop-connection' | 'pair-qr' | 'stop' }
@@ -18,7 +19,7 @@ export type Command =
   | { command: 'request'; key: string }
   | { command: 'backup'; path: string }
   | { command: 'pair-code'; phone: string }
-  | { command: 'send'; key: string; jid: string; text: string }
+  | { command: 'send'; key: string; jid: string; text: string; quote?: QuoteSelector }
   | { command: 'send-file'; key: string; jid: string; path: string; mime: string; caption: string }
   | { command: 'send-contact'; key: string; jid: string; name: string; phone: string }
   | { command: 'download'; jid: string; messageId: string; path: string; fromMe?: boolean; participant?: string }
@@ -80,7 +81,16 @@ export function parseCommand(value: Record<string, unknown>): Command {
     case 'send': {
       const text = string(value.text, 'text');
       if (Buffer.byteLength(text) > 65536) throw new CommandError('INVALID_ARGUMENT', 'Text exceeds the probe limit (64 KiB)');
-      return { command: value.command, jid: recipientJid(string(value.jid, 'jid')), key: string(value.key, 'key'), text };
+      let quote: QuoteSelector | undefined;
+      if (value.quote !== undefined) {
+        if (!value.quote || typeof value.quote !== 'object' || Array.isArray(value.quote)) throw new CommandError('INVALID_ARGUMENT', 'quote must be an exact message selector');
+        const ref = object(value.quote);
+        if (typeof ref.fromMe !== 'boolean') throw new CommandError('INVALID_ARGUMENT', 'quote.fromMe must be a boolean');
+        if (Object.keys(ref).some(key => !['id', 'fromMe', 'participant'].includes(key))) throw new CommandError('INVALID_ARGUMENT', 'Unknown quote selector field');
+        quote = { id: string(ref.id, 'quote.id'), fromMe: ref.fromMe,
+          ...(ref.participant === undefined ? {} : { participant: contactJid(string(ref.participant, 'quote.participant')) }) };
+      }
+      return { command: value.command, jid: recipientJid(string(value.jid, 'jid')), key: string(value.key, 'key'), text, ...(quote ? { quote } : {}) };
     }
     case 'send-file': return {
       command: value.command, jid: recipientJid(string(value.jid, 'jid')), key: string(value.key, 'key'),

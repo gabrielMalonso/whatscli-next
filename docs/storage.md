@@ -25,6 +25,8 @@ Operation completion also commits the returned body/projection, request outcome 
 
 Chat filtering retains its existing AND tri-state/pending semantics and maximum activity provenance; it is included in the benchmark without an additional chat projection or cache.
 
+[Quoted text replies](quoted-replies.md) use additive request JSON: the exact caller selector in `operation.quote` and a minimal safe request `quote` snapshot committed before invocation. Snapshots contain only reference/author/type/text, without audit, nested quote or SDK secrets. They are immutable intent evidence, preserved by existing SQLite backup/restart, and never enter `message_text` or restore current content. No schema/version change is required.
+
 ## Schema and upgrade
 
 Schema `PRAGMA user_version=1` is an additive upgrade from the version-0 repository schema. Startup under the writer lock runs existing identity/deletion/activity recovery first, streams current message rows into `message_text`, builds query indexes and commits the backfill plus version atomically. It preserves message rowids, requests, IDs, routes, authentication and audit records. Projection ordering uses the existing SQLite JID/timestamp columns, including full protobuf Long timestamps, rather than recomputing metadata from decoded JSON. A failed query backfill rolls back and fails startup; it does not reset state or start a socket. Subsequent starts skip the completed backfill.

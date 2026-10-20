@@ -121,7 +121,7 @@ Keys are matched by exact chat, message ID, direction and incoming participant w
 
 The SDK also types `{jid, all: true}` with no server time or message range. On that observation, known rows in the exact chat are deleted; a persisted local time boundary conservatively withholds later old/undated arrivals as `status: unknown, source: chat-delete-boundary`. A newly observed message timestamped after that boundary is allowed. Clock skew and missing timestamps cannot establish membership in the cleared range; unknown quotes across that boundary are withheld too. Legacy delete journals are recovered on upgrade; the same range uncertainty applies to old chat-wide events. This is local, partial evidence, not a remote retention guarantee. Previously exported files/responses are not recalled, and immutable outbound request intents retain the originally supplied text/caption as intent evidence.
 
-Send text, a local file or one explicit contact card:
+Send text, a local file or one explicit contact card. Text can also [quote one explicitly selected stored message](docs/quoted-replies.md), with exact direction/participant, safe snapshots and documented PN/LID SDK limits:
 
 ```sh
 node dist/src/cli.js send \

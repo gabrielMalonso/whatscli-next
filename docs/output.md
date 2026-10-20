@@ -28,6 +28,8 @@ The envelope retains `ok`, errors/codes, RPC correlation `id`, running/connectio
 | `archive`, `unarchive`, `read`, `unread` | Apply the chat projection to `data.localChat`. Keep the complete request and pending verification. |
 | Others | Unchanged. In particular, `send`, `send-file`, `send-contact` and `request` retain immutable operation (including the card's explicit name/phone/vCard), key, message ID, attempt, acceptance, delivery, read and error evidence. |
 
+[Text replies](quoted-replies.md) add optional `operation.quote: {id, fromMe, participant?}` and request-level `quote: {reference: {jid, id, fromMe, participant}, author, contentType, text}`. Full/compact preserve both identically. The request snapshot is original intent evidence and remains queryable after deletion; current message quotes still follow deletion visibility. Legacy sends omit both fields. This does not change search indexing or the one-level public embedded quote projection.
+
 Message component defaults are explicit:
 
 - Missing `quote`, `contacts`, `media` or `stubType` means the full field was null. Present components retain every public field. Missing quote means no local quote evidence; missing media does not prove there is no unavailable media.
