@@ -209,84 +209,128 @@ test('quote wire selector keeps target ID separate from correlation and requires
   );
 });
 
-test('rc14 quoted generation preserves exact direct/group direction and PN/LID authors offline', async () => {
+test('rc14 quoted generation preserves exact direct/group direction and PN/LID authors offline', async (t) => {
   for (const [jid, fromMe, participant, author] of [
     [pn, false, undefined, pn],
+    [pn, false, null, pn],
+    [pn, false, '', pn],
+    [pn, false, pn, pn],
     [lid, false, undefined, lid],
+    [lid, false, null, lid],
+    [lid, false, '', lid],
+    [lid, false, lid, lid],
     [pn, true, undefined, me],
+    [pn, true, null, me],
+    [pn, true, '', me],
+    [pn, true, me, me],
     [group, false, pn, pn],
     [group, false, lid, lid],
     [group, true, me, me],
   ] as const) {
-    const target = original({
-      remoteJid: jid,
-      id: 'original',
-      fromMe,
-      ...(participant ? { participant } : {}),
-    });
-    const input = {
-      ...command,
-      jid,
-      quote: {
-        id: 'original',
-        fromMe,
-        ...(participant ? { participant } : {}),
-      },
-    };
-    const f = fixture([target]);
-    try {
-      const result = (await f.runtime.execute(input)) as RequestRecord;
-      const generated = f.generated[0]!;
-      const context = generated.message?.extendedTextMessage?.contextInfo;
-      assert.equal(context?.stanzaId, 'original');
-      assert.equal(context?.participant, author);
-      assert.equal(
-        context?.remoteJid,
-        null,
-        'same conversation must not create a cross-chat quote',
-      );
-      assert.equal(
-        context?.quotedMessage?.conversation,
-        'Fictional original body',
-      );
-      assert.equal(generated.message?.extendedTextMessage?.text, command.text);
-      assert.equal(generated.key.id, result.messageId);
-      assert.deepEqual(result.operation, {
-        kind: 'send',
-        jid,
-        text: command.text,
-        quote: input.quote,
-      });
-      assert.deepEqual(result.quote?.reference, {
-        jid,
-        id: 'original',
-        fromMe,
-        participant: participant ?? null,
-      });
-      assert.equal(result.quote?.author, author);
-      assert.equal(result.attempt, 'sdk-returned');
-      assert.equal(result.acceptance, 'unknown');
-      assert.equal(result.delivery, 'unknown');
-      assert.equal(result.read, 'unknown');
-      assert.equal(f.queries(), jid === pn ? 1 : 0);
-      for (const action of ['send', 'request'])
-        for (const mode of ['full', 'compact'] as const) {
-          assert.deepEqual(
-            formatResponse(action, { ok: true, data: result }, mode).data,
-            result,
+    await t.test(
+      `${jid} fromMe=${fromMe} participant=${String(participant)}`,
+      async () => {
+        const target = original({
+          remoteJid: jid,
+          id: 'original',
+          fromMe,
+          ...(participant !== undefined ? { participant } : {}),
+        });
+        const input = {
+          ...command,
+          jid,
+          quote: {
+            id: 'original',
+            fromMe,
+            ...(participant ? { participant } : {}),
+          },
+        };
+        const f = fixture([target]);
+        try {
+          if (participant === '') {
+            await assert.rejects(
+              f.runtime.execute({
+                ...input,
+                quote: { ...input.quote, participant: author },
+              }),
+              code('PRECONDITION_FAILED'),
+            );
+            assert.equal(f.queries(), 0);
+            assert.equal(f.sends.length, 0);
+            assert.equal(await f.request(), null);
+          }
+          const result = (await f.runtime.execute(input)) as RequestRecord;
+          const generated = f.generated[0]!;
+          const context = generated.message?.extendedTextMessage?.contextInfo;
+          assert.equal(context?.stanzaId, 'original');
+          assert.equal(context?.participant, author);
+          assert.equal(
+            context?.remoteJid,
+            null,
+            'same conversation must not create a cross-chat quote',
           );
+          assert.equal(
+            context?.quotedMessage?.conversation,
+            'Fictional original body',
+          );
+          assert.equal(
+            generated.message?.extendedTextMessage?.text,
+            command.text,
+          );
+          assert.equal(generated.key.id, result.messageId);
+          assert.deepEqual(result.operation, {
+            kind: 'send',
+            jid,
+            text: command.text,
+            quote: input.quote,
+          });
+          assert.deepEqual(result.quote?.reference, {
+            jid,
+            id: 'original',
+            fromMe,
+            participant: participant ?? null,
+          });
+          assert.equal(result.quote?.author, author);
+          assert.equal(f.sends.length, 1);
+          assert.equal(
+            f.sends[0]?.[2]?.quoted?.key.participant,
+            participant ?? undefined,
+          );
+          const history = (await f.runtime.execute({
+            command: 'messages',
+            jid,
+            limit: 100,
+            offset: 0,
+          })) as ReturnType<typeof messageOutput>[];
+          assert.equal(
+            history.find((row) => row.id === 'original')?.participant,
+            participant ?? null,
+          );
+          assert.equal(result.attempt, 'sdk-returned');
+          assert.equal(result.acceptance, 'unknown');
+          assert.equal(result.delivery, 'unknown');
+          assert.equal(result.read, 'unknown');
+          assert.equal(f.queries(), jid === pn ? 1 : 0);
+          for (const action of ['send', 'request'])
+            for (const mode of ['full', 'compact'] as const) {
+              assert.deepEqual(
+                formatResponse(action, { ok: true, data: result }, mode).data,
+                result,
+              );
+            }
+          const view = messageOutput(generated);
+          assert.equal(view.quote?.reference.participant, author);
+          assert.equal(view.quote?.text, result.quote?.text);
+          const before = await f.runtime.execute({ command: 'chat', jid });
+          assert.equal(
+            (before as { activity: { timestamp: number } }).activity.timestamp,
+            1700000000,
+          );
+        } finally {
+          await f.runtime.close();
         }
-      const view = messageOutput(generated);
-      assert.equal(view.quote?.reference.participant, author);
-      assert.equal(view.quote?.text, result.quote?.text);
-      const before = await f.runtime.execute({ command: 'chat', jid });
-      assert.equal(
-        (before as { activity: { timestamp: number } }).activity.timestamp,
-        1700000000,
-      );
-    } finally {
-      await f.runtime.close();
-    }
+      },
+    );
   }
 });
 
@@ -580,7 +624,12 @@ test('colliding IDs never select the first author/direction/chat and group parti
     await f.runtime.close();
   }
   const collision = fixture([
-    original(),
+    original({
+      remoteJid: lid,
+      id: 'original',
+      fromMe: false,
+      participant: '',
+    }),
     original({
       remoteJid: lid,
       id: 'original',
@@ -599,12 +648,30 @@ test('colliding IDs never select the first author/direction/chat and group parti
 test('insufficient/contradictory authors and own LID quotes refuse explicitly', async () => {
   for (const [jid, participant, self, fromMe] of [
     [lid, undefined, me, true],
+    [lid, '', me, true],
     [group, myLid, me, true],
     [group, other, me, true],
     [pn, undefined, null, true],
+    [pn, null, null, true],
+    [pn, '', null, true],
     [pn, undefined, myLid, true],
+    [pn, '', myLid, true],
+    [pn, other, me, true],
+    [pn, ' ', me, true],
+    [pn, me.replace('@', ':2@'), me, true],
     [lid, pn, me, false],
+    [pn, lid, me, false],
+    [pn, other, me, false],
+    [lid, ' ', me, false],
+    [pn, '\t', me, false],
+    [lid, ` ${lid}`, me, false],
+    [pn, pn.replace('@', ':2@'), me, false],
     [group, undefined, me, false],
+    [group, null, me, false],
+    [group, '', me, false],
+    [group, undefined, me, true],
+    [group, null, me, true],
+    [group, '', me, true],
   ] as const) {
     const f = fixture(
       [
@@ -612,7 +679,7 @@ test('insufficient/contradictory authors and own LID quotes refuse explicitly', 
           remoteJid: jid,
           id: 'original',
           fromMe,
-          ...(participant ? { participant } : {}),
+          ...(participant !== undefined ? { participant } : {}),
         }),
       ],
       { self },
@@ -625,7 +692,7 @@ test('insufficient/contradictory authors and own LID quotes refuse explicitly', 
           quote: {
             id: 'original',
             fromMe,
-            ...(participant ? { participant } : {}),
+            ...(jid === group && participant ? { participant } : {}),
           },
         }),
         code('PRECONDITION_FAILED'),
@@ -641,8 +708,16 @@ test('insufficient/contradictory authors and own LID quotes refuse explicitly', 
 
 test('PN→LID transport cannot select another conversation or generate a cross-chat quote', async () => {
   const targets = [
-    original({ remoteJid: pn, id: 'original', fromMe: false }),
-    { ...original(), message: { conversation: 'PRIVATE_OTHER_CONVERSATION' } },
+    original({ remoteJid: pn, id: 'original', fromMe: false, participant: '' }),
+    {
+      ...original({
+        remoteJid: lid,
+        id: 'original',
+        fromMe: false,
+        participant: '',
+      }),
+      message: { conversation: 'PRIVATE_OTHER_CONVERSATION' },
+    },
   ];
   const f = fixture(targets, { route: lid });
   try {
@@ -667,7 +742,12 @@ test('PN→LID transport cannot select another conversation or generate a cross-
 
 test('target edits/deletions/revokes during asynchronous route preparation abort before intent and invoke', async () => {
   for (const change of ['edit', 'delete', 'revoke', 'boundary'] as const) {
-    const target = original({ remoteJid: pn, id: 'original', fromMe: false });
+    const target = original({
+      remoteJid: pn,
+      id: 'original',
+      fromMe: false,
+      participant: '',
+    });
     const f = fixture([target]);
     const wait = gate();
     f.waitQuery(wait.promise);
@@ -941,7 +1021,14 @@ test('quote intent rollback prevents invocation; completion failure keeps origin
 });
 
 test('CLI/socket/full/compact and JSONL preserve quote intent and safe classified errors offline', async () => {
-  const f = fixture();
+  const f = fixture([
+    original({
+      remoteJid: lid,
+      id: 'original',
+      fromMe: false,
+      participant: '',
+    }),
+  ]);
   let intent: RequestRecord;
   try {
     intent = (await f.runtime.execute(command)) as RequestRecord;

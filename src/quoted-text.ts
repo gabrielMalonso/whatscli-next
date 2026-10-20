@@ -50,6 +50,9 @@ export function prepareQuote(
     );
   const target = store.locateMessage({ jid, ...ref });
   const participant = target.key.participant ?? null;
+  // Only direct chats can lack a separate author. Preserve the stored participant as evidence.
+  const authorParticipant =
+    (isPn(jid) || isLid(jid)) && participant === '' ? null : participant;
   const self = selfId ? receiptUserJid(selfId) : undefined;
   let author: string;
   if (ref.fromMe) {
@@ -58,7 +61,7 @@ export function prepareQuote(
       !self ||
       !isPn(self) ||
       isLid(jid) ||
-      (participant !== null && participant !== self)
+      (authorParticipant !== null && authorParticipant !== self)
     ) {
       throw new CommandError(
         'PRECONDITION_FAILED',
@@ -67,7 +70,7 @@ export function prepareQuote(
     }
     author = self;
   } else {
-    author = participant ?? jid;
+    author = authorParticipant ?? jid;
     if (
       (!isPn(author) && !isLid(author)) ||
       (!jid.endsWith('@g.us') && author !== jid)
