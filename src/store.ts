@@ -12,6 +12,7 @@ import { decode, decodeMessage, encode } from './store-codec.js';
 import { createSchema } from './store-schema.js';
 import { receiptUserJid } from './send-route.js';
 import type { SendRoute } from './send-route.js';
+import { CommandError } from './errors.js';
 
 export { decode, encode } from './store-codec.js';
 
@@ -486,10 +487,10 @@ export class Store {
     if (ref.fromMe !== undefined) { clauses.push('from_me=?'); args.push(Number(ref.fromMe)); }
     if (ref.participant !== undefined) { clauses.push("json_extract(json,'$.key.participant')=?"); args.push(ref.participant); }
     const rows = this.db.prepare(`SELECT json FROM messages WHERE ${clauses.join(' AND ')} LIMIT 2`).all(...args);
-    if (rows.length === 0) throw new Error('Message is not stored for that exact identity');
-    if (rows.length > 1) throw new Error('Ambiguous message ID; provide fromMe and participant');
+    if (rows.length === 0) throw new CommandError('PRECONDITION_FAILED', 'Message is not stored for that exact identity');
+    if (rows.length > 1) throw new CommandError('PRECONDITION_FAILED', 'Ambiguous message ID; provide fromMe and participant');
     const message = decodeMessage(String(rows[0]?.json));
-    if (this.deletion(message.key)) throw new Error('Message content is unavailable after deletion or an uncertain chat deletion boundary');
+    if (this.deletion(message.key)) throw new CommandError('PRECONDITION_FAILED', 'Message content is unavailable after deletion or an uncertain chat deletion boundary');
     return message;
   }
 

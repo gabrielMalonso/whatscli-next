@@ -3,9 +3,10 @@ import { connect } from 'node:net';
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
 import { socketPath } from './paths.js';
+import { CommandError } from './errors.js';
 
-export class RpcError extends Error {
-  constructor(readonly code: 'NOT_RUNNING' | 'TIMEOUT' | 'PROTOCOL', message: string) { super(message); }
+export class RpcError extends CommandError {
+  constructor(readonly code: 'NOT_RUNNING' | 'TIMEOUT' | 'PROTOCOL', message: string) { super(code, message); }
 }
 
 /** One command per connection. A timeout never causes an automatic command retry. */
@@ -13,7 +14,7 @@ export function rpc(directory: string, command: Command, timeoutMs = 120000): Pr
   const path = socketPath(directory);
   const id = randomUUID();
   const line = JSON.stringify({ ...command, id }) + '\n';
-  if (Buffer.byteLength(line) > 131072) throw new Error('Request exceeds 128 KiB');
+  if (Buffer.byteLength(line) > 131072) throw new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB');
   return new Promise((resolve, reject) => {
     const socket = connect(path);
     const chunks: string[] = [];

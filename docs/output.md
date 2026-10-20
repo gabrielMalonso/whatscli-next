@@ -1,4 +1,4 @@
-# Compact JSON contract
+# JSON output contract
 
 Use `--output compact` explicitly for agents. The default and `--output full` preserve the existing safe public projection. Both emit one minified JSON object, with the same exit codes. Full never means SDK objects, credentials, cryptographic material or private audit data.
 
@@ -13,7 +13,7 @@ Formatting runs in the CLI after the original response. It cannot re-execute an 
 
 ## Projections and inheritance
 
-The envelope is unchanged: `ok`, errors/codes, RPC correlation `id`, running/connection state, local source, partial coverage, unknown app state, pending notifications and historical issues. The additive `recovery` and `receiveContinuity` fields are retained verbatim in both modes; see [the recovery contract](../README.md#recovery). Errors are unchanged. A successful command can still describe an uncertain result.
+The envelope retains `ok`, errors/codes, RPC correlation `id`, running/connection state, local source, partial coverage, unknown app state, pending notifications and historical issues. The additive `recovery` and `receiveContinuity` fields are retained verbatim in both modes; see [the recovery contract](../README.md#recovery). Formatting preserves errors verbatim, including the additive codes below. A successful command can still describe an uncertain result.
 
 `status.data.build: {fingerprint: "sha256:…" | null}` is retained verbatim in full/compact, including status returned by `start`/`alreadyRunning` and the JSONL probe. It belongs only to status data; message/send/request projections and envelopes gain no repeated build metadata. It is the responding process's embedded build label, never supplied by the client. An absent field from an older daemon stays absent; a missing connection still returns `running: false` without inventing build information. See [provenance limits](release.md#identify-startup-and-upgrade-without-losing-the-session).
 
@@ -36,6 +36,46 @@ There is no general removal of false, zero, null or unknown. Null chat states/co
 Embedded quotes keep their exact available references and embedded/unknown/deleted state. Shared cards keep `source: shared-content`. Neither becomes verified identity. Deleted/withheld bodies and private fields are excluded before either format is applied; full cannot recover deleted content.
 
 Use full to inspect metadata observation times, consume the original history array, or inspect public fields without applying these defaults. Use `contact`/`resolve` for identity evidence, never cards or names.
+
+## Command errors and safe next steps
+
+Current CLI errors and command failures from the daemon socket/JSONL probe have `ok: false`, human-readable `error`, and an additive string `code`. Branch on `code`, never on English text. Socket/probe responses preserve the request correlation `id` when parsed, or null if unavailable; a local CLI error has no invented ID. CLI failure exits 1, success exits 0. The probe reports each command failure on stdout and continues; its process can still exit 0. Diagnostics remain on stderr.
+
+These categories describe the cause known at the reporting boundary, **not a remote outcome or permission to retry**. No `retryable` flag or automatic next action exists.
+
+| Code | Origin and limit | Safe next step |
+| --- | --- | --- |
+| `INVALID_ARGUMENT` | CLI options, request/command parsing, explicit identity/card/key validation, file shape/size, request size or socket path limit. Does not inspect past or concurrent operations. | Correct the named input. If the operation has a key, inspect that original key before deciding whether anything else is needed. |
+| `KEY_CONFLICT` | A stored key exists with different operation arguments, including exact recipient/kind/content. Covers text, file, card and chat mutations. | Query the original key and inspect its immutable intent. Correct the caller's arguments; never substitute PN/LID or create a new key to bypass the conflict. |
+| `PRECONDITION_FAILED` | Explicit runtime checks: connection/pairing/reconnect state, exact allowed recipient, missing observed/verified target or last message, conflicting identity, offline download/media limit, changed file, or missing/ambiguous/deleted stored media target. Also startup configuration/privacy checks and unfinished shutdown. Other failures can remain unclassified. | Inspect status and the exact target's local evidence/configuration; coordinate any intervention. Do not infer send authority from an alias/card or automatically restart, reconnect, pair or resend. |
+| `LOCAL_STATE` | The operation intent transaction or completion transaction failed locally. It is not an SDK failure classification; other storage/I/O failures may be `UNKNOWN`. | Preserve state and inspect the original key/receipts. A completion failure can follow an SDK return and an independent delivery receipt. Investigate local persistence; do not resend or erase state. |
+| `NOT_RUNNING` | Existing RPC code: connecting to the control socket failed with ENOENT/ECONNREFUSED. It is not proof that an older process finished cleanup. | Check the selected data directory and known process ownership. Coordinate normal startup only after the previous writer has exited; preserve locks/session. |
+| `TIMEOUT` | Existing RPC response timeout. The pending command is not cancelled. | Inspect the original key; wait/investigate the pending operation. Never automatically repeat an SDK attempt or generate a replacement key. |
+| `PROTOCOL` | Existing RPC code: invalid/mismatched/oversized response or connection ended before a result. | Treat the command's outcome as unknown; inspect the original key and investigate transport/version/response size. No automatic retry. |
+| `UNKNOWN` | Current boundary has no explicit classified cause (including unclassified SDK, filesystem, storage or startup failures). Public text is safe and generic. | Inspect the original key and available status/evidence; escalate diagnosis without claiming failure to send. |
+
+The list is deliberately bounded; it does not classify every throw or interpret SDK messages/statuses. Explicit safe validation/precondition/conflict and RPC messages remain human-readable. Arbitrary exception messages, JSON syntax excerpts and option-parser values can contain bodies, SDK material or private paths: these use safe public messages instead. Unknown-command/startup failure text also avoids echoing supplied command names/private paths. A failed download preserves the safe partial-file notice but omits the private path and inner SDK/stream exception; inspect the originally requested output path locally. Causes and stacks are never added to command JSON or logs.
+
+For **any** error involving a key, query `request` with the **original** key. `data: null` means no intent was recorded at that observation; it neither cancels work nor proves a command still in flight will never persist. An error/timeout/closed socket does not prove absence of remote effects or intent. A recorded key with the original arguments returns its evidence without target validation, identity lookup, file reading or sending, even offline/after restart or identity changes. Correcting a conflict is not authorization for a new send.
+
+`ok: true` means a valid local result. `attempt: uncertain` stays successful command data, possibly with `errorObserved: true`, and never becomes proof of nondelivery. SDK return, server ACK, delivery, read and phone confirmation remain separate; retain earlier independently observed receipts even after `LOCAL_STATE`.
+
+Fictional examples, with the same error projection in both formats:
+
+```sh
+node dist/src/cli.js --output compact send --jid '123450001@lid' --key 'example-message-001' --text 'Different intent'
+node dist/src/cli.js --output full send --jid '123450001@lid' --key 'example-message-001' --text 'Different intent'
+```
+
+Each fails with its own correlation ID (illustrated as `fictional-rpc-id`):
+
+```json
+{"id":"fictional-rpc-id","ok":false,"error":"Idempotency key already used with different arguments","code":"KEY_CONFLICT"}
+```
+
+Inspect the original intent in either format with `request --key 'example-message-001'`. A full or compact local validation error has no RPC ID, for example `{"ok":false,"error":"--text is required","code":"INVALID_ARGUMENT"}`. A local completion error can be `{"id":"fictional-rpc-id","ok":false,"error":"Local operation completion could not be persisted; inspect the original idempotency key","code":"LOCAL_STATE"}`; this does not contradict previously observed delivery.
+
+Legacy/future compatibility: an older daemon can return `{"id":"fictional-rpc-id","ok":false,"error":"Idempotency key already used with different arguments"}`. The new CLI preserves that absence of `code`; it cannot prove `KEY_CONFLICT` from the text. Treat absent or unfamiliar codes as unclassified, with the same conservative next steps as `UNKNOWN`. Existing unfamiliar daemon codes are forwarded unchanged in full/compact. `status` and `stop` with no socket remain `ok: true, running: false`; `start`/`alreadyRunning` returns the existing daemon without upgrading it or synthesizing codes.
 
 ## Volume and benchmark
 

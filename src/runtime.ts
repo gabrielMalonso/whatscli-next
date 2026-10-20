@@ -9,6 +9,7 @@ import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform } from './operations.js';
+import { CommandError } from './errors.js';
 import { unprovenRoute } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 import { contactCard } from './contact-card.js';
@@ -84,7 +85,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       try {
         result = await current.executeUSyncQuery(new USyncQuery().withLIDProtocol().withContext('background').withUser(new USyncUser().withId(jid)));
       } catch { return unprovenRoute(jid, clock.now(), 'query-failed'); }
-      if (current !== socket || stopped || connection !== 'open') throw new Error('Connection changed during route preparation; no send was attempted');
+      if (current !== socket || stopped || connection !== 'open') throw new CommandError('PRECONDITION_FAILED', 'Connection changed during route preparation; no send was attempted');
       const entry = result && Array.isArray(result.list) && result.list.length === 1 ? result.list[0] : undefined;
       if (entry?.id !== jid || typeof entry.lid !== 'string' || !isLid(entry.lid)) return unprovenRoute(jid, clock.now(), 'invalid-response');
       return { status: 'proven', jid: entry.lid, source: 'baileys.executeUSyncQuery/lid', observedAt: clock.now(), limit: 'server-association-at-query-time' };
@@ -106,14 +107,14 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
     issue('connection-stopped-review-required');
   }
   function connected(): WASocket {
-    if (stopped || !socket || connection !== 'open') throw new Error('WhatsApp connection is not open');
+    if (stopped || !socket || connection !== 'open') throw new CommandError('PRECONDITION_FAILED', 'WhatsApp connection is not open');
     return socket;
   }
   function validateTarget(jid: string, sending = false): void {
-    if ((options.requireAllowedJid || allowedJid !== undefined) && jid !== allowedJid) throw new Error('Mutation requires the exact --test-jid / allowed recipient JID');
+    if ((options.requireAllowedJid || allowedJid !== undefined) && jid !== allowedJid) throw new CommandError('PRECONDITION_FAILED', 'Mutation requires the exact --test-jid / allowed recipient JID');
     if (!store.chat(jid)) {
-      if (!sending || store.recipientCheck(jid)?.status !== 'confirmed') throw new Error('Recipient requires an observed conversation or, for sending, persisted WhatsApp verification via resolve --phone');
-      if (store.contactView(jid).mapping.status === 'conflict') throw new Error('Recipient has conflicting PN/LID associations');
+      if (!sending || store.recipientCheck(jid)?.status !== 'confirmed') throw new CommandError('PRECONDITION_FAILED', 'Recipient requires an observed conversation or, for sending, persisted WhatsApp verification via resolve --phone');
+      if (store.contactView(jid).mapping.status === 'conflict') throw new CommandError('PRECONDITION_FAILED', 'Recipient has conflicting PN/LID associations');
     }
     connected();
   }
@@ -306,14 +307,14 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
       case 'events': return store.events(command.after);
       case 'request': return store.request(command.key) ?? null;
       case 'pair-qr': {
-        if (!socket || !qr || hasLinkedCredentials(auth.state.creds)) throw new Error('Wait for qrAvailable on an unpaired connection');
+        if (!socket || !qr || hasLinkedCredentials(auth.state.creds)) throw new CommandError('PRECONDITION_FAILED', 'Wait for qrAvailable on an unpaired connection');
         const payload = qr;
         const imagePath = await savePairingQr(payload, store.directory);
-        if (qr !== payload || hasLinkedCredentials(auth.state.creds)) throw new Error('QR changed during rendering; request a fresh pair-qr');
+        if (qr !== payload || hasLinkedCredentials(auth.state.creds)) throw new CommandError('PRECONDITION_FAILED', 'QR changed during rendering; request a fresh pair-qr');
         return { imagePath, sensitive: true, generatedAt: Date.now() };
       }
       case 'pair-code':
-        if (!socket || !qr || hasLinkedCredentials(auth.state.creds)) throw new Error('Wait for qrAvailable on an unpaired connection');
+        if (!socket || !qr || hasLinkedCredentials(auth.state.creds)) throw new CommandError('PRECONDITION_FAILED', 'Wait for qrAvailable on an unpaired connection');
         return { code: await socket.requestPairingCode(command.phone), sensitive: true };
       case 'resync':
         await connected().resyncAppState([...ALL_WA_PATCH_NAMES], false);
@@ -324,11 +325,11 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         await connected().ws.close();
         return { socketClosed: true, recovery: 'automatic-close-handler' };
       case 'reconnect':
-        if (!options.connect) throw new Error('Network access is disabled; restart without --offline (probe: use --connect)');
-        if (stopped) throw new Error('Runtime is stopping');
+        if (!options.connect) throw new CommandError('PRECONDITION_FAILED', 'Network access is disabled; restart without --offline (probe: use --connect)');
+        if (stopped) throw new CommandError('PRECONDITION_FAILED', 'Runtime is stopping');
         if (recovery.state === 'intervention-required'
           && (recovery.reason === 'socket-creation-failed' || recovery.reason === 'socket-end-failed')) {
-          throw new Error('Socket creation/cleanup failed; investigate and restart the runtime');
+          throw new CommandError('PRECONDITION_FAILED', 'Socket creation/cleanup failed; investigate and restart the runtime');
         }
         await reconnect();
         return { reconnecting: true };
@@ -349,7 +350,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         const previous = store.request(command.key);
         if (previous) {
           const op = previous.operation;
-          if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new Error('Idempotency key already used with different arguments');
+          if (op.kind !== 'send-file' || op.jid !== command.jid || op.path !== command.path || op.mime !== command.mime || op.caption !== command.caption) throw new CommandError('KEY_CONFLICT', 'Idempotency key already used with different arguments');
           return previous;
         }
         const preparing = sendPreparation.pending.get(command.key);
@@ -363,10 +364,10 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
           }, sendPreparation);
       }
       case 'download': {
-        if (!options.connect) throw new Error('Media download requires network access; restart without --offline');
+        if (!options.connect) throw new CommandError('PRECONDITION_FAILED', 'Media download requires network access; restart without --offline');
         const message = store.locateMessage({ ...command, id: command.messageId });
         const media = assertMediaContent(normalizeMessageContent(message.message));
-        if (toNumber(media.fileLength ?? 0) > MAX_FILE_BYTES) throw new Error('Media exceeds the 64 MiB limit');
+        if (toNumber(media.fileLength ?? 0) > MAX_FILE_BYTES) throw new CommandError('PRECONDITION_FAILED', 'Media exceeds the 64 MiB limit');
         return saveMedia(command.path, () => downloadMediaMessage(message, 'stream', {}, { logger, reuploadRequest: item => connected().updateMediaMessage(item) }));
       }
       case 'archive': case 'mark-read': {
@@ -374,7 +375,7 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         const request = await perform(store, command.key, operation, () => {
           validateTarget(command.jid);
           const last = store.messages(command.jid, 1)[0];
-          if (!last || toNumber(last.messageTimestamp ?? 0) === 0) throw new Error('A stored last message with timestamp is required');
+          if (!last || toNumber(last.messageTimestamp ?? 0) === 0) throw new CommandError('PRECONDITION_FAILED', 'A stored last message with timestamp is required');
         }, async () => {
           const lastMessages = store.messages(command.jid, 1).map(({ key, messageTimestamp }) => ({ key, messageTimestamp: toNumber(messageTimestamp ?? 0) }));
           const patch = command.command === 'archive' ? { archive: command.value, lastMessages } : { markRead: command.value, lastMessages };

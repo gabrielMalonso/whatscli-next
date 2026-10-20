@@ -1,8 +1,9 @@
+import { CommandError } from './errors.js';
 import { internationalPhone } from './identity.js';
 
 export function contactName(name: string): string {
   if (!name.trim() || /[\p{Cc}\p{Zl}\p{Zp}\p{Cs}]/u.test(name) || Buffer.byteLength(name) > 256) {
-    throw new Error('name must be nonblank, well-formed Unicode, at most 256 UTF-8 bytes, without controls or line separators');
+    throw new CommandError('INVALID_ARGUMENT', 'name must be nonblank, well-formed Unicode, at most 256 UTF-8 bytes, without controls or line separators');
   }
   return name;
 }
