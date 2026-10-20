@@ -1,6 +1,6 @@
 # Local history and search
 
-Use these commands to inspect locally stored chats, messages, and groups:
+Use these commands to inspect locally stored chats and messages. These queries work offline.
 
 ```sh
 node dist/src/cli.js chats --limit 50 --offset 0
@@ -10,10 +10,17 @@ node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
 node dist/src/cli.js chat --jid '12025550101@s.whatsapp.net'
 node dist/src/cli.js messages --jid '12025550101@s.whatsapp.net' --limit 20 --offset 0
 node dist/src/cli.js search --query 'example text' --jid '12025550101@s.whatsapp.net'
-node dist/src/cli.js group --jid '120363000000000001@g.us'
 ```
 
-History coverage is always partial. An empty local result does not prove that WhatsApp has no pending conversations.
+Local history is always partial. An empty result does not mean WhatsApp has no pending conversations.
+
+## Fetch group metadata
+
+`group` fetches current group metadata from WhatsApp through the SDK. Unlike local history queries, it requires an open connection.
+
+```sh
+node dist/src/cli.js group --jid '120363000000000001@g.us'
+```
 
 ## Search messages
 
