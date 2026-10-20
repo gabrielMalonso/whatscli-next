@@ -34,7 +34,7 @@ function raw(directory: string): string {
 }
 
 for (const cleanup of ['close', 'release'] as const)
-  test(`a complete append survives ${cleanup} failure without becoming a dropped row`, () => {
+  test(`a complete append survives ${cleanup} failure without becoming a dropped row`, async () => {
     const directory = temporary();
     configureObservability(directory, true);
     const observer = new Observability(directory, 'runtime');
@@ -92,12 +92,14 @@ for (const cleanup of ['close', 'release'] as const)
     assert.doesNotMatch(raw(directory), new RegExp(canary));
     if (cleanup === 'release') {
       observer.record('execution', { action: 'search' });
+      assert.equal(observer.status().buffer.pending, 1);
+      await observer.close();
       assert.equal(observer.status().dropped, 1);
       assert.equal(
         logs(directory).some((row) => row.action === 'search'),
         false,
       );
-    }
+    } else await observer.close();
   });
 
 test('digest failure omits only the selector and retains degraded health without claiming a lost row', () => {

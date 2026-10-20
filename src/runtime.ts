@@ -1079,6 +1079,7 @@ export function createRuntime(
           connection,
           recovery: recovery.state,
         });
+        await observability.close();
         store.close();
       })();
       return closing;

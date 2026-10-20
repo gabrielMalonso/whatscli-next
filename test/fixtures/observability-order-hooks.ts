@@ -55,10 +55,15 @@ Observability.prototype.record = function (
     gate('rpc-before-lock');
   const controlled =
     origin === 'daemon' &&
-    ((mode === 'daemon-waits' && fields.action === 'send-contact') ||
+    ((['daemon-waits', 'daemon-waits-drain', 'daemon-recovery'].includes(mode ?? '') && fields.action === 'send-contact') ||
       (mode === 'daemon-lock' && fields.action === 'send-contact'));
   if (controlled) gate('daemon-before-lock');
+  // Only the positive recovery schedule virtualizes the recorder's retry age;
+  // business clocks and pipe ordering stay real. The negative keeps real time.
+  if (controlled && mode === 'daemon-recovery') Reflect.set(this, 'elapsed', () => 0);
   record.call(this, category, fields, origin);
   if (category === 'lifecycle' && fields.label === 'startup') notify('ready');
   if (controlled) notify('daemon-recorded');
+  if (controlled && ['daemon-waits-drain', 'daemon-recovery'].includes(mode ?? ''))
+    void this.drain().then(() => notify('daemon-drained'));
 };

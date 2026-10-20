@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import {
@@ -12,7 +12,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import {
   configureObservability,
   queryObservability,
@@ -21,14 +20,22 @@ import { Store } from '../src/store.js';
 
 // Same bounded workload runs on the baseline and final sources; all state is fictional.
 process.umask(0o077);
-const run = promisify(execFile);
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'wobs-cost-')));
-const hook = resolve('dist/test/fixtures/observability-benchmark-hooks.js');
+const compiled = resolve(process.argv[3] ?? 'dist');
+const hook = join(compiled, 'test/fixtures/observability-benchmark-hooks.js');
 type Metrics = {
   userMs: number;
   systemMs: number;
   rssBytes: number;
   dropped: number;
+  uncertain?: number;
+  admitted?: number;
+  captured?: number;
+  deferred?: number;
+  invalidated?: number;
+  pending?: number;
+  maxPending?: number;
+  maxBytes?: number;
 };
 function metrics(stderr: string): Metrics {
   const line = stderr.split('\n').find((line) => line.startsWith('OBS_BENCH '));
@@ -38,11 +45,20 @@ function metrics(stderr: string): Metrics {
 const expected = new Map<string, string>();
 async function command(directory: string, args: string[], compare = true) {
   const start = performance.now();
-  const { stdout, stderr } = await run(
-    process.execPath,
-    ['--import', hook, 'dist/src/cli.js', '--data-dir', directory, ...args],
-    { timeout: 15000 },
-  );
+  const { stdout, stderr, firstStdoutMs } = await new Promise<{
+    stdout: string; stderr: string; firstStdoutMs: number;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', hook, join(compiled, 'src/cli.js'), '--data-dir', directory, ...args]);
+    let stdout = '', stderr = '';
+    let firstStdoutMs: number | undefined;
+    child.stdout.on('data', (data) => { firstStdoutMs ??= performance.now() - start; stdout += String(data); });
+    child.stderr.on('data', (data) => { stderr += String(data); });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code !== 0 || firstStdoutMs === undefined) reject(new Error(`Fictional benchmark child failed: ${stderr}`));
+      else resolve({ stdout, stderr, firstStdoutMs });
+    });
+  });
   const ms = performance.now() - start;
   const {
     id: _id,
@@ -58,7 +74,8 @@ async function command(directory: string, args: string[], compare = true) {
     if (prior) assert.equal(hash, prior);
     else expected.set(key, hash);
   }
-  return { ms, bytes: Buffer.byteLength(stdout), hash, ...metrics(stderr) };
+  return { ms, firstStdoutMs, exitAfterStdoutMs: ms - firstStdoutMs,
+    bytes: Buffer.byteLength(stdout), hash, ...metrics(stderr) };
 }
 const scenarios = [
   {
@@ -117,7 +134,7 @@ for (const enabled of [false, true]) {
       [
         '--import',
         hook,
-        'dist/src/daemon.js',
+        join(compiled, 'src/daemon.js'),
         '--offline',
         '--data-dir',
         directory,
@@ -178,9 +195,10 @@ writeFileSync(
   JSON.stringify(
     {
       generatedAt: new Date().toISOString(),
+      source: process.argv[4] ?? 'current-build',
       node: process.version,
       method:
-        'OFF then ON per scenario; four sequential uncertain replays / four batches of four concurrent search clients; 30 fictional 2KB messages; fresh offline daemon each row; current exit RSS, CPU includes Node startup; hashes exclude random wire id/PID; no peak claim; uncontrolled OS cache/scheduling; artifacts retained',
+        'OFF then ON per scenario; four sequential uncertain replays / four batches of four concurrent search clients; 30 fictional 2KB messages; fresh offline daemon each row; first stdout chunk and exit after it measured separately; current exit RSS, CPU includes Node startup and exit instrumentation; hashes exclude random wire id/PID; daemon counters cover its entire lifetime, not only measured commands; unsupported legacy counters omitted; no peak claim; uncontrolled OS cache/order/scheduling; artifacts retained',
       rows,
     },
     null,
