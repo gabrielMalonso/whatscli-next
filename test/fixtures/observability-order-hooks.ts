@@ -60,19 +60,19 @@ if (mode === 'ordered') {
     fields = {},
     origin = this.origin,
   ) {
+    if (
+      mode === 'rpc-waits' &&
+      origin === 'rpc' &&
+      fields.action === 'send-contact'
+    )
+      gate('rpc-before-lock');
     const controlled =
-      mode === 'daemon-waits' &&
       origin === 'daemon' &&
-      fields.action === 'search';
+      ((mode === 'daemon-waits' && fields.action === 'search') ||
+        (mode === 'daemon-lock' && fields.action === 'send-contact'));
     if (controlled) gate('daemon-before-lock');
     record.call(this, category, fields, origin);
     if (category === 'lifecycle' && fields.label === 'startup') notify('ready');
     if (controlled) notify('daemon-recorded');
-    if (
-      mode === 'daemon-lock' &&
-      origin === 'daemon' &&
-      fields.action === 'send-contact'
-    )
-      notify('daemon-recorded');
   };
 }

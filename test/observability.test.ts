@@ -79,7 +79,7 @@ function raw(directory: string): string {
 function scheduledChild(
   directory: string,
   entry: 'cli' | 'daemon',
-  mode: 'daemon-lock' | 'daemon-waits' | 'rpc-lock' | 'plain',
+  mode: 'daemon-lock' | 'daemon-waits' | 'rpc-lock' | 'rpc-waits',
   args: string[],
 ) {
   const child = spawn(
@@ -161,12 +161,16 @@ for (const holder of ['daemon', 'rpc'] as const)
       client = scheduledChild(
         directory,
         'cli',
-        holder === 'daemon' ? 'plain' : 'rpc-lock',
+        holder === 'daemon' ? 'rpc-waits' : 'rpc-lock',
         args,
       );
       if (holder === 'daemon') {
+        await daemon.stage('daemon-before-lock');
+        await client.stage('rpc-before-lock');
+        daemon.release.write('x');
         await daemon.stage('daemon-locked');
         assert.equal(existsSync(join(directory, 'observability.lock')), true);
+        client.release.write('x');
         const result = await client.result();
         assert.equal(result.response.ok, false);
         assert.equal(result.response.code, 'PRECONDITION_FAILED');
