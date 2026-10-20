@@ -32,7 +32,7 @@ process.umask(0o077);
 const started = performance.now();
 const root = randomBytes(16).toString('hex');
 let observer: Observability | undefined;
-let fields: ObsFields = { action: 'unknown' };
+const fields: ObsFields = { action: 'unknown' };
 let suppress = false;
 // Recover only an unambiguous explicit selector before parseArgs can reject another option.
 // Unknown/missing option values do not become paths or action labels.

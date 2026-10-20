@@ -551,7 +551,7 @@ export class Observability {
   }
   status() {
     this.refresh();
-    let blocked = false;
+    let blocked: boolean;
     try {
       checkPrivatePath(join(this.directory, 'observability.lock'), 'directory');
       blocked = true;
