@@ -5,6 +5,7 @@ import type { AuthenticationCreds, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
+import { sdkDiagnostic } from './diagnostics.js';
 import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
@@ -72,8 +73,9 @@ export function createRuntime(options: RuntimeOptions, socketFactory = makeWASoc
         const message = typeof record.msg === 'string' ? record.msg : 'SDK diagnostic';
         const problem = diagnosticIssue(message);
         if (problem && !stopped) issue(problem);
-        // Discard SDK fields that may include message bodies or authentication material.
-        process.stderr.write(encode({ level: record.level, message }) + '\n');
+        // msg can itself interpolate identifiers/errors; fields and arbitrary text stay private.
+        const level = typeof record.level === 'number' ? record.level : undefined;
+        process.stderr.write(encode({ level, message: sdkDiagnostic(message, problem) }) + '\n');
         next();
       } catch (error) { next(error instanceof Error ? error : new Error('Diagnostic write failed')); }
     },

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { proto } from 'baileys';
@@ -12,8 +13,7 @@ import { createRuntime } from '../src/runtime.js';
 import { encode, Store } from '../src/store.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = (): string => mkdtempSync(join(process.cwd(), '.tmp', 'identity-'));
+const temporary = (): string => mkdtempSync(join(tmpdir(), 'identity-'));
 const phone = '+12025550101';
 const pn = '12025550101@s.whatsapp.net';
 const otherPn = '12025550102@s.whatsapp.net';

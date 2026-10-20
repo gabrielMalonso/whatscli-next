@@ -43,6 +43,8 @@ Use full to inspect metadata observation times, consume the original history arr
 
 Current CLI errors and command failures from the daemon socket/JSONL probe have `ok: false`, human-readable `error`, and an additive string `code`. Branch on `code`, never on English text. Socket/probe responses preserve the request correlation `id` when parsed, or null if unavailable; a local CLI error has no invented ID. CLI failure exits 1, success exits 0. The probe reports each command failure on stdout and continues; its process can still exit 0. Diagnostics remain on stderr.
 
+Unsafe data-directory ancestors or an unowned/public/symlink control endpoint return `PRECONDITION_FAILED` before RPC connection/request bytes, including status/stop. Missing endpoints under trusted paths retain their stopped behavior. See [the private-state boundary](privacy.md); refusal preserves existing content and modes.
+
 These categories describe the cause known at the reporting boundary, **not a remote outcome or permission to retry**. No `retryable` flag or automatic next action exists.
 
 | Code | Origin and limit | Safe next step |

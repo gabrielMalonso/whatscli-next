@@ -5,6 +5,7 @@ import { open } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { CommandError } from './errors.js';
+import { checkAncestors } from './private-paths.js';
 
 /** The manifest describes the verified artifact, never later counts from the live Store. */
 export type BackupResult = {
@@ -27,16 +28,7 @@ function privatePath(path: string, kind: 'directory' | 'file') {
 
 function checkParent(path: string, inspect: (path: string) => Stats): void {
   privatePath(path, 'directory');
-  // A private leaf cannot protect against an ancestor another user can replace.
-  for (let ancestor = path; ; ancestor = dirname(ancestor)) {
-    const stat = inspect(ancestor);
-    const sharedTemporary = stat.uid === 0 && (stat.mode & 0o1000) !== 0;
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== 0 && stat.uid !== process.getuid?.())
-      || ((stat.mode & 0o022) !== 0 && !sharedTemporary)) {
-      throw new CommandError('PRECONDITION_FAILED', 'Backup ancestors must be owned by the runtime user or root, without symlinks or unsafe write permissions');
-    }
-    if (dirname(ancestor) === ancestor) break;
-  }
+  checkAncestors(path, inspect);
 }
 
 /** Runtime-owned SQLite online backup. Only backup.json publishes successful verification.

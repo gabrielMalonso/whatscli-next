@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { test } from 'node:test';
@@ -11,8 +12,7 @@ import { Store } from '../src/store.js';
 import { CommandError, errorResponse } from '../src/errors.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = (): string => mkdtempSync(join(process.cwd(), '.tmp', 'media-'));
+const temporary = (): string => mkdtempSync(join(tmpdir(), 'media-'));
 const jid = '12025550101@s.whatsapp.net';
 
 test('file sends persist an immutable byte manifest and keep failure uncertain across restart', async () => {

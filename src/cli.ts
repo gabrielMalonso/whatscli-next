@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { closeSync, constants, lstatSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ import { object } from './protocol.js';
 import type { Command } from './protocol.js';
 import { formatResponse } from './response.js';
 import { CommandError, errorResponse } from './errors.js';
+import { checkPrivatePath, ensurePrivateDirectory, isMissing } from './private-paths.js';
 
 process.umask(0o077);
 
@@ -75,12 +76,11 @@ async function execute(values: ReturnType<typeof options>['values'], positionals
       return { ...status, alreadyRunning: true };
     }
     catch (error) { if (!(error instanceof RpcError && error.code === 'NOT_RUNNING')) throw error; }
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const stat = lstatSync(directory);
-    if (stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077)) throw new CommandError('PRECONDITION_FAILED', 'Data directory must be owned and private (0700)');
+    ensurePrivateDirectory(directory);
     const log = join(directory, 'daemon.log');
+    try { checkPrivatePath(log, 'file'); } catch (error) { if (!isMissing(error)) throw error; }
     const fd = openSync(log, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
-    const logStat = lstatSync(log);
+    const logStat = fstatSync(fd);
     if (!logStat.isFile() || logStat.uid !== process.getuid?.() || (logStat.mode & 0o077)) { closeSync(fd); throw new CommandError('PRECONDITION_FAILED', 'Existing daemon.log must be an owned private file'); }
     const args = [fileURLToPath(new URL('./daemon.js', import.meta.url)), '--data-dir', directory];
     if (values.offline) args.push('--offline');

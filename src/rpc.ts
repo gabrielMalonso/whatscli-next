@@ -1,17 +1,33 @@
 import { randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
+import { resolve as resolvePath } from 'node:path';
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
 import { socketPath } from './paths.js';
 import { CommandError } from './errors.js';
+import { checkAncestors, checkPrivatePath, isMissing } from './private-paths.js';
 
 export class RpcError extends CommandError {
   constructor(readonly code: 'NOT_RUNNING' | 'TIMEOUT' | 'PROTOCOL', message: string) { super(code, message); }
 }
 
 /** One command per connection. A timeout never causes an automatic command retry. */
-export function rpc(directory: string, command: Command, timeoutMs = 120000): Promise<Record<string, unknown>> {
+export async function rpc(directory: string, command: Command, timeoutMs = 120000): Promise<Record<string, unknown>> {
+  directory = resolvePath(directory);
   const path = socketPath(directory);
+  try {
+    checkAncestors(directory);
+    checkPrivatePath(directory, 'directory');
+    checkPrivatePath(path, 'socket');
+  } catch (error) {
+    if (isMissing(error)) {
+      // Check remaining existing ancestors, but never promote a missing namespace
+      // into a requestable endpoint if something appears during that inspection.
+      checkAncestors(directory, undefined, true);
+      throw new RpcError('NOT_RUNNING', 'Daemon is not running');
+    }
+    throw error;
+  }
   const id = randomUUID();
   const line = JSON.stringify({ ...command, id }) + '\n';
   if (Buffer.byteLength(line) > 131072) throw new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB');
