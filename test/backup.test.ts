@@ -344,7 +344,7 @@ test('daemon retains ownership after backup RPC timeout and stop until its own c
   let diagnostics = '';
   child.stderr?.on('data', chunk => { diagnostics += String(chunk); });
   const exited = once(child, 'exit', { signal: AbortSignal.timeout(14000) });
-  let stop: Promise<Record<string, unknown>> | undefined;
+  let stopConfirmed = false;
   try {
     assert.deepEqual(await once(child, 'message', { signal: AbortSignal.timeout(5000) }), ['ready', undefined]);
     const started = once(child, 'message', { signal: AbortSignal.timeout(5000) });
@@ -355,14 +355,16 @@ test('daemon retains ownership after backup RPC timeout and stop until its own c
     assert.equal(existsSync(join(output, 'backup.json')), false);
     assert.equal((await rpc(directory, { command: 'backup', path: join(root, 'parallel') })).code, 'PRECONDITION_FAILED');
     assert.equal((await rpc(directory, { command: 'stop' })).ok, true);
+    stopConfirmed = true;
     const status = await rpc(directory, { command: 'status' });
     assert.equal(object(status.recovery).state, 'stopping');
     assert.throws(() => new Store(directory), /locked/);
     assert.equal(existsSync(join(output, 'backup.json')), false);
   } finally {
     if (child.connected) child.send('release-backup');
-    stop = cli(directory, 'stop');
-    await stop;
+    // A confirmed stop already owns shutdown. A second request can race the
+    // expected socket close or be rejected while stopping; await our child's exit.
+    if (!stopConfirmed) await cli(directory, 'stop');
     const [code, signal] = await exited;
     assert.equal(code, 0, diagnostics); assert.equal(signal, null);
   }

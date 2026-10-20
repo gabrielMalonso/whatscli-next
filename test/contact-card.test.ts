@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { generateWAMessage, proto } from 'baileys';
@@ -16,8 +17,7 @@ import { Store } from '../src/store.js';
 import type { Operation, RequestRecord } from '../src/store.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'contact-card-'));
+const temporary = () => mkdtempSync(join(tmpdir(), 'contact-card-'));
 const pn = '12025550101@s.whatsapp.net';
 const otherPn = '12025550102@s.whatsapp.net';
 const lid = '123450001@lid';

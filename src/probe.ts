@@ -41,6 +41,6 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-  process.stderr.write(encode({ error: error instanceof Error ? error.message : 'Probe failed' }) + '\n');
+  process.stderr.write(encode(errorResponse(error)) + '\n');
   process.exitCode = 1;
 });

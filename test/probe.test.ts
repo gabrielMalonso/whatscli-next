@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { proto } from 'baileys';
@@ -14,8 +15,7 @@ import { savePairingQr } from '../src/pairing.js';
 import { decode, encode, Store } from '../src/store.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = (): string => mkdtempSync(join(process.cwd(), '.tmp', 'test-'));
+const temporary = (): string => mkdtempSync(join(tmpdir(), 'test-'));
 const alice = '12025550101@s.whatsapp.net';
 const bob = '12025550102@s.whatsapp.net';
 const lid = '123456789012345@lid';

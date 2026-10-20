@@ -71,7 +71,7 @@ async function main(): Promise<void> {
         if (stat.isSocket() && stat.ino === socketInode && stat.uid === process.getuid?.()) unlinkSync(path);
       } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
     })();
-    stopping.catch(error => { process.stderr.write(JSON.stringify({ error: String(error) }) + '\n'); process.exitCode = 1; });
+    stopping.catch(error => { process.stderr.write(JSON.stringify(errorResponse(error)) + '\n'); process.exitCode = 1; });
     return stopping;
   }
   try {
@@ -99,4 +99,4 @@ async function main(): Promise<void> {
   } catch (error) { await shutdown(); throw error; }
 }
 
-main().catch(error => { process.stderr.write(JSON.stringify({ error: error instanceof Error ? error.message : 'Daemon failed' }) + '\n'); process.exitCode = 1; });
+main().catch(error => { process.stderr.write(JSON.stringify(errorResponse(error)) + '\n'); process.exitCode = 1; });

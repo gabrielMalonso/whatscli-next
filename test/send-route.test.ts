@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
@@ -15,8 +15,7 @@ import type { RequestRecord } from '../src/store.js';
 import { formatResponse } from '../src/response.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'send-route-'));
+const temporary = () => mkdtempSync(join(tmpdir(), 'send-route-'));
 const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const otherPn = '12025550102@s.whatsapp.net';

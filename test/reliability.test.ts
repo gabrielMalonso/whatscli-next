@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { proto } from 'baileys';
@@ -10,8 +11,7 @@ import { Store } from '../src/store.js';
 import type { RequestRecord } from '../src/store.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'reliability-'));
+const temporary = () => mkdtempSync(join(tmpdir(), 'reliability-'));
 const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const operation = { kind: 'send' as const, jid: lid, text: 'Fictional durable intent' };

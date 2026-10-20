@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -10,8 +11,7 @@ import { decode, encode, Store } from '../src/store.js';
 import type { RequestRecord } from '../src/store.js';
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'store-query-'));
+const temporary = () => mkdtempSync(join(tmpdir(), 'store-query-'));
 const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const group = '120363000000000001@g.us';

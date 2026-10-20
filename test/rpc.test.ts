@@ -10,6 +10,8 @@ import { setImmediate } from 'node:timers/promises';
 import { object } from '../src/protocol.js';
 import { rpc, RpcError } from '../src/rpc.js';
 
+process.umask(0o077);
+
 async function fixture(t: TestContext, respond: (request: Record<string, unknown>, socket: Socket) => Promise<void> | void) {
   const directory = mkdtempSync(join(tmpdir(), 'wcn-rpc-'));
   let connections = 0;

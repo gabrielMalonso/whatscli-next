@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync } from 'node:fs';
+import { constants, closeSync, fstatSync, openSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { jidNormalizedUser, normalizeMessageContent, proto, toNumber } from 'baileys';
@@ -13,6 +13,7 @@ import { createSchema } from './store-schema.js';
 import { receiptUserJid } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 import { CommandError } from './errors.js';
+import { checkPrivatePath, ensurePrivateDirectory, isMissing } from './private-paths.js';
 
 export { decode, encode } from './store-codec.js';
 
@@ -59,13 +60,6 @@ type ContactMetadata = Partial<Record<'name' | 'notify' | 'username' | 'verified
 }>>;
 type ContactRecord = { jid: string; source: IdentitySource; observedAt: number; metadata: ContactMetadata };
 
-function checkPrivate(path: string): void {
-  const stat = lstatSync(path);
-  if (stat.isSymbolicLink() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
-    throw new Error(`Expected an owned private path (directory 0700 / file 0600): ${path}`);
-  }
-}
-
 /** One SQLite writer holds a separate lifetime lock DB; the OS releases it on process death. */
 export class Store {
   readonly db: DatabaseSync;
@@ -74,18 +68,18 @@ export class Store {
 
   constructor(directory: string) {
     this.directory = resolve(directory);
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    checkPrivate(this.directory);
+    ensurePrivateDirectory(this.directory);
     for (const name of readdirSync(this.directory)) {
-      checkPrivate(join(this.directory, name));
+      checkPrivatePath(join(this.directory, name));
     }
     const openDatabase = (name: string): DatabaseSync => {
       const path = join(this.directory, name);
+      try { checkPrivatePath(path, 'file'); } catch (error) { if (!isMissing(error)) throw error; }
       const fd = openSync(path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
       try {
         if (!fstatSync(fd).isFile()) throw new Error('Database path must be a regular file');
       } finally { closeSync(fd); }
-      checkPrivate(path);
+      checkPrivatePath(path, 'file');
       return new DatabaseSync(path);
     };
     this.lock = openDatabase('writer-lock.sqlite');

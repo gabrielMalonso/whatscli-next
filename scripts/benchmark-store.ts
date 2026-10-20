@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,8 @@ if (args.worker) {
   const root = process.cwd();
   mkdirSync('.tmp', { recursive: true, mode: 0o700 });
   const scratch = mkdtempSync(join(root, '.tmp', 'store-bench-'));
+  // Keep generated SQLite state under trusted ancestors even when source is group-writable.
+  const state = mkdtempSync(join(tmpdir(), 'wcn-store-bench-'));
   async function command(program: string, argv: string[], cwd = root): Promise<string> {
     return new Promise((resolveOutput, reject) => {
       const child = spawn(program, argv, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -54,7 +57,7 @@ if (args.worker) {
     const requests = count === 22973 ? 5000 : 15000;
     const variants = [];
     for (const [name, source] of [['baseline', join(baseline, 'dist/src')], ['candidate', candidate]] as const) {
-      const directory = join(scratch, `${name}-${count}`);
+      const directory = join(state, `${name}-${count}`);
       const seed = await measure(source, directory, 'seed', count, requests);
       const query = await measure(source, directory, 'query', count, requests);
       const diskBefore = await measure(source, directory, 'disk', count, requests);
@@ -64,7 +67,7 @@ if (args.worker) {
       variants.push({ name, seed, query, diskBefore, mutate, restart, diskAfter });
       if (name === 'baseline') {
         // Copy only this run's generated, closed SQLite database for an equivalent upgrade timing.
-        const upgradeDir = join(scratch, `upgrade-${count}`); mkdirSync(upgradeDir, { mode: 0o700 });
+        const upgradeDir = join(state, `upgrade-${count}`); mkdirSync(upgradeDir, { mode: 0o700 });
         cpSync(join(directory, 'probe.sqlite'), join(upgradeDir, 'probe.sqlite'));
       }
     }
@@ -74,7 +77,7 @@ if (args.worker) {
     for (const phase of ['query', 'restart'] as const) {
       assert.deepEqual(base[phase].measurements?.map(m => [m.name, m.resultCount, m.resultHash]), head[phase].measurements?.map(m => [m.name, m.resultCount, m.resultHash]), 'baseline/candidate result mismatch');
     }
-    const upgrade = await measure(candidate, join(scratch, `upgrade-${count}`), 'upgrade', count, requests);
+    const upgrade = await measure(candidate, join(state, `upgrade-${count}`), 'upgrade', count, requests);
     volumes.push({ count, requests, variants, upgrade });
   }
   const cliStartup = [];
@@ -98,7 +101,7 @@ if (args.worker) {
       memory: 'bytes; processPeakRss is OS high-water including imports, measured in each own process; heap sampled between operations (not a true heap peak)',
       startup: 'CLI help elapsed including Node startup/JSON, separate from direct Store calls; no socket/network/startup claim for daemon',
       disk: 'dbstat allocated pages by table/index; checkpointed DB plus WAL/SHM and writer lock while open; no VACUUM',
-      retainedScratch: scratch, fixtureEquivalence: 'SHA256 same seeded messages/requests, query result SHA256 equality asserted for both volumes before/after mutations' },
+      retainedScratch: scratch, retainedState: state, fixtureEquivalence: 'SHA256 same seeded messages/requests, query result SHA256 equality asserted for both volumes before/after mutations' },
     volumes, cliStartup };
   const output = resolve(args.output ?? join(scratch, 'report.json'));
   writeFileSync(output, JSON.stringify(report, null, 2) + '\n');

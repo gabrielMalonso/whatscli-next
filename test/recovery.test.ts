@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
@@ -16,8 +17,7 @@ import type { RequestRecord } from '../src/store.js';
 type SocketOptions = Parameters<NonNullable<Parameters<typeof createRuntime>[1]>>[0];
 
 process.umask(0o077);
-mkdirSync('.tmp', { recursive: true, mode: 0o700 });
-const temporary = () => mkdtempSync(join(process.cwd(), '.tmp', 'recovery-'));
+const temporary = () => mkdtempSync(join(tmpdir(), 'recovery-'));
 const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const me = '12025550199:1@s.whatsapp.net';
