@@ -20,6 +20,8 @@ test ! -e dist
 node --version
 pnpm --version
 pnpm install --frozen-lockfile --ignore-scripts
+pnpm lint
+pnpm format:check
 pnpm build
 pnpm check
 pnpm test

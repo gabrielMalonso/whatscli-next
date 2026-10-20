@@ -35,59 +35,59 @@ Run **2026-10-19T20:52:37.572Z**; measured production implementation **`46e0437c
 
 CLI warm medians below are milliseconds, **n=10 new processes** per cell. Full and compact are independent process series; do not attribute their variation solely to formatting.
 
-| Scenario | Full base → candidate ms | Compact base → candidate ms | Socket bytes |
-| --- | ---: | ---: | ---: |
-| help | 127.18 → 128.01 | 122.27 → 125.84 | — |
-| status | 140.52 → 141.07 | 138.32 → 138.21 | 400 |
-| history-20 | 140.24 → 144.14 | 139.33 → 139.05 | 6827 |
-| history-100 | 141.42 → 144.92 | 142.69 → 143.30 | 32667 |
-| history-large-20 | 201.27 → 188.82 | 195.52 → 189.67 | 1205667 |
-| history-large-100 | 529.93 → 232.41 | 541.16 → 238.18 | 6026867 |
-| search-20 | 143.92 → 145.22 | 146.34 → 140.78 | 6827 |
-| search-large-100 | 531.19 → 160.66 | 511.74 → 181.92 | 6026867 |
-| request | 138.45 → 142.31 | 142.12 → 140.61 | 652 |
-| client-error | 132.76 → 129.52 | 138.21 → 132.78 | — |
-| daemon-validation-error | 140.58 → 141.02 | 145.46 → 142.14 | — |
+| Scenario                | Full base → candidate ms | Compact base → candidate ms | Socket bytes |
+| ----------------------- | -----------------------: | --------------------------: | -----------: |
+| help                    |          127.18 → 128.01 |             122.27 → 125.84 |            — |
+| status                  |          140.52 → 141.07 |             138.32 → 138.21 |          400 |
+| history-20              |          140.24 → 144.14 |             139.33 → 139.05 |         6827 |
+| history-100             |          141.42 → 144.92 |             142.69 → 143.30 |        32667 |
+| history-large-20        |          201.27 → 188.82 |             195.52 → 189.67 |      1205667 |
+| history-large-100       |          529.93 → 232.41 |             541.16 → 238.18 |      6026867 |
+| search-20               |          143.92 → 145.22 |             146.34 → 140.78 |         6827 |
+| search-large-100        |          531.19 → 160.66 |             511.74 → 181.92 |      6026867 |
+| request                 |          138.45 → 142.31 |             142.12 → 140.61 |          652 |
+| client-error            |          132.76 → 129.52 |             138.21 → 132.78 |            — |
+| daemon-validation-error |          140.58 → 141.02 |             145.46 → 142.14 |            — |
 
 First observations and warm spread for selected CLI cases follow. Each cell is **first; warm min / median / max ms, n=10 warm**. Every case, mode, CPU sample and RSS sample is retained in the report.
 
-| Scenario / mode | Base ms | Candidate ms |
-| --- | ---: | ---: |
-| help / full | 72.79; 91.64 / 127.18 / 144.84 | 126.91; 109.15 / 128.01 / 132.51 |
-| status / full | 144.75; 129.93 / 140.52 / 160.66 | 145.98; 127.26 / 141.07 / 152.97 |
-| history-20 / full | 148.47; 134.20 / 140.24 / 146.97 | 152.99; 123.64 / 144.14 / 158.36 |
-| history-large-20 / full | 211.68; 77.87 / 201.27 / 280.76 | 183.53; 127.56 / 188.82 / 228.07 |
+| Scenario / mode          |                          Base ms |                     Candidate ms |
+| ------------------------ | -------------------------------: | -------------------------------: |
+| help / full              |   72.79; 91.64 / 127.18 / 144.84 | 126.91; 109.15 / 128.01 / 132.51 |
+| status / full            | 144.75; 129.93 / 140.52 / 160.66 | 145.98; 127.26 / 141.07 / 152.97 |
+| history-20 / full        | 148.47; 134.20 / 140.24 / 146.97 | 152.99; 123.64 / 144.14 / 158.36 |
+| history-large-20 / full  |  211.68; 77.87 / 201.27 / 280.76 | 183.53; 127.56 / 188.82 / 228.07 |
 | history-large-100 / full | 410.30; 387.58 / 529.93 / 691.91 | 104.17; 107.36 / 232.41 / 378.06 |
-| search-large-100 / full | 667.42; 383.30 / 531.19 / 656.85 | 100.94; 94.51 / 160.66 / 267.23 |
+| search-large-100 / full  | 667.42; 383.30 / 531.19 / 656.85 |  100.94; 94.51 / 160.66 / 267.23 |
 
 Client resources below are reported by each **new CLI process**. CPU includes imports, parsing, presentation and stdout, and is the warm median of user+system milliseconds. RSS is the warm median of reported OS high-water MiB, subject to the Linux pre-`exec` floor above; it cannot be attributed exclusively to post-`exec` CLI allocations. These values do not measure permanent daemon memory.
 
-| Scenario / mode | CPU base → candidate ms | Reported maxRSS base → candidate MiB |
-| --- | ---: | ---: |
-| status / full | 141.19 → 141.82 | 50.94 → 51.10 |
-| history-large-20 / full | 213.85 → 183.79 | 71.67 → 64.97 |
-| history-large-20 / compact | 207.96 → 181.95 | 71.96 → 65.25 |
-| history-large-100 / full | 522.19 → 204.01 | 202.17 → 134.72 |
-| history-large-100 / compact | 554.64 → 233.74 | 183.15 → 134.89 |
-| search-large-100 / full | 542.48 → 148.11 | 202.65 → 126.56 |
-| search-large-100 / compact | 528.79 → 168.14 | 213.53 → 123.71 |
+| Scenario / mode             | CPU base → candidate ms | Reported maxRSS base → candidate MiB |
+| --------------------------- | ----------------------: | -----------------------------------: |
+| status / full               |         141.19 → 141.82 |                        50.94 → 51.10 |
+| history-large-20 / full     |         213.85 → 183.79 |                        71.67 → 64.97 |
+| history-large-20 / compact  |         207.96 → 181.95 |                        71.96 → 65.25 |
+| history-large-100 / full    |         522.19 → 204.01 |                      202.17 → 134.72 |
+| history-large-100 / compact |         554.64 → 233.74 |                      183.15 → 134.89 |
+| search-large-100 / full     |         542.48 → 148.11 |                      202.65 → 126.56 |
+| search-large-100 / compact  |         528.79 → 168.14 |                      213.53 → 123.71 |
 
 Raw RPC timings (no CLI/Store) are **first; warm min / median / max ms, n=10 warm**, with CPU measured only across each RPC call.
 
-| Scenario | Base ms | Candidate ms | CPU median base → candidate ms |
-| --- | ---: | ---: | ---: |
-| status | 12.55; 0.56 / 1.01 / 2.05 | 14.73; 0.59 / 1.04 / 1.55 | 1.43 → 1.41 |
-| history-20 | 11.96; 0.80 / 1.19 / 2.80 | 13.73; 0.97 / 1.53 / 3.63 | 1.79 → 1.70 |
-| history-large-20 | 52.90; 14.81 / 16.22 / 17.21 | 35.81; 8.79 / 21.25 / 45.35 | 17.43 → 21.94 |
-| history-large-100 | 303.57; 296.15 / 298.99 / 304.50 | 31.86; 17.20 / 23.69 / 81.12 | 302.66 → 29.78 |
+| Scenario          |                          Base ms |                 Candidate ms | CPU median base → candidate ms |
+| ----------------- | -------------------------------: | ---------------------------: | -----------------------------: |
+| status            |        12.55; 0.56 / 1.01 / 2.05 |    14.73; 0.59 / 1.04 / 1.55 |                    1.43 → 1.41 |
+| history-20        |        11.96; 0.80 / 1.19 / 2.80 |    13.73; 0.97 / 1.53 / 3.63 |                    1.79 → 1.70 |
+| history-large-20  |     52.90; 14.81 / 16.22 / 17.21 |  35.81; 8.79 / 21.25 / 45.35 |                  17.43 → 21.94 |
+| history-large-100 | 303.57; 296.15 / 298.99 / 304.50 | 31.86; 17.20 / 23.69 / 81.12 |                 302.66 → 29.78 |
 
 Startup-only observations use the same metrics preload and new processes. Cells are **first; warm min / median / max ms, n=10 warm**. The protocol/import code is otherwise identical across base/candidate.
 
-| Observation | ms |
-| --- | ---: |
-| node-empty | 18.83; 33.28 / 86.63 / 104.08 |
-| protocol-import | 95.16; 90.95 / 96.67 / 108.57 |
-| rpc-import | 111.93; 104.20 / 110.01 / 122.82 |
+| Observation     |                               ms |
+| --------------- | -------------------------------: |
+| node-empty      |    18.83; 33.28 / 86.63 / 104.08 |
+| protocol-import |    95.16; 90.95 / 96.67 / 108.57 |
+| rpc-import      | 111.93; 104.20 / 110.01 / 122.82 |
 
 ## Interpretation and limits
 

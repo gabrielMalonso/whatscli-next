@@ -1,0 +1,21 @@
+# Private/runtime state, including nested fictional fixtures and editor invocations.
+**/.git/**
+**/node_modules/**
+**/dist/**
+**/.private/**
+**/.tmp/**
+**/auth_info*/**
+**/credentials/**
+**/sessions/**
+**/state/**
+**/media/**
+**/backups/**
+**/*.sqlite*
+**/*.db*
+**/*.log
+**/.env*
+**/creds.json
+**/credentials.json
+# Generated lockfile and historical measurements are not formatting inputs.
+pnpm-lock.yaml
+docs/*-results.json

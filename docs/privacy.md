@@ -28,12 +28,12 @@ Daemon/probe startup and shutdown use the command `errorResponse` boundary. Know
 
 On exact base `507827e22f9a4f8f71e6c2f387ee2d748bf52254`, all seven initial `test/privacy.test.ts` scenarios failed before production changes:
 
-| Controlled trigger | Base observation | Correction |
-| --- | --- | --- |
-| Writable, injected foreign-owned 0755, or symlink ancestor over a private Store | SQLite opened; missing nested state was created through replaceable ancestry | Refuse before mkdir/open; preserve existing DB bytes/modes |
-| Own fictional socket changed to 0666 | RPC delivered the fictional send body and accepted the response | Refuse before connection/bytes; secure owned endpoint works |
-| Pinned `LIDMappingStore` pure handler with fictional invalid identifiers; injected logger errors and libsignal console error-string pattern | Interpolated identifiers/error text reached stderr | Fixed labels/categories; private markers absent from stderr/public snapshot |
-| Daemon/probe parser with a fictional private option | Supplied option reached stderr | Safe generic startup error |
+| Controlled trigger                                                                                                                          | Base observation                                                             | Correction                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Writable, injected foreign-owned 0755, or symlink ancestor over a private Store                                                             | SQLite opened; missing nested state was created through replaceable ancestry | Refuse before mkdir/open; preserve existing DB bytes/modes                  |
+| Own fictional socket changed to 0666                                                                                                        | RPC delivered the fictional send body and accepted the response              | Refuse before connection/bytes; secure owned endpoint works                 |
+| Pinned `LIDMappingStore` pure handler with fictional invalid identifiers; injected logger errors and libsignal console error-string pattern | Interpolated identifiers/error text reached stderr                           | Fixed labels/categories; private markers absent from stderr/public snapshot |
+| Daemon/probe parser with a fictional private option                                                                                         | Supplied option reached stderr                                               | Safe generic startup error                                                  |
 
 Additional tests cover injected endpoint/directory/ancestor ownership, symlink endpoints, trusted user/root/sticky-root ancestry, CLI full/compact and offline daemon/probe rejection, and log preservation. Existing transport correlation/error forwarding/size limits, build fingerprint, backup, locking, shutdown and durable idempotency tests continue to run. No chown, elevation, other UID/process, actual multi-user attack or real WhatsApp connection was used.
 
