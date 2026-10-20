@@ -461,3 +461,35 @@ for (const existing of [false, true]) test(`query preserves prior evidence durin
   assert.equal(logs(directory).length, existing ? 2 : 1);
   assert.equal(observer.status().degraded, false);
 });
+
+test('short preference writes fail before publishing and preserve the previous preference and partial pending', () => {
+  const directory = temporary(); configureObservability(directory, true);
+  const path = join(directory, 'observability.json');
+  const before = readFileSync(path);
+  const write = fs.writeSync;
+  fs.writeSync = ((fd: number, data: string | NodeJS.ArrayBufferView, ...args: unknown[]) => {
+    if (typeof data === 'string' && data.startsWith('{"version":1,"enabled":false,')) return write(fd, data.slice(0, 16));
+    return Reflect.apply(write, fs, [fd, data, ...args]);
+  }) as typeof fs.writeSync;
+  syncBuiltinESMExports();
+  try { assert.throws(() => configureObservability(directory, false), { code: 'LOCAL_STATE' }); }
+  finally { fs.writeSync = write; syncBuiltinESMExports(); }
+  assert.deepEqual(readFileSync(path), before);
+  assert.equal(statSync(join(directory, 'observability.pending.json')).size, 16);
+  assert.equal(readObservability(directory).configured, true);
+  assert.equal(readObservability(directory).degraded, false);
+});
+
+test('CLI reports short preference writes as LOCAL_STATE with exit 1 and keeps the previous choice', () => {
+  const directory = temporary(); configureObservability(directory, true);
+  const before = readFileSync(join(directory, 'observability.json'));
+  const child = spawnSync(process.execPath, ['--import', './dist/test/fixtures/observability-short-write-hooks.js',
+    'dist/src/cli.js', '--data-dir', directory, 'observability', 'disable'], { encoding: 'utf8' });
+  assert.equal(child.status, 1, child.stderr);
+  const response = JSON.parse(child.stdout) as { ok: boolean; code: string };
+  assert.equal(response.ok, false); assert.equal(response.code, 'LOCAL_STATE');
+  assert.deepEqual(readFileSync(join(directory, 'observability.json')), before);
+  assert.equal(statSync(join(directory, 'observability.pending.json')).size, 16);
+  assert.equal(readObservability(directory).configured, true);
+  assert.equal(existsSync(join(directory, 'probe.sqlite')), false);
+});

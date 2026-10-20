@@ -86,7 +86,11 @@ export function configureObservability(directory: string, enabled: boolean): voi
       const fd = openSync(pending, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
       const preference: Preference = current.preference ? { ...current.preference, enabled }
         : { version: 1, enabled, generation: randomBytes(16).toString('hex'), secret: randomBytes(32).toString('hex') };
-      try { writeSync(fd, JSON.stringify(preference) + '\n'); fsyncSync(fd); } finally { closeSync(fd); }
+      const line = JSON.stringify(preference) + '\n';
+      try {
+        if (writeSync(fd, line) !== Buffer.byteLength(line)) throw new Error('Incomplete preference write');
+        fsyncSync(fd);
+      } finally { closeSync(fd); }
       // Validate again before replacing a known preference. No permissions are repaired.
       if (current.preference) readPrivate(join(directory, 'observability.json'), 512);
       renameSync(pending, join(directory, 'observability.json'));
