@@ -33,6 +33,10 @@ writeSync(3, 'admitted\n');
 // holder and optionally committed an opt-out. No elapsed-time scheduling trick.
 if (readSync(4, Buffer.alloc(1), 0, 1, null) !== 1)
   throw new Error('Closed fictional fixture gate');
+if (mode === 'abrupt') {
+  writeSync(1, JSON.stringify(observer.status().buffer) + '\n');
+  process.exit(23); // This fixture intentionally exits itself without a drain.
+}
 now = mode === 'real-expired' ? Date.now() : now + 1000;
 if (mode === 'expired') elapsed = 25;
 await observer.close();

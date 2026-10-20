@@ -74,8 +74,8 @@ function scheduled(args: string[], input?: string) {
     async stage(expected: string) {
       assert.equal((await stages.next()).value, expected, stderr);
     },
-    async result() {
-      assert.deepEqual(await exited, [0, null], stderr);
+    async result(expectedExit = 0) {
+      assert.deepEqual(await exited, [expectedExit, null], stderr);
       return { stdout, stderr };
     },
   };
@@ -836,4 +836,52 @@ test('closing reentrantly during preparation cannot admit a snapshot after its o
   assert.equal(observer.status().buffer.closed, true);
   assert.equal(observer.status().dropped, 0);
   assert.deepEqual(contents(directory), []);
+});
+
+test('an intentional abrupt exit can lose admitted volatile snapshots without a persistent witness', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const holder = scheduled([
+    '--import',
+    './dist/test/fixtures/observability-order-hooks.js?mode=cli-lock',
+    'dist/src/cli.js',
+    '--data-dir',
+    directory,
+    'help',
+  ]);
+  let worker: ReturnType<typeof scheduled> | undefined;
+  try {
+    await holder.stage('cli-locked');
+    worker = scheduled([
+      'dist/test/fixtures/observability-buffer-worker.js',
+      directory,
+      'abrupt',
+    ]);
+    await worker.stage('admitted');
+    worker.release.write('x');
+    const output = await worker.result(23);
+    const last = JSON.parse(output.stdout) as ReturnType<
+      Observability['status']
+    >['buffer'];
+    assert.equal(last.admitted, 2);
+    assert.equal(last.pending, 2);
+    assert.equal(last.captured, 0);
+    holder.release.write('x');
+    await holder.result();
+    const page = queryObservability(directory, {});
+    assert.equal(
+      page.records.filter((row) =>
+        [queryId(1), queryId(2)].includes(row.query ?? ''),
+      ).length,
+      0,
+    );
+    assert.equal(page.gaps.lossEvidence, null);
+    assert.equal(page.gaps.captureCompleteness, 'unknown');
+    assert.equal(new Observability(directory, 'runtime').status().dropped, 0);
+  } finally {
+    worker?.release.end();
+    holder.release.end();
+    if (worker) await worker.exited;
+    await holder.exited;
+  }
 });
