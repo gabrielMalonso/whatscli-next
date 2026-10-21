@@ -4,6 +4,7 @@ Start with [Getting started](user/getting-started.md) to install and pair whatsc
 
 ## Using the CLI
 
+- [Terminal monitor](user/tui.md): read-only conversation monitoring, keyboard navigation, and SSH access.
 - [Recipient identity](user/identity.md): exact JIDs, phone resolution, and conflicting evidence.
 - [History and search](user/history.md): chat filters, pagination, quotes, contact cards, and deletion visibility.
 - [Sending and media](user/sending.md): text, files, contact cards, routing, and downloads.

@@ -18,6 +18,8 @@ Each CLI invocation starts a new Node process without loading the SDK, Store, or
 
 Full and compact output use the same socket payload. Smaller pages reduce transport volume.
 
+The optional `whatscli-tui` is a separate terminal client of the same socket. Its command type permits only `status`, `chats`, `messages`, and local `contact` queries; it does not import the SDK or open SQLite. It polls bounded pages every two seconds, serializes refresh cycles, discards replies for obsolete selections, and freezes displayed history while the user scrolls. Optional contact names load separately with bounded concurrency and caching. Its alternate-screen output is separate from the JSON CLI. See the [terminal monitor guide](../user/tui.md).
+
 The flat socket/JSONL request reserves `id` for correlation. Downloads use a separate `messageId`:
 
 ```json
