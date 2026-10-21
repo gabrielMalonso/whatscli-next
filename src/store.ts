@@ -110,7 +110,19 @@ type PendingChatState = {
 };
 
 type ReceiptUnreadRange = {
+  // Earlier persisted ranges omitted this and required an observed-zero baseline.
+  baseline?: 'observed-read' | 'manual-unread';
   messages: { id: string; timestamp: number; readAt?: number }[];
+};
+
+type ReadReconciliation = {
+  status: 'insufficient-evidence';
+  reason: 'manual-unread-marker-unconfirmed';
+  source: 'own-device-receipt';
+  scope: 'message';
+  message: { id: string; timestamp: number };
+  readAt: number;
+  receivedAt: number;
 };
 
 type SdkChatState = Partial<
@@ -635,12 +647,17 @@ export class Store {
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
     const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
     const readObservation = this.get('chat-read-observation', jid);
+    const readReconciliation = this.get<ReadReconciliation>(
+      'read-reconciliation',
+      jid,
+    );
     return {
       ...chatOutput(chat),
       ...(pending.archived ? { archived: null } : {}),
       ...(pending.unread ? { unread: null, unreadCount: null } : {}),
       pending,
       ...(readObservation ? { readObservation } : {}),
+      ...(readReconciliation ? { readReconciliation } : {}),
       ...(Object.keys(sdkReported).length ? { sdkReported } : {}),
       observedAt: row.observed_at,
       activity: {
@@ -660,6 +677,7 @@ export class Store {
       pending.unread = { key, value: !operation.value };
       this.set('receipt-unread-range', operation.jid, null);
       this.set('chat-read-observation', operation.jid, null);
+      this.set('read-reconciliation', operation.jid, null);
     }
     this.set('pending-chat', operation.jid, pending);
     const sdkReported =
@@ -816,6 +834,7 @@ export class Store {
       typeof chat.markedAsUnread === 'boolean'
     ) {
       this.set('chat-read-observation', chat.id, null);
+      this.set('read-reconciliation', chat.id, null);
       this.trackUnreadRange(chat, previous, pending, source);
     }
     // Null/absent fields are neutral SDK updates, not observations of false.
@@ -901,8 +920,8 @@ export class Store {
         return [];
       return [{ id: key.id, timestamp }];
     });
-    // SDK positive counters are increments. Only a matching batch of exact
-    // incoming keys can close the range since a previously observed zero.
+    // Pair SDK increments with exact keys. A manual baseline permits message
+    // evidence only; an observed-zero baseline can also close the unread range.
     if (
       source !== 'update' ||
       !(isPn(jid) || isLid(jid)) ||
@@ -920,8 +939,9 @@ export class Store {
       : undefined;
     if (
       pending.unread?.value === true ||
-      previous?.markedAsUnread === true ||
-      (!range && previous?.unreadCount !== 0)
+      (!range &&
+        previous?.unreadCount !== 0 &&
+        previous?.markedAsUnread !== true)
     ) {
       this.set('receipt-unread-range', jid, null);
       return;
@@ -929,8 +949,15 @@ export class Store {
     const combined = new Map(
       range?.messages.map((message) => [message.id, message]),
     );
-    for (const message of messages) combined.set(message.id, message);
+    for (const message of messages) {
+      if (combined.get(message.id)?.timestamp !== message.timestamp)
+        combined.set(message.id, message);
+    }
     this.set('receipt-unread-range', jid, {
+      baseline:
+        previous?.markedAsUnread === true
+          ? 'manual-unread'
+          : (range?.baseline ?? 'observed-read'),
       messages: [...combined.values()],
     } satisfies ReceiptUnreadRange);
   }
@@ -964,6 +991,28 @@ export class Store {
       return;
     member.readAt = readAt;
     this.set('receipt-unread-range', key.remoteJid, range);
+    if (range.baseline === 'manual-unread') {
+      const previous = this.get<ReadReconciliation>(
+        'read-reconciliation',
+        key.remoteJid,
+      );
+      if (previous && previous.readAt >= readAt) return;
+      const reconciliation: ReadReconciliation = {
+        status: 'insufficient-evidence',
+        reason: 'manual-unread-marker-unconfirmed',
+        source: 'own-device-receipt',
+        scope: 'message',
+        message: { id: member.id, timestamp: member.timestamp },
+        readAt,
+        receivedAt: Date.now(),
+      };
+      this.set('read-reconciliation', key.remoteJid, reconciliation);
+      this.event('chat-read-insufficient', {
+        jid: key.remoteJid,
+        ...reconciliation,
+      });
+      return;
+    }
     if (range.messages.some(({ readAt }) => readAt === undefined)) return;
     this.observeChat({ id: key.remoteJid, unreadCount: 0 });
     const observation = {

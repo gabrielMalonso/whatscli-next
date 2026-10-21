@@ -8,6 +8,7 @@ import type { WAMessage, WAMessageKey, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { createRuntime } from '../src/runtime.js';
 import { object } from '../src/protocol.js';
+import { formatResponse } from '../src/response.js';
 import { Store } from '../src/store.js';
 
 const jid = '12025550101@s.whatsapp.net';
@@ -290,10 +291,146 @@ test('manual unread before a new message remains unresolved by its receipt, inde
     assert.equal(chat.unread, true);
     assert.equal(chat.archived, true);
     assert.equal(chat.readObservation, undefined);
+    const reconciliation = object(chat.readReconciliation);
+    assert.equal(reconciliation.status, 'insufficient-evidence');
+    assert.equal(reconciliation.reason, 'manual-unread-marker-unconfirmed');
+    assert.equal(reconciliation.source, 'own-device-receipt');
+    assert.equal(reconciliation.scope, 'message');
+    assert.deepEqual(reconciliation.message, {
+      id: msg.key.id,
+      timestamp: base + 10,
+    });
+    assert.equal(reconciliation.readAt, base + 100);
+    assert.equal(typeof reconciliation.receivedAt, 'number');
+    for (const mode of ['full', 'compact'] as const)
+      assert.deepEqual(
+        object(formatResponse('chat', { ok: true, data: chat }, mode).data)
+          .readReconciliation,
+        reconciliation,
+      );
+    for (const observedOnly of [false, true])
+      assert.deepEqual(
+        object(((await f.queue(observedOnly)) as unknown[])[0])
+          .readReconciliation,
+        reconciliation,
+      );
     assert.equal(((await f.queue(true)) as unknown[]).length, 1);
     f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
     assert.equal((await f.chat()).unread, false);
     assert.equal((await f.chat()).archived, true);
+    assert.equal((await f.chat()).readReconciliation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('insufficient read evidence persists across restart, archive changes and duplicate receipts', async () => {
+  const f = fixture(-1);
+  let expected: unknown;
+  try {
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    expected = (await f.chat()).readReconciliation;
+    assert.equal(object(expected).status, 'insufficient-evidence');
+    const archive = object(
+      await f.runtime.execute({
+        command: 'archive',
+        jid,
+        value: false,
+        key: 'archive-only',
+      }),
+    );
+    assert.deepEqual(object(archive.localChat).readReconciliation, expected);
+    assert.equal(
+      object(object(object(archive.localChat).pending).archived).key,
+      'archive-only',
+    );
+    f.ev.emit('chats.update', [{ id: jid, archived: false }]);
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: null }]);
+    f.receipt(msg.key);
+    assert.deepEqual((await f.chat()).readReconciliation, expected);
+    const events = (await f.runtime.execute({
+      command: 'events',
+      after: 0,
+    })) as unknown[];
+    const diagnoses = events
+      .map(object)
+      .filter((event) => event.kind === 'chat-read-insufficient');
+    assert.equal(diagnoses.length, 1);
+    assert.doesNotMatch(JSON.stringify(diagnoses), /Fictional fixture/);
+  } finally {
+    await f.close();
+  }
+  const offline = createRuntime({ dataDir: f.directory, connect: false });
+  try {
+    const chat = object(await offline.execute({ command: 'chat', jid }));
+    assert.deepEqual(chat.readReconciliation, expected);
+    assert.equal(chat.archived, false);
+    assert.equal(chat.unread, true);
+  } finally {
+    await offline.close();
+  }
+});
+
+test('new unread observations and both read intents retire old diagnostic evidence without fabricating confirmation', async () => {
+  const f = fixture(-1);
+  try {
+    let previous = f.incoming(f.message('first'));
+    f.receipt(previous.key);
+    assert.ok((await f.chat()).readReconciliation);
+    const next = f.incoming(f.message('second', base + 20));
+    assert.equal((await f.chat()).readReconciliation, undefined);
+    f.receipt(previous.key);
+    assert.equal((await f.chat()).readReconciliation, undefined);
+    f.receipt(next.key);
+    assert.equal(
+      object(object((await f.chat()).readReconciliation).message).id,
+      'second',
+    );
+    for (const value of [true, false]) {
+      await f.runtime.execute({
+        command: 'mark-read',
+        jid,
+        value,
+        key: 'new-intent-' + value,
+      });
+      const pending = await f.chat();
+      assert.equal(pending.readReconciliation, undefined);
+      assert.equal(pending.unread, null);
+      assert.equal(object(object(pending.pending).unread).value, !value);
+      f.receipt(next.key);
+      assert.equal((await f.chat()).readReconciliation, undefined);
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      assert.equal((await f.chat()).readReconciliation, undefined);
+      f.receipt(next.key);
+      assert.equal((await f.chat()).readReconciliation, undefined);
+      previous = f.incoming(f.message('after-intent-' + value, base + 30));
+      f.receipt(previous.key);
+      assert.ok((await f.chat()).readReconciliation);
+    }
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
+    assert.equal((await f.chat()).readReconciliation, undefined);
+    const fresh = f.incoming(f.message('normal', base + 40));
+    f.receipt(fresh.key);
+    const read = await f.chat();
+    assert.equal(read.unread, false);
+    assert.equal(read.readReconciliation, undefined);
+    assert.ok(read.readObservation);
+  } finally {
+    await f.close();
+  }
+});
+
+test('foreign, unknown, outgoing or invalid-time receipts cannot create a manual-marker diagnosis', async () => {
+  const f = fixture(-1);
+  try {
+    const msg = f.incoming();
+    f.receipt(msg.key, base + 100, jid);
+    f.receipt({ ...msg.key, id: 'unknown' });
+    f.receipt({ ...msg.key, fromMe: true });
+    f.receipt(msg.key, base);
+    assert.equal((await f.chat()).readReconciliation, undefined);
+    assert.equal((await f.chat()).unread, true);
   } finally {
     await f.close();
   }

@@ -123,3 +123,27 @@ node /absolute/release/dist/src/cli.js --account example events --after SEQUENCE
 The response's `data` array contains `kind: app-state.chat-action` entries. Their nested `data` includes `source`, `action` and `messageRange.messages` (minimal IDs, direction and original message timestamps). Match a `local-echo` entry's `requestId` to the command key. It is decoded SDK output, not proof of application on another device. Synced entries identify `source: sync` with their sync/MAC qualifiers. Continue from the last returned `sequence` when a page has 100 events; no history scan or forced resync is needed.
 
 A manual unread marker followed by a new incoming message can still remain unread locally after that message is read in another device. That receipt alone does not prove that the prior manual marker was cleared; this remains an explicit limitation pending stronger evidence.
+
+## Message read, manual marker unconfirmed
+
+For a manually unread conversation, a receipt can prove that a tracked incoming message was read without confirming removal of the prior manual marker. `chat` and eligible `chats` rows then expose:
+
+```json
+{
+  "readReconciliation": {
+    "status": "insufficient-evidence",
+    "reason": "manual-unread-marker-unconfirmed",
+    "source": "own-device-receipt",
+    "scope": "message",
+    "message": { "id": "fictional-incoming", "timestamp": 1700000010 },
+    "readAt": 1700000100,
+    "receivedAt": 1700000100123
+  }
+}
+```
+
+`message.timestamp` and `readAt` are separate event times in seconds; `receivedAt` is local capture time in milliseconds. This is one message's evidence, not full conversation coverage. The last observed `unread`/counter, archive, pending and `matchedBy` semantics stay unchanged. Both normal and observed-only queues retain an eligible row and its diagnostic; compact output retains it too. A remains an operational divergence when the other client is read and the CLI lacks a sufficient chat-state observation.
+
+The diagnostic survives runtime restart. Archive-only intents and observations, neutral null counters and duplicate receipts preserve it. Any new valid unread-counter observation or explicit manual-marker field clears the old diagnostic; this includes a new incoming increment. Both new read and unread intents clear it and retire the old tracked range, while remaining pending as usual. A real zero observation clears it and establishes read through the existing path.
+
+Only a first valid own-device read receipt for an exact ID/time in the current tracked range can create a diagnostic. Receipts for retired or unknown IDs, foreign users, outgoing keys or invalid/earlier times cannot create one. Already-recorded receipts for the same ID are ignored. Within a range, a different newly read ID updates the example only if its `readAt` is newer than the current example; equal or older times cannot replace it. A new incoming increment clears the public example but retains previously read members, so their duplicate receipts cannot recreate it for the new message. No waiting, automatic retry or forced synchronization substitutes for missing state evidence.
