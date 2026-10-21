@@ -535,10 +535,13 @@ export function createRuntime(
       ),
     );
     current.ev.on('app-state.update', (event) => {
-      if (event.kind === 'patch-response')
-        persist(() =>
-          store.transaction(() => store.recordAppStateResponse(event)),
-        );
+      persist(() =>
+        store.transaction(() => {
+          if (event.kind === 'patch-response')
+            store.recordAppStateResponse(event);
+          else store.recordAppStateChatAction(event);
+        }),
+      );
     });
     current.ev.on('chats.delete', (jids) =>
       persist(() =>
@@ -959,7 +962,7 @@ export function createRuntime(
           operation,
           () => {
             validateTarget(command.jid);
-            const last = store.messages(command.jid, 1)[0];
+            const last = store.chatMutationMessages(command.jid)[0];
             if (!last || toNumber(last.messageTimestamp ?? 0) === 0)
               throw new CommandError(
                 'PRECONDITION_FAILED',
@@ -968,7 +971,7 @@ export function createRuntime(
           },
           async () => {
             const lastMessages = store
-              .messages(command.jid, 1)
+              .chatMutationMessages(command.jid)
               .map(({ key, messageTimestamp }) => ({
                 key,
                 messageTimestamp: toNumber(messageTimestamp ?? 0),

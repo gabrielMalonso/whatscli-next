@@ -18,6 +18,7 @@ import type {
   AuthenticationCreds,
   BaileysEventMap,
   Chat,
+  ChatAppStateAction,
   ChatUpdate,
   Contact,
   WAMessage,
@@ -743,6 +744,62 @@ export class Store {
     });
   }
 
+  recordAppStateChatAction(event: ChatAppStateAction): void {
+    const range = event.messageRange;
+    this.event('app-state.chat-action', {
+      kind: 'chat-action',
+      source: event.source,
+      collection: event.collection,
+      version: event.version,
+      jid: event.jid,
+      ...(event.source === 'local-echo'
+        ? event.requestId !== undefined
+          ? { requestId: event.requestId }
+          : {}
+        : {
+            representation: event.representation,
+            initialSync: event.initialSync,
+            macVerified: event.macVerified,
+          }),
+      action:
+        event.action.kind === 'archive'
+          ? { kind: 'archive', archived: event.action.archived }
+          : { kind: 'mark-read', read: event.action.read },
+      ...(event.timestamp !== undefined ? { timestamp: event.timestamp } : {}),
+      ...(range
+        ? {
+            messageRange: {
+              ...(range.lastMessageTimestamp !== undefined
+                ? { lastMessageTimestamp: range.lastMessageTimestamp }
+                : {}),
+              ...(range.lastSystemMessageTimestamp !== undefined
+                ? {
+                    lastSystemMessageTimestamp:
+                      range.lastSystemMessageTimestamp,
+                  }
+                : {}),
+              ...(range.messages
+                ? {
+                    messages: range.messages.map((message) => ({
+                      ...(message.id !== undefined ? { id: message.id } : {}),
+                      ...(message.fromMe !== undefined
+                        ? { fromMe: message.fromMe }
+                        : {}),
+                      ...(message.participant !== undefined
+                        ? { participant: message.participant }
+                        : {}),
+                      ...(message.timestamp !== undefined
+                        ? { timestamp: message.timestamp }
+                        : {}),
+                    })),
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    });
+  }
+
   observeChat(
     chat: ChatUpdate,
     source: 'snapshot' | 'update' = 'snapshot',
@@ -1122,6 +1179,18 @@ export class Store {
         'SELECT json FROM messages WHERE jid=? ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?',
       )
       .all(jid, limit, offset)
+      .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
+  }
+
+  /** Receipt updates can reorder equal-second rowids; keep the whole newest boundary. */
+  chatMutationMessages(jid: string): WAMessage[] {
+    return this.db
+      .prepare(
+        `SELECT json FROM messages WHERE jid=? AND timestamp=(
+          SELECT MAX(timestamp) FROM messages WHERE jid=?
+        ) ORDER BY rowid DESC`,
+      )
+      .all(jid, jid)
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
   }
 

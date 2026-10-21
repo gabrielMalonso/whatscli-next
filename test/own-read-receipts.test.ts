@@ -276,3 +276,25 @@ test('an aggregate increment without a complete matching message range stays unr
     await f.close();
   }
 });
+
+test('manual unread before a new message remains unresolved by its receipt, independently of archive', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.ev.emit('chats.update', [{ id: jid, archived: true }]);
+    const msg = f.incoming();
+    f.ev.emit('chats.update', [{ id: jid, archived: false }]);
+    f.ev.emit('chats.update', [{ id: jid, archived: true }]);
+    f.receipt(msg.key);
+    const chat = await f.chat();
+    assert.equal(chat.unread, true);
+    assert.equal(chat.archived, true);
+    assert.equal(chat.readObservation, undefined);
+    assert.equal(((await f.queue(true)) as unknown[]).length, 1);
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
+    assert.equal((await f.chat()).unread, false);
+    assert.equal((await f.chat()).archived, true);
+  } finally {
+    await f.close();
+  }
+});

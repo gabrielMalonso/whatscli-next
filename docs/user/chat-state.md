@@ -111,3 +111,15 @@ See [read/unread implementation constraints](../internals/read-unread.md).
 Opening a conversation or choosing the WhatsApp read menu can produce message receipts without a manual chat-state patch. The CLI can remove that conversation from unread queues when receipts from the account's own device cover every tracked incoming unread message since an observed read baseline. `readObservation.source` is `own-device-receipts`; its `scope` is `tracked-incoming-messages`. Message timestamps stay unchanged; `readAt` is the receipt time in seconds.
 
 An old receipt cannot clear newer incoming messages or a manual unread marker. Unknown baselines, incomplete message ranges and pending read/unread intents remain uncertain until sufficient chat-state evidence arrives. The CLI does not turn a single message receipt into a global claim about unseen history or the effect of a previous command.
+
+## Inspect a command's SDK range
+
+Use the current release's CLI and a recent event sequence supplied with the candidate:
+
+```sh
+node /absolute/release/dist/src/cli.js --account example events --after SEQUENCE
+```
+
+The response's `data` array contains `kind: app-state.chat-action` entries. Their nested `data` includes `source`, `action` and `messageRange.messages` (minimal IDs, direction and original message timestamps). Match a `local-echo` entry's `requestId` to the command key. It is decoded SDK output, not proof of application on another device. Synced entries identify `source: sync` with their sync/MAC qualifiers. Continue from the last returned `sequence` when a page has 100 events; no history scan or forced resync is needed.
+
+A manual unread marker followed by a new incoming message can still remain unread locally after that message is read in another device. That receipt alone does not prove that the prior manual marker was cleared; this remains an explicit limitation pending stronger evidence.
