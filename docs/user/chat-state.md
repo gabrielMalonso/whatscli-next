@@ -142,7 +142,7 @@ For a manually unread conversation, a receipt can prove that a tracked incoming 
 }
 ```
 
-`message.timestamp` and `readAt` are separate event times in seconds; `receivedAt` is local capture time in milliseconds. This is one message's evidence, not full conversation coverage. The last observed `unread`/counter, archive, pending and `matchedBy` semantics stay unchanged. Both normal and observed-only queues retain an eligible row and its diagnostic; compact output retains it too. A remains an operational divergence when the other client is read and the CLI lacks a sufficient chat-state observation.
+`message.timestamp` and `readAt` are separate event times in seconds; `receivedAt` is local capture time in milliseconds. This is one message's evidence, not full conversation coverage. The last observed `unread`/counter, archive, pending and `matchedBy` semantics stay unchanged. Both normal and observed-only queues retain an eligible row and its diagnostic; compact output retains it too. The conversation can therefore remain in an unread queue while the browser shows it read. The diagnostic exposes that unresolved observation gap; it does not establish the browser's current state or justify retrying an uncertain command.
 
 The diagnostic survives runtime restart. Archive-only intents and observations, neutral null counters and duplicate receipts preserve it. Any new valid unread-counter observation or explicit manual-marker field clears the old diagnostic; this includes a new incoming increment. Both new read and unread intents clear it and retire the old tracked range, while remaining pending as usual. A real zero observation clears it and establishes read through the existing path.
 
