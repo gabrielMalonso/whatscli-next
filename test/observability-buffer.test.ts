@@ -83,6 +83,7 @@ function scheduled(args: string[], input?: string) {
 
 for (const mode of [
   'release',
+  'late-release',
   'off',
   'cycle',
   'overflow',
@@ -130,7 +131,11 @@ for (const mode of [
         holder.release.write('x');
         await holder.result();
       }
-      const retained = mode === 'release' ? 2 : mode === 'overflow' ? 16 : 0;
+      const retained = ['release', 'late-release'].includes(mode)
+        ? 2
+        : mode === 'overflow'
+          ? 16
+          : 0;
       assert.equal(result.records.length, retained);
       assert.deepEqual(
         result.records.map((row) => row.query),
@@ -202,6 +207,43 @@ function occupied(directory: string) {
     },
   };
 }
+
+for (const busy of [false, true])
+  test(`a late retry callback makes one final attempt without renewing its timer: busy=${busy}`, async (t) => {
+    const directory = temporary();
+    configureObservability(directory, true);
+    let elapsed = 0;
+    const observer = new Observability(
+      directory,
+      'runtime',
+      Date.now,
+      () => elapsed,
+    );
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const gate = occupied(directory);
+    try {
+      observer.record('execution', { action: 'chat' });
+      assert.equal(observer.status().buffer.pending, 1);
+      gate.set(busy);
+      elapsed = 1000;
+      t.mock.timers.tick(1);
+      const status = observer.status();
+      assert.equal(status.buffer.lockAttempts, 2);
+      assert.equal(status.buffer.pending, 0);
+      assert.equal(status.buffer.bytes, 0);
+      assert.equal(status.buffer.expired, busy ? 1 : 0);
+      assert.equal(status.buffer.captured, busy ? 0 : 1);
+      t.mock.timers.tick(1000);
+      await observer.close();
+      assert.equal(observer.status().buffer.lockAttempts, 2);
+      assert.equal(
+        queryObservability(directory, {}).records.length,
+        busy ? 0 : 1,
+      );
+    } finally {
+      gate.restore();
+    }
+  });
 
 test('snapshots retain their span/context across retries and UTC rotation; retained preference FDs all close', async (t) => {
   const directory = temporary();
@@ -319,6 +361,7 @@ test('bounded snapshots, one timer/shared drain, and new arrivals cannot extend 
     assert.equal(timeout.mock.callCount(), 1);
     const first = observer.drain();
     assert.equal(observer.drain(), first);
+    const attemptsBeforeExpiry = observer.status().buffer.lockAttempts;
     elapsed = 25;
     // No renewed 25ms budget is granted by this newly admitted observation.
     observer.record('execution', { action: 'chats', query: queryId(16) });
@@ -327,6 +370,10 @@ test('bounded snapshots, one timer/shared drain, and new arrivals cannot extend 
     assert.equal(observer.status().buffer.expired, 16);
     assert.equal(observer.status().buffer.overflow, 1);
     assert.equal(observer.status().dropped, 17);
+    assert.equal(
+      observer.status().buffer.lockAttempts,
+      attemptsBeforeExpiry + 16,
+    );
     assert.equal(timeout.mock.callCount(), 1);
     await observer.close();
     observer.record('execution');
@@ -654,6 +701,86 @@ test('preference close uncertainty is sticky health and never blindly retries th
   assert.equal(observer.status().cleanupFailures, 1);
   assert.equal(observer.status().components.cleanupDegraded, true);
 });
+
+for (const action of ['chat', 'contact', 'messages'] as const)
+  test(`CLI ${action} captures completion after a scheduler pause and lock release`, async () => {
+    const directory = temporary();
+    configureObservability(directory, true);
+    const holder = scheduled([
+      '--import',
+      './dist/test/fixtures/observability-order-hooks.js?mode=cli-lock',
+      'dist/src/cli.js',
+      '--data-dir',
+      directory,
+      'help',
+    ]);
+    const data = { text: 'FICTIONAL_LATE_DRAIN_PRIVATE_CANARY' };
+    let invocations = 0;
+    const server = createServer((socket) => {
+      socket.setEncoding('utf8');
+      socket.on('error', () => {});
+      let buffer = '';
+      socket.on('data', (chunk: string) => {
+        buffer += chunk;
+        if (!buffer.includes('\n')) return;
+        const request = JSON.parse(buffer.slice(0, buffer.indexOf('\n'))) as {
+          id: string;
+          command: string;
+        };
+        assert.equal(request.command, action);
+        invocations++;
+        socket.end(JSON.stringify({ id: request.id, ok: true, data }) + '\n');
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(join(directory, 'control.sock'), resolve),
+    );
+    let client: ReturnType<typeof scheduled> | undefined;
+    try {
+      await holder.stage('cli-locked');
+      client = scheduled([
+        '--import',
+        './dist/test/fixtures/observability-order-hooks.js?mode=cli-late-drain',
+        'dist/src/cli.js',
+        '--data-dir',
+        directory,
+        action,
+        '--jid',
+        '123450001@lid',
+      ]);
+      await client.stage('cli-queued');
+      holder.release.write('x');
+      await holder.result();
+      client.release.write('x');
+      const output = await client.result();
+      const response = JSON.parse(output.stdout) as Record<string, unknown>;
+      assert.equal(response.ok, true);
+      assert.deepEqual(response.data, data);
+      assert.equal(invocations, 1);
+      assert.equal(output.stderr, '');
+      const page = queryObservability(directory, { action });
+      assert.deepEqual(
+        page.records.map((row) => row.origin),
+        ['rpc', 'cli'],
+      );
+      assert.equal(page.records[0]?.correlation, page.records[1]?.correlation);
+      assert.ok(page.records.every((row) => row.ok && row.dropped === 0));
+      assert.equal(page.gaps.lossEvidence, null);
+      assert.equal(page.next, null);
+      assert.equal(page.invalid, 0);
+      assert.equal(page.missing, 0);
+      assert.doesNotMatch(
+        JSON.stringify(contents(directory)),
+        /PRIVATE_CANARY/,
+      );
+    } finally {
+      holder.release.end();
+      client?.release.end();
+      await holder.exited;
+      if (client) await client.exited;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 
 for (const shared of [false, true])
   test(`RPC lifetime drains owned observations and leaves a shared recorder open: shared=${shared}`, async () => {

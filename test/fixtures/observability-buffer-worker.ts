@@ -38,7 +38,7 @@ if (mode === 'abrupt') {
   process.exit(23); // This fixture intentionally exits itself without a drain.
 }
 now = mode === 'real-expired' ? Date.now() : now + 1000;
-if (mode === 'expired') elapsed = 25;
+if (mode === 'expired' || mode === 'late-release') elapsed = 25;
 await observer.close();
 const page = queryObservability(directory, { limit: 500 });
 process.stdout.write(

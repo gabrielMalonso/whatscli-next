@@ -1141,24 +1141,17 @@ export class Observability {
           snapshot.admittedAt + captureLimits.retryMs,
           this.draining?.deadline ?? Infinity,
         );
-        if (
-          (entry.state === 'deferred' || this.draining) &&
-          this.elapsed() >= deadline
-        ) {
-          this.pending.shift();
-          this.pendingBytes -= snapshot.bytes;
-          this.discard(snapshot, 'expired');
-          this.releaseLease(snapshot.lease);
-          continue;
-        }
+        // A delayed callback can outlive contention. Try the non-waiting append
+        // once before expiring; only a still-busy lock may consume retry time.
         const result = this.append(snapshot);
         if (result.kind === 'busy') {
           this.defer(entry);
-          break;
+          if (this.elapsed() < deadline) break;
         }
         this.pending.shift();
         this.pendingBytes -= snapshot.bytes;
-        if (result.kind === 'invalidated') this.capture.invalidated++;
+        if (result.kind === 'busy') this.discard(snapshot, 'expired');
+        else if (result.kind === 'invalidated') this.capture.invalidated++;
         else if (result.kind !== 'captured')
           this.failure(
             snapshot.base.origin,
