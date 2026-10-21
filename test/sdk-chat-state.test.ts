@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -331,3 +332,154 @@ test('enabling own events cannot create observed outgoing history or activity', 
     await f.close();
   }
 });
+
+for (const interrupted of ['archive', 'send'] as const) {
+  test(
+    `recovery created during ${interrupted} keeps replacement socket observations outside the old invocation`,
+    { timeout: 5000 },
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'sdk-socket-context-'));
+      const seed = new Store(directory);
+      seed.observeChat({
+        id: jid,
+        archived: interrupted === 'send',
+        unreadCount: 0,
+      });
+      seed.observeMessage({
+        key: { remoteJid: jid, id: 'fictional-last', fromMe: false },
+        messageTimestamp: 1700000000,
+        message: { conversation: 'Fictional previous message' },
+      });
+      seed.close();
+      const events: ReturnType<typeof makeEventBuffer>[] = [];
+      let replaced!: () => void;
+      const replacementReady = new Promise<void>((resolve) => {
+        replaced = resolve;
+      });
+      let messageId: string | undefined;
+      let attempts = 0;
+      const runtime = createRuntime(
+        { dataDir: directory, connect: true },
+        () => {
+          const first = events.length === 0;
+          const ev = makeEventBuffer(logger);
+          const ws = Object.assign(new EventEmitter(), { isClosed: false });
+          events.push(ev);
+          const fail = () => {
+            attempts++;
+            ws.isClosed = true;
+            ws.emit('close');
+            ev.emit('connection.update', {
+              connection: 'close',
+              lastDisconnect: {
+                error: Object.assign(new Error('Fictional transport failure'), {
+                  output: { statusCode: 408 },
+                }),
+                date: new Date(),
+              },
+            });
+            throw new Error('Fictional interrupted SDK invocation');
+          };
+          // Like WebSocket callbacks, this resource inherits its factory's async context.
+          if (!first)
+            setImmediate(() => {
+              ev.emit('connection.update', { connection: 'open' });
+              ev.emit('chats.update', [{ id: jid, archived: false }]);
+              if (messageId)
+                ev.emit('messages.upsert', {
+                  type: 'notify',
+                  messages: [
+                    {
+                      key: { remoteJid: jid, id: messageId, fromMe: true },
+                      messageTimestamp: 1700000010,
+                      message: {
+                        conversation: 'Fictional independent outgoing echo',
+                      },
+                    },
+                  ],
+                });
+              replaced();
+            });
+          return {
+            ev,
+            ws,
+            executeUSyncQuery: async () => ({ list: [] }),
+            chatModify: async () => {
+              if (first) fail();
+              ev.emit('chats.update', [{ id: jid, archived: true }]);
+            },
+            sendMessage: async (
+              ...[, , options]: Parameters<WASocket['sendMessage']>
+            ) => {
+              messageId = options?.messageId;
+              assert.ok(messageId);
+              fail();
+            },
+            end: () => {
+              ws.isClosed = true;
+              ws.emit('close');
+              ev.emit('connection.update', { connection: 'close' });
+            },
+          } as unknown as WASocket;
+        },
+        {
+          now: Date.now,
+          schedule(callback) {
+            const timer = setTimeout(callback, 0);
+            return () => clearTimeout(timer);
+          },
+        },
+      );
+      runtime.start();
+      events[0]!.emit('connection.update', { connection: 'open' });
+      const intent =
+        interrupted === 'archive'
+          ? {
+              command: 'archive' as const,
+              jid,
+              value: true,
+              key: 'interrupted',
+            }
+          : {
+              command: 'send' as const,
+              jid,
+              text: 'Fictional outgoing text',
+              key: 'interrupted',
+            };
+      try {
+        const result = object(await runtime.execute(intent));
+        const request =
+          interrupted === 'archive' ? object(result.request) : result;
+        assert.equal(request.attempt, 'uncertain');
+        await replacementReady;
+        assert.equal(events.length, 2);
+        const chat = object(await runtime.execute({ command: 'chat', jid }));
+        assert.equal(chat.archived, false);
+        assert.deepEqual(chat.pending, {});
+        assert.equal('sdkReported' in chat, false);
+        if (interrupted === 'send')
+          assert.equal(object(chat.activity).timestamp, 1700000010);
+        await runtime.execute(intent);
+        assert.equal(attempts, 1);
+        const next = object(
+          await runtime.execute({
+            command: 'archive',
+            jid,
+            value: true,
+            key: 'new-socket',
+          }),
+        );
+        assert.equal(object(next.request).attempt, 'sdk-returned');
+        assert.equal(object(next.localChat).archived, null);
+        assert.equal(
+          object(object(object(next.localChat).sdkReported).archived)
+            .requestKey,
+          'new-socket',
+        );
+      } finally {
+        await runtime.close();
+        for (const ev of events) ev.destroy();
+      }
+    },
+  );
+}

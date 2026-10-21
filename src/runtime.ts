@@ -74,6 +74,7 @@ export function createRuntime(
     replay: boolean;
   }>();
   const sdkInvocation = new AsyncLocalStorage<{
+    socketToken: object | undefined;
     key: string;
     jid: string;
     messageId: string | null;
@@ -87,6 +88,7 @@ export function createRuntime(
     args[4] = (messageId, jid, record) =>
       sdkInvocation.run(
         {
+          socketToken: owner,
           key: record.key,
           jid,
           messageId,
@@ -339,7 +341,9 @@ export function createRuntime(
     const emit = current.ev.emit.bind(current.ev);
     current.ev.emit = (event, value) => {
       const invocation = sdkInvocation.getStore();
-      if (!invocation) return emit(event, value);
+      // Recovery timers can inherit an old invocation when creating the next socket.
+      if (!invocation || invocation.socketToken !== token)
+        return emit(event, value);
       if (event === 'chats.update') {
         const chats = value as BaileysEventMap['chats.update'];
         const independent: BaileysEventMap['chats.update'] = [];
