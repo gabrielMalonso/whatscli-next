@@ -944,7 +944,6 @@ export function createRuntime(
         );
         return {
           request,
-          verification: 'unknown',
           note: 'sdkReported is local SDK evidence; independent observation and phone confirmation remain separate.',
           localChat: store.chatView(command.jid),
         };

@@ -42,7 +42,7 @@ When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's 
 
 This provides the SDK's local state without treating it as independent confirmation. `requestKey` identifies the local call during which the event was emitted; the SDK does not attach request correlation. `reportedAt` is the local capture time, not the remote action time. A preflight resync can also emit state during the call.
 
-`request.attempt: "sdk-returned"` means the call returned. The mutation's `verification: "unknown"` does not claim a phone effect. `sdkReported` only appears after an actual SDK event; a return without an event or an error cannot manufacture a value.
+`request.attempt: "sdk-returned"` means the call returned. The response's note explains that SDK evidence, independent observation, and phone confirmation remain separate. `sdkReported` only appears after an actual SDK event; a return without an event or an error cannot manufacture a value.
 
 The ordinary `archived`/`unread` fields and their filters retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
 

@@ -114,7 +114,7 @@ for (const [command, value, field, expected] of [
       const result = object(await f.runtime.execute(intent));
       f.ev.flush();
       assert.equal(object(result.request).attempt, 'sdk-returned');
-      assert.equal(result.verification, 'unknown');
+      assert.equal('verification' in result, false);
       const chat = await f.view();
       assert.equal(chat[field], null);
       assert.deepEqual(object(chat.pending)[field], {
@@ -281,7 +281,7 @@ test('an event before SDK failure remains local evidence alongside an uncertain 
     );
     assert.equal(object(result.request).attempt, 'uncertain');
     assert.equal(object(result.request).errorObserved, true);
-    assert.equal(result.verification, 'unknown');
+    assert.equal('verification' in result, false);
     assert.equal(
       object(object(object(result.localChat).sdkReported).archived).value,
       true,
