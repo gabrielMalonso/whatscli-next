@@ -212,8 +212,8 @@ test('pending state is filtered as unknown across restart until matching fresh f
       async () => {},
     );
     store.observeChat({ id: pn, unreadCount: 2 });
-    assert.equal(store.chatView(pn)?.unread, null);
-    assert.equal(store.chatView(pn)?.pending.unread?.key, 'unread');
+    assert.equal(store.chatView(pn)?.unread, true);
+    assert.deepEqual(store.chatView(pn)?.pending, {});
     store.observeChat({ id: pn, markedAsUnread: true });
     assert.equal(store.chatView(pn)?.unread, true);
     assert.equal(store.chatView(pn)?.unreadCount, null);
@@ -231,6 +231,57 @@ test('pending state is filtered as unknown across restart until matching fresh f
     assert.deepEqual(ids(store, false, false), [pn]);
   } finally {
     store.close();
+  }
+});
+
+test('positive unread observations supersede only unread pending and SDK reports without changing requests', async () => {
+  for (const value of [true, false]) {
+    const store = new Store(temporary());
+    try {
+      store.observeChat({ id: pn, archived: false, unreadCount: 0 });
+      const request = await perform(
+        store,
+        'read-state',
+        { kind: 'mark-read', jid: pn, value },
+        () => {},
+        async () => {},
+      );
+      await perform(
+        store,
+        'archive',
+        { kind: 'archive', jid: pn, value: true },
+        () => {},
+        async () => {},
+      );
+      store.reportSdkChat('read-state', {
+        id: pn,
+        unreadCount: value ? 0 : -1,
+      });
+      store.reportSdkChat('archive', { id: pn, archived: true });
+      const archiveReport = store.chatView(pn)?.sdkReported?.archived;
+      assert.ok(archiveReport);
+      store.observeChat({ id: pn, unreadCount: 1 });
+      const chat = store.chatView(pn);
+      assert.equal(chat?.unread, true);
+      assert.equal(chat?.unreadCount, null);
+      assert.equal(chat?.archived, null);
+      assert.deepEqual(chat?.pending, {
+        archived: { key: 'archive', value: true },
+      });
+      assert.deepEqual(chat?.sdkReported, { archived: archiveReport });
+      assert.deepEqual(store.request('read-state'), request);
+      assert.deepEqual(ids(store, true, 'unknown'), [pn]);
+      assert.deepEqual(ids(store, 'unknown'), []);
+      store.reportSdkChat('read-state', {
+        id: pn,
+        unreadCount: value ? 0 : -1,
+      });
+      assert.deepEqual(store.chatView(pn)?.sdkReported, {
+        archived: archiveReport,
+      });
+    } finally {
+      store.close();
+    }
   }
 });
 

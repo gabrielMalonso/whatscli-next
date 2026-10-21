@@ -50,11 +50,11 @@ Full and compact output both preserve `sdkReported`. Pending indicates missing s
 
 ## Interpreting unread observations
 
-Without a pending read/unread mutation, a positive SDK unread update establishes `unread: true`.
+A positive SDK unread update observed outside the mutation's invocation context establishes `unread: true`, including while a read/unread intent is pending. It supersedes the pending unread intent and its previous SDK report, while preserving the original request and its outcome. This does not confirm that the requested read/unread action worked on the phone. Events captured during the call remain only in `sdkReported`.
 
 The exact unread total remains unknown and is returned as `unreadCount: null`. The SDK can report increments rather than absolute totals.
 
-A positive counter alone cannot resolve a pending read/unread intent.
+Incoming messages received online or during a disconnection use this same SDK observation path. Positive history counters and duplicate increments can also establish unread, including after a read observation. These observations do not guarantee the current state on another device. If buffering combines read and incoming into a positive aggregate, unread wins in that callback; a later explicit zero establishes read.
 
 ### Counter values
 
