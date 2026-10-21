@@ -65,7 +65,13 @@ Observability.prototype.record = function (
   // business clocks and pipe ordering stay real. The negative keeps real time.
   if (controlled && mode === 'daemon-recovery')
     Reflect.set(this, 'elapsed', () => 0);
+  // Model a scheduler pause after contention, without racing a wall-clock timer.
+  if (mode === 'cli-late-drain') Reflect.set(this, 'elapsed', () => 0);
   record.call(this, category, fields, origin);
+  if (mode === 'cli-late-drain' && origin === 'cli' && category === 'command') {
+    gate('cli-queued');
+    Reflect.set(this, 'elapsed', () => 25);
+  }
   if (category === 'lifecycle' && fields.label === 'startup') notify('ready');
   if (controlled) notify('daemon-recorded');
   if (
