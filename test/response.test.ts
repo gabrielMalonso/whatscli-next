@@ -73,17 +73,16 @@ test('chat true/false/null, zero/manual/unknown counters, activity and pending i
   );
   const mutation = publicResponse({
     request: uncertain,
-    verification: 'pending-phone-and-subsequent-client-observation',
+    verification: 'unknown',
+    note: 'sdkReported is local SDK evidence; independent observation and phone confirmation remain separate.',
     localChat: full[2],
   });
   const compactMutation = object(
     formatResponse('read', mutation, 'compact').data,
   );
   assert.deepEqual(compactMutation.request, uncertain);
-  assert.equal(
-    compactMutation.verification,
-    'pending-phone-and-subsequent-client-observation',
-  );
+  assert.equal(compactMutation.verification, 'unknown');
+  assert.equal(compactMutation.note, object(mutation.data).note);
   assert.deepEqual(object(compactMutation.localChat).pending, full[2]?.pending);
 });
 

@@ -99,6 +99,18 @@ type PendingChatState = {
   unread?: { key: string; value: boolean };
 };
 
+type SdkChatState = Partial<
+  Record<
+    'archived' | 'unread',
+    {
+      value: boolean;
+      source: 'sdk-event-during-request';
+      requestKey: string;
+      reportedAt: number;
+    }
+  >
+>;
+
 type ActivitySource =
   | 'chat.conversationTimestamp'
   | 'chat.lastMsgTimestamp'
@@ -607,11 +619,13 @@ export class Store {
     if (!row) return null;
     const chat = decode<Chat>(String(row.json));
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
+    const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
     return {
       ...chatOutput(chat),
       ...(pending.archived ? { archived: null } : {}),
       ...(pending.unread ? { unread: null, unreadCount: null } : {}),
       pending,
+      ...(Object.keys(sdkReported).length ? { sdkReported } : {}),
       observedAt: row.observed_at,
       activity: {
         timestamp: row.activity_timestamp,
@@ -628,6 +642,38 @@ export class Store {
       pending.archived = { key, value: operation.value };
     else pending.unread = { key, value: !operation.value };
     this.set('pending-chat', operation.jid, pending);
+    const sdkReported =
+      this.get<SdkChatState>('sdk-chat-state', operation.jid) ?? {};
+    delete sdkReported[operation.kind === 'archive' ? 'archived' : 'unread'];
+    this.set(
+      'sdk-chat-state',
+      operation.jid,
+      Object.keys(sdkReported).length ? sdkReported : null,
+    );
+  }
+
+  reportSdkChat(key: string, chat: ChatUpdate): void {
+    const request = this.request(key);
+    if (!request || isSendOperation(request.operation)) return;
+    const { operation } = request;
+    if (chat.id !== operation.jid) return;
+    const field = operation.kind === 'archive' ? 'archived' : 'unread';
+    const pending = this.get<PendingChatState>('pending-chat', operation.jid);
+    // Late completions cannot overwrite a newer intent or independent state.
+    if (pending?.[field]?.key !== key) return;
+    const value = chatOutput(chat)[field];
+    if (typeof value !== 'boolean') return;
+    const sdkReported =
+      this.get<SdkChatState>('sdk-chat-state', operation.jid) ?? {};
+    const report = {
+      value,
+      source: 'sdk-event-during-request' as const,
+      requestKey: key,
+      reportedAt: Date.now(),
+    };
+    sdkReported[field] = report;
+    this.set('sdk-chat-state', operation.jid, sdkReported);
+    this.event('sdk-chat-state', { jid: operation.jid, field, ...report });
   }
 
   observeChat(chat: ChatUpdate): void {
@@ -665,14 +711,25 @@ export class Store {
       )
         merged.unreadCount = null;
     }
-    if (typeof chat.archived === 'boolean') delete pending.archived;
+    const sdkReported = this.get<SdkChatState>('sdk-chat-state', chat.id) ?? {};
+    if (typeof chat.archived === 'boolean') {
+      delete pending.archived;
+      delete sdkReported.archived;
+    }
     // Positive counters can be increments/aggregates; alone they cannot settle pending state.
     if (
       chat.unreadCount === 0 ||
       chat.unreadCount === -1 ||
       chat.markedAsUnread === true
-    )
+    ) {
       delete pending.unread;
+      delete sdkReported.unread;
+    }
+    this.set(
+      'sdk-chat-state',
+      chat.id,
+      Object.keys(sdkReported).length ? sdkReported : null,
+    );
     this.set(
       'pending-chat',
       chat.id,

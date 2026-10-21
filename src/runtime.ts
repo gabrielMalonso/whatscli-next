@@ -10,7 +10,7 @@ import makeWASocket, {
   USyncUser,
 } from 'baileys';
 import { basename } from 'node:path';
-import type { AuthenticationCreds, WASocket } from 'baileys';
+import type { AuthenticationCreds, BaileysEventMap, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
@@ -73,10 +73,32 @@ export function createRuntime(
     invoked: boolean;
     replay: boolean;
   }>();
+  const sdkInvocation = new AsyncLocalStorage<{
+    key: string;
+    jid: string;
+    messageId: string | null;
+    field: 'archived' | 'unread' | null;
+  }>();
   function perform(
     ...args: Parameters<typeof performOperation>
   ): ReturnType<typeof performOperation> {
     const context = execution.getStore();
+    const invoke = args[4];
+    args[4] = (messageId, jid, record) =>
+      sdkInvocation.run(
+        {
+          key: record.key,
+          jid,
+          messageId,
+          field:
+            record.operation.kind === 'archive'
+              ? 'archived'
+              : record.operation.kind === 'mark-read'
+                ? 'unread'
+                : null,
+        },
+        () => invoke(messageId, jid, record),
+      );
     args[6] = (phase) => {
       if (context) {
         if (phase === 'invoke') context.invoked = true;
@@ -281,7 +303,7 @@ export function createRuntime(
         },
         logger,
         markOnlineOnConnect: false,
-        emitOwnEvents: false,
+        emitOwnEvents: true,
         syncFullHistory: false,
         enableRecentMessageCache: false,
         // The SDK can re-relay outgoing messages on retry receipts. Withhold that content
@@ -310,6 +332,61 @@ export function createRuntime(
       } catch {
         fatal();
       }
+    };
+    // Capture before the SDK buffer can merge local echoes with remote events.
+    // A preflight resync can also emit in this scope: it is SDK evidence, not
+    // independent confirmation or proof that this request caused the state.
+    const emit = current.ev.emit.bind(current.ev);
+    current.ev.emit = (event, value) => {
+      const invocation = sdkInvocation.getStore();
+      if (!invocation) return emit(event, value);
+      if (event === 'chats.update') {
+        const chats = value as BaileysEventMap['chats.update'];
+        const independent: BaileysEventMap['chats.update'] = [];
+        for (const chat of chats) {
+          if (chat.id !== invocation.jid) {
+            independent.push(chat);
+            continue;
+          }
+          persist(() =>
+            store.transaction(() => store.reportSdkChat(invocation.key, chat)),
+          );
+          // Keep unrelated fields from a mutation's preflight sync observable.
+          // Send echoes can also invent activity, so their target update stays excluded.
+          if (invocation.field) {
+            const remaining = { ...chat };
+            if (invocation.field === 'archived') delete remaining.archived;
+            else {
+              delete remaining.unreadCount;
+              delete remaining.markedAsUnread;
+            }
+            if (
+              Object.keys(remaining).some(
+                (key) => key !== 'id' && key !== 'conditional',
+              )
+            )
+              independent.push(remaining);
+          }
+        }
+        return independent.length ? emit('chats.update', independent) : true;
+      }
+      // Enabling own events also enables synthetic outgoing message upserts.
+      // Keep those from inventing observed history or chat activity.
+      if (event === 'messages.upsert' && invocation.messageId) {
+        const upsert = value as BaileysEventMap['messages.upsert'];
+        const messages = upsert.messages.filter(
+          ({ key }) =>
+            !(
+              key.fromMe === true &&
+              key.id === invocation.messageId &&
+              key.remoteJid === invocation.jid
+            ),
+        );
+        return messages.length
+          ? emit('messages.upsert', { ...upsert, messages })
+          : true;
+      }
+      return emit(event, value);
     };
     current.ev.on('creds.update', (update) =>
       persist(() => {
@@ -867,7 +944,8 @@ export function createRuntime(
         );
         return {
           request,
-          verification: 'pending-phone-and-subsequent-client-observation',
+          verification: 'unknown',
+          note: 'sdkReported is local SDK evidence; independent observation and phone confirmation remain separate.',
           localChat: store.chatView(command.jid),
         };
       }

@@ -35,7 +35,7 @@ function fixture() {
   const runtime = createRuntime(
     { dataDir: directory, connect: true, allowedJid: pn },
     (config) => {
-      assert.equal(config.emitOwnEvents, false);
+      assert.equal(config.emitOwnEvents, true);
       return {
         ev,
         ws: { isClosed: true },
