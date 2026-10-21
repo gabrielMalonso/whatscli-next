@@ -528,6 +528,12 @@ export function createRuntime(
         }),
       ),
     );
+    current.ev.on('app-state.update', (event) => {
+      if (event.kind === 'patch-response')
+        persist(() =>
+          store.transaction(() => store.recordAppStateResponse(event)),
+        );
+    });
     current.ev.on('chats.delete', (jids) =>
       persist(() =>
         store.transaction(() => {
@@ -942,14 +948,29 @@ export function createRuntime(
               command.command === 'archive'
                 ? { archive: command.value, lastMessages }
                 : { markRead: command.value, lastMessages };
-            await connected().chatModify(patch, command.jid);
+            await connected().chatModify(patch, command.jid, {
+              requestId: command.key,
+            });
           },
           sendPreparation,
         );
+        const localChat = store.chatView(command.jid);
+        const field = command.command === 'archive' ? 'archived' : 'unread';
+        const pending = localChat?.pending[field];
         return {
           request,
-          note: 'sdkReported is local SDK evidence; independent observation and phone confirmation remain separate.',
-          localChat: store.chatView(command.jid),
+          feedback: {
+            serverResponse: request.appStateResponse?.status ?? 'unknown',
+            stateObservation: pending
+              ? pending.key === request.key
+                ? 'pending'
+                : 'superseded'
+              : typeof localChat?.[field] === 'boolean'
+                ? 'available'
+                : 'unknown',
+          },
+          note: 'A server response and local SDK echo do not confirm phone application. Pending refers to a conversation-state observation; do not repeat an uncertain operation.',
+          localChat,
         };
       }
       case 'stop':

@@ -51,6 +51,151 @@ async function cli(
   }
 }
 
+test('CLI/socket and JSONL expose server response and pending queue membership in full, compact and observed-only queries', async (t) => {
+  const directory = temporary();
+  const seed = new Store(directory);
+  seed.observeChat({ id: jid, unreadCount: 0, archived: false });
+  const requestFixture = {
+    key: 'fictional-unread',
+    operation: { kind: 'mark-read', jid, value: false },
+    messageId: null,
+    attempt: 'sdk-returned',
+    acceptance: 'unknown',
+    delivery: 'unknown',
+    read: 'unknown',
+    errorObserved: false,
+    appStateResponse: {
+      collection: 'regular_low',
+      version: 1,
+      serverVersion: 1,
+      status: 'version-matched',
+      receivedAt: 1700000000000,
+    },
+  } as const;
+  seed.saveRequest(requestFixture);
+  seed.invalidateChatState('fictional-unread', {
+    kind: 'mark-read',
+    jid,
+    value: false,
+  });
+  seed.close();
+  const start = await cli(directory, 'start', '--offline');
+  assert.equal(start.ok, true);
+  t.after(async () => {
+    await cli(directory, 'stop');
+  });
+  for (const output of ['full', 'compact']) {
+    const queue = await cli(
+      directory,
+      'chats',
+      '--unread',
+      'true',
+      '--archived',
+      'false',
+      '--output',
+      output,
+    );
+    assert.ok(Array.isArray(queue.data));
+    assert.equal(queue.data.length, 1);
+    const item = queue.data[0] as Record<string, unknown>;
+    assert.equal(item.unread, null);
+    assert.deepEqual(item.matchedBy, { unread: 'pending-intent' });
+    assert.deepEqual(
+      (
+        await cli(
+          directory,
+          'chats',
+          '--unread',
+          'true',
+          '--observed-only',
+          '--output',
+          output,
+        )
+      ).data,
+      [],
+    );
+    const request = (
+      await cli(
+        directory,
+        'request',
+        '--key',
+        'fictional-unread',
+        '--output',
+        output,
+      )
+    ).data as Record<string, unknown>;
+    assert.equal(
+      (request.appStateResponse as Record<string, unknown>).status,
+      'version-matched',
+    );
+  }
+  assert.equal(
+    (await cli(directory, 'chat', '--jid', jid, '--observed-only')).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await rpc(directory, {
+        command: 'chats',
+        limit: 100,
+        offset: 0,
+        unread: true,
+        observedOnly: true,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal((await cli(directory, 'stop')).ok, true);
+  const probe = spawnSync(
+    process.execPath,
+    ['dist/src/probe.js', '--data-dir', directory],
+    {
+      input:
+        [
+          { id: 'queue', command: 'chats', unread: true, archived: false },
+          {
+            id: 'observed',
+            command: 'chats',
+            unread: true,
+            observedOnly: true,
+          },
+          {
+            id: 'invalid',
+            command: 'chats',
+            unread: true,
+            observedOnly: 'true',
+          },
+          { id: 'request', command: 'request', key: 'fictional-unread' },
+        ]
+          .map((command) => JSON.stringify(command))
+          .join('\n') + '\n',
+      encoding: 'utf8',
+      timeout: 15000,
+    },
+  );
+  assert.equal(probe.status, 0, probe.stderr);
+  const lines = probe.stdout
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.equal(lines.length, 4);
+  assert.deepEqual(
+    (lines[0]?.data as Record<string, unknown>[])[0]?.matchedBy,
+    { unread: 'pending-intent' },
+  );
+  assert.deepEqual(lines[1]?.data, []);
+  assert.equal(lines[2]?.ok, false);
+  assert.equal(
+    (
+      (lines[3]?.data as Record<string, unknown>).appStateResponse as Record<
+        string,
+        unknown
+      >
+    ).status,
+    'version-matched',
+  );
+});
+
 test('offline CLI lifecycle, pagination, literal Unicode search, validation and single daemon ownership', async (t) => {
   const directory = temporary();
   const store = new Store(directory);

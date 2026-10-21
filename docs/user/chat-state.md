@@ -19,6 +19,27 @@ After a mutation, the affected public field becomes `null` with a `pending` inte
 
 Unrelated, missing, and neutral/null fields do not confirm the mutation or make an old counter current.
 
+## Server response and command feedback
+
+Read/archive results expose two independent signals:
+
+```json
+{
+  "feedback": {
+    "serverResponse": "version-matched",
+    "stateObservation": "pending"
+  }
+}
+```
+
+This means the response's collection version matched the submitted version, while the conversation still lacks a sufficient state observation. It does not mean that the action failed or that the phone confirmed it.
+
+`request.appStateResponse` persists the collection, submitted version, optional server version, status and local `receivedAt` time. It is also available through `request --key KEY`, including after restart. `serverResponse` is `unknown` without recorded evidence, `response-received` for a response without an exact version match, or `version-matched` for a matching response. A bare or mismatched response is never upgraded to a matching one.
+
+`stateObservation` is `pending` for this request's outstanding observation, `superseded` when a newer intent for the same field is pending, `available` when the field has an observed boolean, or `unknown` when neither is available. An available state can contradict the request; it does not prove causation or current phone state.
+
+An SDK/local failure can coexist with a server response. Inspect `request.attempt` and `request.errorObserved` as well as the response. Never automatically retry an uncertain operation. Reusing the exact key retrieves evidence without another SDK invocation. Historical requests without recorded response metadata remain unknown; this change does not backfill them from requested values or local echoes. Message acceptance/delivery/read fields retain their separate meaning.
+
 ## Local SDK state
 
 When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's `localChat` expose a separate `sdkReported` projection. For example:
@@ -40,11 +61,13 @@ When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's 
 }
 ```
 
-This provides the SDK's local state without treating it as independent confirmation. `requestKey` identifies the local call during which the event was emitted; the SDK does not attach request correlation. `reportedAt` is the local capture time, not the remote action time. A preflight resync can also emit state during the call.
+This provides the SDK's local state without treating it as independent confirmation. `requestKey` identifies the local invocation context in which the legacy chat event was emitted. The patched SDK separately carries a local `requestId` on patch responses; it never assigns that ID to synced actions. `reportedAt` is the local capture time, not the remote action time. A preflight resync can also emit state during the call.
 
 `request.attempt: "sdk-returned"` means the call returned. The response's note explains that SDK evidence, independent observation, and phone confirmation remain separate. `sdkReported` only appears after an actual SDK event; a return without an event or an error cannot manufacture a value.
 
-The ordinary `archived`/`unread` fields and their filters retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
+The ordinary `archived`/`unread` fields retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known, the server replied, and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
+
+Boolean list filters also consider the latest pending intent by default, so `chats --unread true --archived false` can include a conversation just marked unread or unarchived through the CLI. Such rows retain null observed fields and include `matchedBy`, for example `{"unread":"pending-intent"}`. This describes requested state, even if no server response exists; it is not confirmed state. `--observed-only` excludes these matches. `unknown` always matches missing observed state, so a pending conversation can also appear in an unknown query. Inspect pending keys and response evidence before acting; queue membership is not permission to repeat an uncertain operation.
 
 Full and compact output both preserve `sdkReported`. Pending indicates missing sufficient observation, not a failed action or a promise that confirmation will arrive. Waiting, querying the original key, or resynchronizing cannot guarantee an observation. Phone or browser confirmation remains separate evidence.
 
@@ -79,6 +102,6 @@ Archive observations cannot confirm read state. Read observations cannot confirm
 
 An observed state may differ from the requested state. Clearing `pending` does not prove the request caused the change.
 
-The rc14 callback provides neither request correlation nor remote action time.
+The legacy chat callback provides neither request correlation nor remote action time. The pinned SDK has an install-time patch from the fork; see [dependency provenance](../../patches/README.md).
 
 See [read/unread implementation constraints](../internals/read-unread.md).

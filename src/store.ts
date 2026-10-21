@@ -14,6 +14,7 @@ import {
   toNumber,
 } from 'baileys';
 import type {
+  AppStatePatchResponse,
   AuthenticationCreds,
   BaileysEventMap,
   Chat,
@@ -92,6 +93,14 @@ export type RequestRecord = {
   delivery: 'unknown' | 'delivered';
   read: 'unknown' | 'read';
   errorObserved: boolean;
+  appStateResponse?: {
+    collection: 'regular_low';
+    version: number;
+    receivedAt: number;
+  } & (
+    | { status: 'version-matched'; serverVersion: number }
+    | { status: 'response-received'; serverVersion?: number }
+  );
 };
 
 type PendingChatState = {
@@ -676,6 +685,54 @@ export class Store {
     this.event('sdk-chat-state', { jid: operation.jid, field, ...report });
   }
 
+  recordAppStateResponse(event: AppStatePatchResponse): void {
+    if (!event.requestId || event.collection !== 'regular_low') return;
+    const request = this.request(event.requestId);
+    if (
+      !request ||
+      isSendOperation(request.operation) ||
+      request.appStateResponse
+    )
+      return;
+    if (
+      !Number.isSafeInteger(event.version) ||
+      event.version < 1 ||
+      (event.serverVersion !== undefined &&
+        (!Number.isSafeInteger(event.serverVersion) || event.serverVersion < 0))
+    )
+      return;
+    if (
+      event.status !== 'response-received' &&
+      (event.status !== 'version-matched' ||
+        event.serverVersion !== event.version)
+    )
+      return;
+    const common = {
+      collection: 'regular_low' as const,
+      version: event.version,
+      receivedAt: Date.now(),
+    };
+    request.appStateResponse =
+      event.status === 'version-matched'
+        ? {
+            ...common,
+            status: event.status,
+            serverVersion: event.serverVersion,
+          }
+        : {
+            ...common,
+            status: event.status,
+            ...(event.serverVersion !== undefined
+              ? { serverVersion: event.serverVersion }
+              : {}),
+          };
+    this.saveRequest(request);
+    this.event('app-state.response', {
+      key: request.key,
+      ...request.appStateResponse,
+    });
+  }
+
   observeChat(chat: ChatUpdate): void {
     if (!chat.id) {
       this.event('incomplete-chat-key', {});
@@ -785,7 +842,11 @@ export class Store {
     const states: (number | null)[] = [];
     for (const field of ['unread', 'archived'] as const) {
       if (filters[field] === undefined) continue;
-      clauses.push(`${field} IS ?`);
+      const column =
+        filters[field] === 'unknown' || filters.observedOnly
+          ? field
+          : `${field}_requested`;
+      clauses.push(`${column} IS ?`);
       states.push(filters[field] === 'unknown' ? null : Number(filters[field]));
     }
     return this.db
@@ -794,13 +855,32 @@ export class Store {
       SELECT c.jid,c.activity_timestamp,
         CASE WHEN json_type(p.json,'$.unread')='object' THEN NULL ELSE chat_unread(c.json) END AS unread,
         CASE WHEN json_type(p.json,'$.archived')='object' THEN NULL
-          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived
+          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived,
+        CASE WHEN json_type(p.json,'$.unread')='object' THEN
+          CASE WHEN json_type(p.json,'$.unread.value') IN ('true','false') THEN json_extract(p.json,'$.unread.value') ELSE NULL END
+          ELSE chat_unread(c.json) END AS unread_requested,
+        CASE WHEN json_type(p.json,'$.archived')='object' THEN
+          CASE WHEN json_type(p.json,'$.archived.value') IN ('true','false') THEN json_extract(p.json,'$.archived.value') ELSE NULL END
+          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived_requested
       FROM chats c LEFT JOIN values_store p ON p.category='pending-chat' AND p.id=c.jid
     ) ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
       ORDER BY activity_timestamp DESC,jid COLLATE BINARY ASC LIMIT ? OFFSET ?`,
       )
       .all(...states, limit, offset)
-      .map((row) => this.chatView(String(row.jid))!);
+      .map((row) => {
+        const chat = this.chatView(String(row.jid))!;
+        const matchedBy: Partial<
+          Record<'unread' | 'archived', 'pending-intent'>
+        > = {};
+        for (const field of ['unread', 'archived'] as const)
+          if (
+            !filters.observedOnly &&
+            typeof filters[field] === 'boolean' &&
+            chat.pending[field]?.value === filters[field]
+          )
+            matchedBy[field] = 'pending-intent';
+        return Object.keys(matchedBy).length ? { ...chat, matchedBy } : chat;
+      });
   }
 
   observeMessage(message: WAMessage, chatObserved = true): void {
