@@ -16,7 +16,9 @@ Noninitial remote read actions emit counter 0 or -1. The callback omits remote a
 
 ## Pending state
 
-An explicit 0, -1, or manual-unread true can establish state and clear pending. An isolated positive counter, null or missing field, or manual false cannot. Without pending, positive evidence means unread with an unknown total.
+Any valid counter (0, -1, or positive), or manual-unread true, can establish state and clear pending and the previous SDK report for that field. Positive evidence means unread with an unknown total, whether or not a read/unread intent was pending. Null or missing fields and manual false remain insufficient. The original request and its outcome are preserved; superseding pending does not confirm the requested phone effect.
+
+Incoming messages received online or from an offline backlog produce positive counters through the existing SDK chat-update path. The runtime does not add a separate unread transition when storing a message. Positive history counters and duplicate increments can also establish unread, including after a read observation. This is a local interpretation of SDK evidence, not proof of remote freshness. In either buffered order of read and incoming, a positive aggregate establishes unread; an explicit zero in a later callback establishes read.
 
 The selected message range comes from local history and may not include the latest remote message. A callback cannot be matched to that range. A contrary explicit state can clear pending; insufficient evidence leaves it pending across restarts. Neither arrival time nor clearing pending proves freshness, causation, or the requested phone effect.
 

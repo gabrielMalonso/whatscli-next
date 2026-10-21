@@ -716,12 +716,9 @@ export class Store {
       delete pending.archived;
       delete sdkReported.archived;
     }
-    // Positive counters can be increments/aggregates; alone they cannot settle pending state.
-    if (
-      chat.unreadCount === 0 ||
-      chat.unreadCount === -1 ||
-      chat.markedAsUnread === true
-    ) {
+    // A valid counter supersedes pending state, not the request's unknown phone effect.
+    // Positive counters establish unread even when they are increments, not totals.
+    if (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true) {
       delete pending.unread;
       delete sdkReported.unread;
     }

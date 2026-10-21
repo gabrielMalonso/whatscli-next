@@ -176,6 +176,52 @@ test('SDK return without an event and SDK failure do not manufacture a reported 
   }
 });
 
+test('positive unread events during a read/unread call stay SDK-only until an outside observation supersedes them', async () => {
+  for (const value of [true, false]) {
+    const f = fixture(async () => {
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: 1 }]);
+    });
+    try {
+      f.ev.buffer();
+      const result = object(
+        await f.runtime.execute({
+          command: 'mark-read',
+          jid,
+          value,
+          key: 'positive-during-call',
+        }),
+      );
+      f.ev.flush();
+      const before = await f.view();
+      assert.equal(before.unread, null);
+      assert.deepEqual(object(before.pending).unread, {
+        key: 'positive-during-call',
+        value: !value,
+      });
+      assert.equal(object(object(before.sdkReported).unread).value, true);
+      const request = result.request;
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: 1 }]);
+      const after = await f.view();
+      assert.equal(after.unread, true);
+      assert.equal(after.unreadCount, null);
+      assert.deepEqual(after.pending, {});
+      assert.equal('sdkReported' in after, false);
+      const replay = object(
+        await f.runtime.execute({
+          command: 'mark-read',
+          jid,
+          value,
+          key: 'positive-during-call',
+        }),
+      );
+      assert.deepEqual(replay.request, request);
+      assert.equal(f.calls(), 1);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
 test('preflight SDK events stay local; an outside observation supersedes the report without claiming request causality', async () => {
   const f = fixture(async (mod) => {
     f.ev.emit('chats.update', [
