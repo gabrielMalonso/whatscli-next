@@ -105,3 +105,9 @@ An observed state may differ from the requested state. Clearing `pending` does n
 The legacy chat callback provides neither request correlation nor remote action time. The pinned SDK has an install-time patch from the fork; see [dependency provenance](../../patches/README.md).
 
 See [read/unread implementation constraints](../internals/read-unread.md).
+
+## Reading received messages in another device
+
+Opening a conversation or choosing the WhatsApp read menu can produce message receipts without a manual chat-state patch. The CLI can remove that conversation from unread queues when receipts from the account's own device cover every tracked incoming unread message since an observed read baseline. `readObservation.source` is `own-device-receipts`; its `scope` is `tracked-incoming-messages`. Message timestamps stay unchanged; `readAt` is the receipt time in seconds.
+
+An old receipt cannot clear newer incoming messages or a manual unread marker. Unknown baselines, incomplete message ranges and pending read/unread intents remain uncertain until sufficient chat-state evidence arrives. The CLI does not turn a single message receipt into a global claim about unseen history or the effect of a previous command.

@@ -108,6 +108,10 @@ type PendingChatState = {
   unread?: { key: string; value: boolean };
 };
 
+type ReceiptUnreadRange = {
+  messages: { id: string; timestamp: number; readAt?: number }[];
+};
+
 type SdkChatState = Partial<
   Record<
     'archived' | 'unread',
@@ -629,11 +633,13 @@ export class Store {
     const chat = decode<Chat>(String(row.json));
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
     const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
+    const readObservation = this.get('chat-read-observation', jid);
     return {
       ...chatOutput(chat),
       ...(pending.archived ? { archived: null } : {}),
       ...(pending.unread ? { unread: null, unreadCount: null } : {}),
       pending,
+      ...(readObservation ? { readObservation } : {}),
       ...(Object.keys(sdkReported).length ? { sdkReported } : {}),
       observedAt: row.observed_at,
       activity: {
@@ -649,7 +655,11 @@ export class Store {
       this.get<PendingChatState>('pending-chat', operation.jid) ?? {};
     if (operation.kind === 'archive')
       pending.archived = { key, value: operation.value };
-    else pending.unread = { key, value: !operation.value };
+    else {
+      pending.unread = { key, value: !operation.value };
+      this.set('receipt-unread-range', operation.jid, null);
+      this.set('chat-read-observation', operation.jid, null);
+    }
     this.set('pending-chat', operation.jid, pending);
     const sdkReported =
       this.get<SdkChatState>('sdk-chat-state', operation.jid) ?? {};
@@ -733,7 +743,10 @@ export class Store {
     });
   }
 
-  observeChat(chat: ChatUpdate): void {
+  observeChat(
+    chat: ChatUpdate,
+    source: 'snapshot' | 'update' = 'snapshot',
+  ): void {
     if (!chat.id) {
       this.event('incomplete-chat-key', {});
       return;
@@ -741,6 +754,13 @@ export class Store {
     const previous = this.chat(chat.id);
     const merged = { ...previous, ...chat };
     const pending = this.get<PendingChatState>('pending-chat', chat.id) ?? {};
+    if (
+      isUnreadCount(chat.unreadCount) ||
+      typeof chat.markedAsUnread === 'boolean'
+    ) {
+      this.set('chat-read-observation', chat.id, null);
+      this.trackUnreadRange(chat, previous, pending, source);
+    }
     // Null/absent fields are neutral SDK updates, not observations of false.
     merged.archived =
       typeof chat.archived === 'boolean'
@@ -798,6 +818,105 @@ export class Store {
       )
       .run(chat.id, encode(merged), Date.now());
     this.observeChatActivity(chat);
+  }
+
+  private trackUnreadRange(
+    chat: ChatUpdate,
+    previous: Chat | undefined,
+    pending: PendingChatState,
+    source: 'snapshot' | 'update',
+  ): void {
+    const jid = chat.id;
+    if (!jid) return;
+    const messages = (chat.messages ?? []).flatMap(({ message }) => {
+      const timestamp = activityTimestamp(message?.messageTimestamp);
+      const key = message?.key;
+      if (
+        !message ||
+        !key ||
+        key.remoteJid !== jid ||
+        key.fromMe !== false ||
+        key.participant ||
+        !key.id ||
+        message.messageStubType ||
+        timestamp === null
+      )
+        return [];
+      return [{ id: key.id, timestamp }];
+    });
+    // SDK positive counters are increments. Only a matching batch of exact
+    // incoming keys can close the range since a previously observed zero.
+    if (
+      source !== 'update' ||
+      !(isPn(jid) || isLid(jid)) ||
+      !isUnreadCount(chat.unreadCount) ||
+      chat.unreadCount <= 0 ||
+      chat.markedAsUnread === true ||
+      messages.length !== chat.unreadCount ||
+      new Set(messages.map(({ id }) => id)).size !== messages.length
+    ) {
+      this.set('receipt-unread-range', jid, null);
+      return;
+    }
+    const range = previous
+      ? this.get<ReceiptUnreadRange>('receipt-unread-range', jid)
+      : undefined;
+    if (
+      pending.unread?.value === true ||
+      previous?.markedAsUnread === true ||
+      (!range && previous?.unreadCount !== 0)
+    ) {
+      this.set('receipt-unread-range', jid, null);
+      return;
+    }
+    const combined = new Map(
+      range?.messages.map((message) => [message.id, message]),
+    );
+    for (const message of messages) combined.set(message.id, message);
+    this.set('receipt-unread-range', jid, {
+      messages: [...combined.values()],
+    } satisfies ReceiptUnreadRange);
+  }
+
+  observeOwnReadReceipt(key: WAMessageKey, readAt: number): void {
+    if (
+      key.fromMe !== false ||
+      !key.id ||
+      !key.remoteJid ||
+      key.participant ||
+      !(isPn(key.remoteJid) || isLid(key.remoteJid)) ||
+      !Number.isSafeInteger(readAt) ||
+      readAt <= 0 ||
+      this.get<PendingChatState>('pending-chat', key.remoteJid)?.unread
+    )
+      return;
+    const range = this.get<ReceiptUnreadRange>(
+      'receipt-unread-range',
+      key.remoteJid,
+    );
+    const member = range?.messages.find(({ id }) => id === key.id);
+    const message = this.message(key);
+    if (
+      !range ||
+      !member ||
+      member.readAt !== undefined ||
+      !message ||
+      activityTimestamp(message.messageTimestamp) !== member.timestamp ||
+      readAt < member.timestamp
+    )
+      return;
+    member.readAt = readAt;
+    this.set('receipt-unread-range', key.remoteJid, range);
+    if (range.messages.some(({ readAt }) => readAt === undefined)) return;
+    this.observeChat({ id: key.remoteJid, unreadCount: 0 });
+    const observation = {
+      source: 'own-device-receipts',
+      scope: 'tracked-incoming-messages',
+      messages: range.messages.map(({ id, timestamp }) => ({ id, timestamp })),
+      readAt: Math.max(...range.messages.map(({ readAt }) => readAt ?? 0)),
+    };
+    this.set('chat-read-observation', key.remoteJid, observation);
+    this.event('chat-read-receipts', { jid: key.remoteJid, ...observation });
   }
 
   private observeActivity(

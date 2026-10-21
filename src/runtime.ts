@@ -4,13 +4,19 @@ import makeWASocket, {
   areJidsSameUser,
   assertMediaContent,
   downloadMediaMessage,
+  jidNormalizedUser,
   normalizeMessageContent,
   toNumber,
   USyncQuery,
   USyncUser,
 } from 'baileys';
 import { basename } from 'node:path';
-import type { AuthenticationCreds, BaileysEventMap, WASocket } from 'baileys';
+import type {
+  AuthenticationCreds,
+  BaileysEventMap,
+  WAMessageKey,
+  WASocket,
+} from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
@@ -523,7 +529,7 @@ export function createRuntime(
     current.ev.on('chats.update', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat);
+          for (const chat of chats) store.observeChat(chat, 'update');
           store.event('chats.update', chats);
         }),
       ),
@@ -547,7 +553,11 @@ export function createRuntime(
     current.ev.on('messages.upsert', (event) =>
       persist(() =>
         store.transaction(() => {
-          for (const message of event.messages) store.observeMessage(message);
+          for (const message of event.messages) {
+            store.observeMessage(message);
+            for (const receipt of message.userReceipt ?? [])
+              observeOwnRead(message.key, receipt);
+          }
           store.event('messages.upsert', {
             type: event.type,
             keys: event.messages.map((message) => message.key),
@@ -601,11 +611,30 @@ export function createRuntime(
       ),
     );
     current.ev.on('message-receipt.update', (receipts) =>
-      persist(() => {
-        store.event('participant-receipts', receipts);
-        for (const receipt of receipts) observeMessageKey(receipt.key);
-      }),
+      persist(() =>
+        store.transaction(() => {
+          store.event('participant-receipts', receipts);
+          for (const { key, receipt } of receipts) {
+            observeOwnRead(key, receipt);
+            observeMessageKey(key);
+          }
+        }),
+      ),
     );
+    function observeOwnRead(
+      key: WAMessageKey,
+      receipt: BaileysEventMap['message-receipt.update'][number]['receipt'],
+    ): void {
+      if (!receipt.userJid || receipt.readTimestamp == null) return;
+      const user = jidNormalizedUser(receipt.userJid);
+      if (
+        ![auth.state.creds.me?.id, auth.state.creds.me?.lid].some(
+          (self) => self && jidNormalizedUser(self) === user,
+        )
+      )
+        return;
+      store.observeOwnReadReceipt(key, toNumber(receipt.readTimestamp));
+    }
     current.ev.on('messages.delete', (event) =>
       persist(() => store.deleteMessages(event)),
     );
