@@ -19,6 +19,35 @@ After a mutation, the affected public field becomes `null` with a `pending` inte
 
 Unrelated, missing, and neutral/null fields do not confirm the mutation or make an old counter current.
 
+## Local SDK state
+
+When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's `localChat` expose a separate `sdkReported` projection. For example:
+
+```json
+{
+  "archived": null,
+  "pending": {
+    "archived": { "key": "example-archive-001", "value": true }
+  },
+  "sdkReported": {
+    "archived": {
+      "value": true,
+      "source": "sdk-event-during-request",
+      "requestKey": "example-archive-001",
+      "reportedAt": 1700000000000
+    }
+  }
+}
+```
+
+This provides the SDK's local state without treating it as independent confirmation. `requestKey` identifies the local call during which the event was emitted; the SDK does not attach request correlation. `reportedAt` is the local capture time, not the remote action time. A preflight resync can also emit state during the call.
+
+`request.attempt: "sdk-returned"` means the call returned. The response's note explains that SDK evidence, independent observation, and phone confirmation remain separate. `sdkReported` only appears after an actual SDK event; a return without an event or an error cannot manufacture a value.
+
+The ordinary `archived`/`unread` fields and their filters retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
+
+Full and compact output both preserve `sdkReported`. Pending indicates missing sufficient observation, not a failed action or a promise that confirmation will arrive. Waiting, querying the original key, or resynchronizing cannot guarantee an observation. Phone or browser confirmation remains separate evidence.
+
 ## Interpreting unread observations
 
 Without a pending read/unread mutation, a positive SDK unread update establishes `unread: true`.
