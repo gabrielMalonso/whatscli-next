@@ -345,11 +345,22 @@ export function createRuntime(
     // A preflight resync can also emit in this scope: it is SDK evidence, not
     // independent confirmation or proof that this request caused the state.
     const emit = current.ev.emit.bind(current.ev);
+    const emitIndependent: typeof current.ev.emit = (event, value) => {
+      if (event === 'chats.update') {
+        const chats = value as BaileysEventMap['chats.update'];
+        persist(() =>
+          store.transaction(() => {
+            for (const chat of chats) store.captureChatUpdate(chat);
+          }),
+        );
+      }
+      return emit(event, value);
+    };
     current.ev.emit = (event, value) => {
       const invocation = sdkInvocation.getStore();
       // Recovery timers can inherit an old invocation when creating the next socket.
       if (!invocation || invocation.socketToken !== token)
-        return emit(event, value);
+        return emitIndependent(event, value);
       if (event === 'chats.update') {
         const chats = value as BaileysEventMap['chats.update'];
         const independent: BaileysEventMap['chats.update'] = [];
@@ -378,7 +389,9 @@ export function createRuntime(
               independent.push(remaining);
           }
         }
-        return independent.length ? emit('chats.update', independent) : true;
+        return independent.length
+          ? emitIndependent('chats.update', independent)
+          : true;
       }
       // Enabling own events also enables synthetic outgoing message upserts.
       // Keep those from inventing observed history or chat activity.
@@ -396,7 +409,7 @@ export function createRuntime(
           ? emit('messages.upsert', { ...upsert, messages })
           : true;
       }
-      return emit(event, value);
+      return emitIndependent(event, value);
     };
     current.ev.on('creds.update', (update) =>
       persist(() => {
@@ -529,7 +542,7 @@ export function createRuntime(
     current.ev.on('chats.update', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat, 'update');
+          for (const chat of chats) store.observeChat(chat, 'buffered-update');
           store.event('chats.update', chats);
         }),
       ),
@@ -557,7 +570,7 @@ export function createRuntime(
       persist(() =>
         store.transaction(() => {
           for (const message of event.messages) {
-            store.observeMessage(message);
+            store.observeMessage(message, true, event.type);
             for (const receipt of message.userReceipt ?? [])
               observeOwnRead(message.key, receipt);
           }

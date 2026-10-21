@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { initAuthCreds, makeEventBuffer, proto } from 'baileys';
-import type { WAMessage, WAMessageKey, WASocket } from 'baileys';
+import type {
+  ChatAppStateAction,
+  WAMessage,
+  WAMessageKey,
+  WASocket,
+} from 'baileys';
 import { pino } from 'pino';
 import { createRuntime } from '../src/runtime.js';
 import { object } from '../src/protocol.js';
@@ -16,6 +21,28 @@ const me = '12025550199@s.whatsapp.net';
 const lid = '900000000000099@lid';
 const base = 1700000000;
 
+function manualAction(
+  timestamp = (base + 5) * 1000,
+  version = 1,
+): ChatAppStateAction {
+  return {
+    kind: 'chat-action',
+    source: 'sync',
+    collection: 'regular_low',
+    version,
+    representation: 'patch',
+    initialSync: false,
+    macVerified: false,
+    jid,
+    action: { kind: 'mark-read', read: false },
+    timestamp,
+    messageRange: {
+      lastMessageTimestamp: base,
+      messages: [{ id: 'previous', fromMe: false, timestamp: base }],
+    },
+  };
+}
+
 function fixture(initial: number | null = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'own-read-'));
   const seed = new Store(directory);
@@ -24,6 +51,11 @@ function fixture(initial: number | null = 0) {
     me: { id: me, lid, name: 'Fictional owner' },
   });
   seed.observeChat({ id: jid, unreadCount: initial, archived: true });
+  seed.observeMessage({
+    key: { remoteJid: jid, id: 'previous', fromMe: false },
+    messageTimestamp: base,
+    message: { conversation: 'Fictional earlier read message' },
+  });
   seed.close();
   const ev = makeEventBuffer(pino({ level: 'silent' }));
   const runtime = createRuntime(
@@ -431,6 +463,467 @@ test('foreign, unknown, outgoing or invalid-time receipts cannot create a manual
     f.receipt(msg.key, base);
     assert.equal((await f.chat()).readReconciliation, undefined);
     assert.equal((await f.chat()).unread, true);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const order of [
+  'separate',
+  'marker-buffered',
+  'read-buffered',
+  'all-buffered',
+  'receipt-first',
+] as const) {
+  test(`a marker over observed zero is replaced by a complete later incoming range (${order})`, async () => {
+    const f = fixture();
+    try {
+      if (order === 'marker-buffered' || order === 'all-buffered')
+        f.ev.buffer();
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      f.ev.emit('chats.update', [{ id: jid, archived: true }]);
+      if (order === 'read-buffered' || order === 'receipt-first') f.ev.buffer();
+      const msg = f.message();
+      if (order === 'receipt-first') f.receipt(msg.key);
+      f.incoming(msg);
+      if (order === 'read-buffered' || order === 'all-buffered')
+        f.receipt(msg.key);
+      f.ev.flush();
+      if (order === 'separate' || order === 'marker-buffered') {
+        assert.equal((await f.chat()).unread, true);
+        f.receipt(msg.key);
+      }
+      const chat = await f.chat();
+      assert.equal(chat.unread, false);
+      assert.equal(chat.unreadCount, 0);
+      assert.equal(chat.archived, true);
+      assert.equal(chat.readReconciliation, undefined);
+      assert.equal(object(chat.readObservation).source, 'own-device-receipts');
+      assert.deepEqual(await f.queue(), []);
+      assert.deepEqual(await f.queue(true), []);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('qualified manual-marker replacement still requires every newer incoming key and rejects old receipts', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.ev.buffer();
+    const first = f.incoming(f.message('first', base + 10));
+    const second = f.incoming(f.message('second', base + 20));
+    f.receipt(first.key);
+    f.ev.flush();
+    f.receipt(first.key);
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(second.key);
+    assert.equal((await f.chat()).unread, false);
+    const third = f.incoming(f.message('third', base + 30));
+    f.receipt(first.key);
+    f.receipt(second.key);
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(third.key);
+    assert.equal((await f.chat()).unread, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a newly decoded manual action retires coverage before its buffered legacy counter arrives', async () => {
+  const f = fixture();
+  try {
+    const first = f.incoming();
+    f.ev.emit('app-state.update', manualAction((base + 20) * 1000));
+    f.receipt(first.key, base + 15);
+    assert.equal((await f.chat()).unread, true);
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.receipt(first.key);
+    assert.equal((await f.chat()).unread, true);
+    f.incoming(first);
+    f.receipt(first.key);
+    assert.equal((await f.chat()).unread, true);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const initial of [null, 2, -1]) {
+  test(`a manual action over an unknown or nonzero baseline cannot qualify replacement (${initial})`, async () => {
+    const f = fixture(initial);
+    try {
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      const msg = f.incoming();
+      f.receipt(msg.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const invalid of [
+  'same-second',
+  'clock-ahead',
+  'snapshot',
+  'replay',
+  'incomplete',
+  'new-intent',
+] as const) {
+  test(`manual replacement rejects ${invalid} evidence`, async () => {
+    const f = fixture();
+    try {
+      if (invalid === 'replay' || invalid === 'new-intent')
+        f.ev.emit('messages.upsert', {
+          messages: [f.message('previous', base)],
+          type: 'append',
+        });
+      f.ev.emit(
+        'app-state.update',
+        manualAction(
+          invalid === 'same-second'
+            ? (base + 10) * 1000
+            : invalid === 'clock-ahead'
+              ? (base + 20) * 1000
+              : undefined,
+        ),
+      );
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      if (invalid === 'snapshot')
+        f.ev.emit('chats.upsert', [{ id: jid, unreadCount: -1 }]);
+      if (invalid === 'new-intent')
+        await f.runtime.execute({
+          command: 'mark-read',
+          jid,
+          value: true,
+          key: 'intervening-read',
+        });
+      const msg = f.incoming(
+        invalid === 'replay' ? f.message('previous') : undefined,
+        invalid === 'incomplete' ? 2 : 1,
+      );
+      f.receipt(msg.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('qualified manual replacement and partial coverage persist across restart', async () => {
+  const f = fixture();
+  f.ev.emit('app-state.update', manualAction());
+  f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+  const first = f.incoming(f.message('first', base + 10));
+  const second = f.incoming(f.message('second', base + 20));
+  f.receipt(first.key);
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    assert.equal(store.chatView(jid)?.unread, true);
+    store.observeOwnReadReceipt(second.key, base + 100);
+    assert.equal(store.chatView(jid)?.unread, false);
+  } finally {
+    store.close();
+  }
+});
+
+for (const invalid of [
+  'missing-time',
+  'local-echo',
+  'initial-sync',
+  'snapshot',
+  'old-frontier',
+] as const) {
+  test(`a manual marker with ${invalid} metadata cannot qualify a read baseline`, async () => {
+    const f = fixture();
+    try {
+      const action = manualAction();
+      if (invalid === 'missing-time') delete action.timestamp;
+      if (invalid === 'local-echo') action.source = 'local-echo';
+      if (action.source === 'sync') {
+        if (invalid === 'initial-sync') action.initialSync = true;
+        if (invalid === 'snapshot') action.representation = 'snapshot';
+      }
+      if (invalid === 'old-frontier')
+        f.ev.emit('messages.upsert', {
+          messages: [f.message('uncovered', base + 1)],
+          type: 'append',
+        });
+      f.ev.emit('app-state.update', action);
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      const msg = f.incoming();
+      f.receipt(msg.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('an ambiguous first arrival or later replay cannot regain manual-marker qualification', async () => {
+  for (const ambiguous of ['same-second', 'incomplete', 'replay'] as const) {
+    const f = fixture();
+    try {
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      const first = f.incoming(
+        f.message('first', ambiguous === 'same-second' ? base + 5 : base + 10),
+        ambiguous === 'incomplete' ? 2 : 1,
+      );
+      if (ambiguous === 'replay') f.incoming(first);
+      f.receipt(first.key);
+      if (ambiguous !== 'replay') assert.equal((await f.chat()).unread, true);
+      const next = f.incoming(f.message('later', base + 30));
+      f.receipt(next.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+for (const value of [false, true]) {
+  test(`a new read=${value} intent retires qualified manual coverage`, async () => {
+    const f = fixture();
+    try {
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      const first = f.incoming();
+      await f.runtime.execute({
+        command: 'mark-read',
+        jid,
+        value,
+        key: 'replace-qualified-range',
+      });
+      f.receipt(first.key);
+      assert.equal((await f.chat()).unread, null);
+      const next = f.incoming(f.message('after-intent', base + 20));
+      f.receipt(next.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('a manual action cannot qualify against a stale stored zero while an incoming increment is buffered', async () => {
+  const f = fixture();
+  try {
+    f.ev.buffer();
+    const first = f.incoming(f.message('before-marker', base + 1), 2);
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const next = f.incoming(f.message('after-marker', base + 10));
+    f.ev.flush();
+    f.receipt(first.key);
+    f.receipt(next.key);
+    assert.equal((await f.chat()).unread, true);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('older, duplicate and local-echo actions are neutral to newer qualified coverage', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('app-state.update', manualAction(undefined, 2));
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.ev.emit('app-state.update', manualAction((base + 1) * 1000, 1));
+    f.ev.emit('app-state.update', manualAction(undefined, 2));
+    f.ev.emit('app-state.update', {
+      ...manualAction(undefined, 3),
+      source: 'local-echo',
+    });
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, false);
+    assert.ok(object((await f.chat()).readObservation).replacedManualMarker);
+  } finally {
+    await f.close();
+  }
+});
+
+test('append history cannot qualify a manual-marker range even when buffered with a matching increment', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.ev.buffer();
+    const msg = f.message();
+    f.ev.emit('messages.upsert', { messages: [msg], type: 'append' });
+    f.ev.emit('chats.update', [
+      { id: jid, unreadCount: 1, messages: [{ message: msg }] },
+    ]);
+    f.receipt(msg.key);
+    f.ev.flush();
+    assert.equal((await f.chat()).unread, true);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('crashing before an incomplete increment flush cannot restore a stale zero baseline', async () => {
+  const f = fixture();
+  await f.close();
+  const first = new Store(f.directory);
+  first.captureChatUpdate({
+    id: jid,
+    unreadCount: 2,
+    messages: [{ message: f.message('uncovered', base + 1) }],
+  });
+  assert.equal(first.chatView(jid)?.unread, false);
+  first.close();
+  const reopened = new Store(f.directory);
+  try {
+    reopened.recordAppStateChatAction(manualAction());
+    reopened.captureChatUpdate({ id: jid, unreadCount: -1 });
+    reopened.observeChat({ id: jid, unreadCount: -1 }, 'buffered-update');
+    const next = f.message('new', base + 20);
+    const update = { id: jid, unreadCount: 1, messages: [{ message: next }] };
+    reopened.captureChatUpdate(update);
+    reopened.observeChat(update, 'buffered-update');
+    reopened.observeMessage(next, true, 'notify');
+    reopened.observeOwnReadReceipt(next.key, base + 100);
+    assert.equal(reopened.chatView(jid)?.unread, true);
+    assert.equal(reopened.chatView(jid)?.readObservation, undefined);
+  } finally {
+    reopened.close();
+  }
+});
+
+test('pending archive remains independent of marker qualification from observed read', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('messages.upsert', {
+      messages: [f.message('previous', base)],
+      type: 'notify',
+    });
+    await f.runtime.execute({
+      command: 'archive',
+      jid,
+      value: false,
+      key: 'archive-pending',
+    });
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    const chat = await f.chat();
+    assert.equal(chat.unread, false);
+    assert.equal(chat.archived, null);
+    assert.equal(object(object(chat.pending).archived).key, 'archive-pending');
+  } finally {
+    await f.close();
+  }
+});
+
+test('a late echo from an older read intent cannot retire the newer incoming range', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('messages.upsert', {
+      messages: [f.message('previous', base)],
+      type: 'notify',
+    });
+    await f.runtime.execute({
+      command: 'mark-read',
+      jid,
+      value: true,
+      key: 'older-read',
+    });
+    const msg = f.incoming();
+    f.ev.emit('app-state.update', {
+      ...manualAction(),
+      source: 'local-echo',
+      requestId: 'older-read',
+      action: { kind: 'mark-read', read: true },
+    });
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('an ambiguous same-second marker with absorbed READ cannot turn missing delta into total zero', async () => {
+  const f = fixture();
+  try {
+    f.ev.buffer();
+    f.ev.emit('app-state.update', manualAction((base + 10) * 1000));
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    f.ev.flush();
+    assert.notEqual((await f.chat()).unread, false);
+    assert.equal((await f.chat()).readObservation, undefined);
+    assert.ok((await f.chat()).readReconciliation);
+  } finally {
+    await f.close();
+  }
+});
+
+test('an anchored marker need not list every previously read ID sharing its timestamp', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('messages.upsert', {
+      messages: [f.message('other-already-read', base)],
+      type: 'notify',
+    });
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a marker referencing unseen content cannot qualify a locally stale zero', async () => {
+  const f = fixture();
+  try {
+    const action = manualAction();
+    action.messageRange = {
+      lastMessageTimestamp: base + 1,
+      messages: [
+        { id: 'not-observed-locally', fromMe: false, timestamp: base + 1 },
+      ],
+    };
+    f.ev.emit('app-state.update', action);
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, true);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a discarded conditional SDK update cannot retire newer qualified coverage', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    const msg = f.incoming();
+    f.ev.buffer();
+    f.ev.emit('chats.update', [
+      { id: jid, unreadCount: -1, conditional: () => false },
+    ]);
+    f.ev.flush();
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, false);
   } finally {
     await f.close();
   }
