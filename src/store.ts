@@ -912,7 +912,14 @@ export class Store {
       (!rebase && chatOutput(chat).unread !== false) ||
       pending?.unread ||
       (!rebase && this.get<boolean>('captured-unread', event.jid)) ||
-      this.get<BufferedMessageKey[]>('unpaired-upserts', event.jid)?.length ||
+      this.get<BufferedMessageKey[]>('unpaired-upserts', event.jid)?.some(
+        (entry) =>
+          !rebase ||
+          !range?.messages.some(
+            (member) =>
+              member.id === entry.id && member.timestamp === entry.timestamp,
+          ),
+      ) ||
       marker ||
       (!rebase && range?.messages.length) ||
       timestamp === undefined ||
@@ -1160,18 +1167,20 @@ export class Store {
       new Set(messages.map(({ id }) => id)).size !== messages.length
     ) {
       if (chat.unreadCount === 0) {
-        const pending = [
-          ...(this.get<BufferedMessageKey[]>('unpaired-upserts', jid) ?? []),
-          ...(range?.messages
-            .filter(
-              (member) =>
-                activityTimestamp(
-                  this.message({ remoteJid: jid, id: member.id, fromMe: false })
-                    ?.messageTimestamp,
-                ) !== member.timestamp,
+        const pending =
+          this.get<BufferedMessageKey[]>('unpaired-upserts', jid) ?? [];
+        for (const { id, timestamp } of range?.messages ?? []) {
+          if (
+            activityTimestamp(
+              this.message({ remoteJid: jid, id, fromMe: false })
+                ?.messageTimestamp,
+            ) !== timestamp &&
+            !pending.some(
+              (entry) => entry.id === id && entry.timestamp === timestamp,
             )
-            .map(({ id, timestamp }) => ({ id, timestamp })) ?? []),
-        ];
+          )
+            pending.push({ id, timestamp });
+        }
         if (pending?.length) {
           const covered =
             this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
@@ -1204,17 +1213,22 @@ export class Store {
       );
       return;
     }
-    const unpaired = this.get<BufferedMessageKey[]>('unpaired-upserts', jid);
-    if (unpaired) {
-      const remaining = unpaired.filter(
-        (entry) =>
-          !messages.some(
-            (member) =>
-              member.id === entry.id && member.timestamp === entry.timestamp,
-          ),
-      );
-      this.set('unpaired-upserts', jid, remaining.length ? remaining : null);
+    // Pairing proves a delta's membership, not that its upsert was delivered.
+    // Keep keys until projection even when the old baseline cannot form a range.
+    const unprojected =
+      this.get<BufferedMessageKey[]>('unpaired-upserts', jid) ?? [];
+    for (const { id, timestamp } of messages) {
+      if (
+        activityTimestamp(
+          this.message({ remoteJid: jid, id, fromMe: false })?.messageTimestamp,
+        ) !== timestamp &&
+        !unprojected.some(
+          (entry) => entry.id === id && entry.timestamp === timestamp,
+        )
+      )
+        unprojected.push({ id, timestamp });
     }
+    this.set('unpaired-upserts', jid, unprojected.length ? unprojected : null);
     if (
       pending.unread?.value === true ||
       (!range &&

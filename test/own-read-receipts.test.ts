@@ -786,6 +786,93 @@ test('a raw read zero supplies the baseline for a later buffered incoming messag
   }
 });
 
+for (const initial of [0, 2, null, -1]) {
+  for (const snapshot of [false, true]) {
+    test(`zero covers earlier paired keys independently of the old baseline (initial=${initial}, snapshot=${snapshot})`, async () => {
+      const f = fixture(initial);
+      try {
+        f.ev.buffer();
+        const old = f.message('paired-before-zero', base + 10);
+        f.ev.emit('messages.upsert', { messages: [old], type: 'notify' });
+        await f.process(old);
+        if (snapshot)
+          f.ev.emit('messaging-history.set', {
+            chats: [{ id: jid, unreadCount: 0 }],
+            contacts: [],
+            messages: [f.message('previous', base)],
+            isLatest: false,
+          });
+        else {
+          const patch = chatModificationToAppPatch(
+            {
+              markRead: true,
+              lastMessages: [
+                {
+                  key: {
+                    remoteJid: jid,
+                    id: 'paired-before-zero',
+                    fromMe: false,
+                  },
+                  messageTimestamp: base + 10,
+                },
+              ],
+            },
+            jid,
+          );
+          processSyncAction(
+            { index: patch.index, syncAction: { value: patch.syncAction } },
+            f.ev,
+            { id: me },
+            undefined,
+            pino({ level: 'silent' }),
+          );
+        }
+        const fresh = f.message('paired-after-zero', base + 20);
+        f.ev.emit('messages.upsert', { messages: [fresh], type: 'notify' });
+        await f.process(fresh);
+        f.ev.flush();
+        f.receipt(old.key, base + 15);
+        assert.notEqual((await f.chat()).unread, false);
+        f.receipt(fresh.key);
+        assert.equal((await f.chat()).unread, false);
+        assert.deepEqual(object((await f.chat()).readObservation).messages, [
+          { id: fresh.key.id, timestamp: base + 20 },
+        ]);
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+test('paired keys from an unknown backlog survive restart before their covering zero', async () => {
+  const f = fixture(2);
+  const old = f.message('paired-before-restart', base + 10);
+  f.ev.buffer();
+  f.ev.emit('messages.upsert', { messages: [old], type: 'notify' });
+  await f.process(old);
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    store.observeChat({ id: jid, unreadCount: 0 });
+    const fresh = f.message('paired-after-restart-zero', base + 20);
+    const update = { id: jid, unreadCount: 1, messages: [{ message: fresh }] };
+    store.captureChatUpdate(update);
+    store.observeChat(update, 'buffered-update');
+    store.observeMessage(old, true, 'notify');
+    store.observeMessage(fresh, true, 'notify');
+    store.observeOwnReadReceipt(old.key, base + 15);
+    assert.notEqual(store.chatView(jid)?.unread, false);
+    store.observeOwnReadReceipt(fresh.key, base + 100);
+    assert.equal(store.chatView(jid)?.unread, false);
+    assert.deepEqual(object(store.chatView(jid)?.readObservation).messages, [
+      { id: fresh.key.id, timestamp: base + 20 },
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
 for (const incomingFirst of [false, true]) {
   test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {
     const f = fixture();
