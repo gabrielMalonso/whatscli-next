@@ -123,6 +123,8 @@ type ReceiptUnreadRange = {
   }[];
 };
 
+type UnpairedUpsert = { id: string; timestamp: number | null };
+
 type ManualUnreadMarker = { awaitingCounter: boolean } & (
   | { qualified: false }
   | {
@@ -662,6 +664,7 @@ export class Store {
       'chat-read-observation',
       'read-reconciliation',
       'captured-unread',
+      'unpaired-upserts',
     ])
       this.set(category, jid, null);
   }
@@ -908,6 +911,7 @@ export class Store {
       (!rebase && chatOutput(chat).unread !== false) ||
       pending?.unread ||
       (!rebase && this.get<boolean>('captured-unread', event.jid)) ||
+      this.get<UnpairedUpsert[]>('unpaired-upserts', event.jid)?.length ||
       marker ||
       (!rebase && range?.messages.length) ||
       timestamp === undefined ||
@@ -1144,6 +1148,7 @@ export class Store {
       messages.length !== chat.unreadCount ||
       new Set(messages.map(({ id }) => id)).size !== messages.length
     ) {
+      if (chat.unreadCount === 0) this.set('unpaired-upserts', jid, null);
       this.set('receipt-unread-range', jid, null);
       this.set(
         'manual-unread-marker',
@@ -1158,6 +1163,17 @@ export class Store {
             : null,
       );
       return;
+    }
+    const unpaired = this.get<UnpairedUpsert[]>('unpaired-upserts', jid);
+    if (unpaired) {
+      const remaining = unpaired.filter(
+        (entry) =>
+          !messages.some(
+            (member) =>
+              member.id === entry.id && member.timestamp === entry.timestamp,
+          ),
+      );
+      this.set('unpaired-upserts', jid, remaining.length ? remaining : null);
     }
     if (
       pending.unread?.value === true ||
@@ -1309,6 +1325,8 @@ export class Store {
       return;
     }
     if (range.messages.some(({ readAt }) => readAt === undefined)) return;
+    if (this.get<UnpairedUpsert[]>('unpaired-upserts', key.remoteJid)?.length)
+      return;
     if (range.manualMarker && range.messages.some(({ notified }) => !notified))
       return;
     this.observeChat({ id: key.remoteJid, unreadCount: 0 });
@@ -1408,12 +1426,54 @@ export class Store {
       });
   }
 
+  captureMessageRange(
+    message: WAMessage,
+    phase: 'buffered' | 'observed' = 'buffered',
+  ): void {
+    const { remoteJid: jid, id, fromMe, participant } = message.key;
+    if (!jid || fromMe !== false || participant) return;
+    const pending = this.get<UnpairedUpsert[]>('unpaired-upserts', jid) ?? [];
+    if (phase === 'observed' && pending.some((entry) => entry.id === id)) {
+      const remaining = pending.filter((entry) => entry.id !== id);
+      this.set('unpaired-upserts', jid, remaining.length ? remaining : null);
+    }
+    const range = this.get<ReceiptUnreadRange>('receipt-unread-range', jid);
+    if (
+      range?.messages.some(
+        (member) =>
+          member.id === id &&
+          member.timestamp === activityTimestamp(message.messageTimestamp),
+      )
+    )
+      return;
+    const marker = this.get<ManualUnreadMarker>('manual-unread-marker', jid);
+    if (!range && !marker) return;
+    if (phase === 'buffered' && id) {
+      this.set('unpaired-upserts', jid, [
+        ...pending.filter((entry) => entry.id !== id),
+        { id, timestamp: activityTimestamp(message.messageTimestamp) },
+      ] satisfies UnpairedUpsert[]);
+      return;
+    }
+    this.set('receipt-unread-range', jid, null);
+    this.set('read-reconciliation', jid, null);
+    this.set(
+      'manual-unread-marker',
+      jid,
+      marker || range?.manualMarker
+        ? { qualified: false, awaitingCounter: false }
+        : null,
+    );
+  }
+
   observeMessage(
     message: WAMessage,
     chatObserved = true,
     source?: BaileysEventMap['messages.upsert']['type'],
   ): void {
     this.transaction(() => {
+      if (chatObserved || source !== undefined)
+        this.captureMessageRange(message, 'observed');
       this.writeObservedMessage(message, chatObserved);
       if ((!chatObserved && source === undefined) || !message.key.remoteJid)
         return;
@@ -1422,27 +1482,6 @@ export class Store {
         message.key.remoteJid,
       );
       const member = range?.messages.find(({ id }) => id === message.key.id);
-      const marker = this.get<ManualUnreadMarker>(
-        'manual-unread-marker',
-        message.key.remoteJid,
-      );
-      if (
-        message.key.fromMe === false &&
-        !message.key.participant &&
-        !member &&
-        (range || marker)
-      ) {
-        this.set('receipt-unread-range', message.key.remoteJid, null);
-        this.set('read-reconciliation', message.key.remoteJid, null);
-        this.set(
-          'manual-unread-marker',
-          message.key.remoteJid,
-          marker || range?.manualMarker
-            ? { qualified: false, awaitingCounter: false }
-            : null,
-        );
-        return;
-      }
       if (!range || (!member && range.readFrontier === undefined)) return;
       if (
         member &&

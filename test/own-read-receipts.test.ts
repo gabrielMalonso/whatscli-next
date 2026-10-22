@@ -187,21 +187,100 @@ test('SDK placeholder recovery without an unread increment cannot be covered by 
   }
 });
 
-test('an absorbed own receipt cannot establish zero before uncovered content later in the same upsert batch', async () => {
+for (const type of ['notify', 'append'] as const) {
+  test(`an absorbed own receipt cannot establish zero before uncovered ${type} content in the buffered window`, async () => {
+    const f = fixture();
+    try {
+      f.ev.buffer();
+      const tracked = f.incoming();
+      f.receipt(tracked.key, base + 15);
+      f.ev.emit('messages.upsert', {
+        messages: [f.message('uncovered-in-batch', base + 20)],
+        type,
+      });
+      f.ev.flush();
+      assert.notEqual((await f.chat()).unread, false);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const manual of [false, true]) {
+  test(`SDK upsert-before-increment order preserves complete two-message coverage (manual=${manual})`, async () => {
+    const f = fixture();
+    try {
+      if (manual) {
+        f.ev.emit('app-state.update', manualAction());
+        f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      }
+      const first = f.message('upsert-first-A', base + 10);
+      const second = f.message('upsert-first-B', base + 20);
+      for (const message of [first, second]) {
+        f.ev.buffer();
+        f.ev.emit('messages.upsert', { messages: [message], type: 'notify' });
+        f.ev.emit('chats.update', [
+          { id: jid, unreadCount: 1, messages: [{ message }] },
+        ]);
+        f.ev.flush();
+      }
+      f.receipt(first.key);
+      assert.equal((await f.chat()).unread, true);
+      f.receipt(second.key);
+      assert.equal((await f.chat()).unread, false);
+      assert.deepEqual(object((await f.chat()).readObservation).messages, [
+        { id: first.key.id, timestamp: base + 10 },
+        { id: second.key.id, timestamp: base + 20 },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('a paired append after a type-switch flush keeps earlier receipt coverage until both IDs are read', async () => {
   const f = fixture();
   try {
     f.ev.buffer();
-    const tracked = f.incoming();
-    f.receipt(tracked.key, base + 15);
-    f.ev.emit('messages.upsert', {
-      messages: [f.message('uncovered-in-batch', base + 20)],
-      type: 'notify',
-    });
+    const first = f.incoming(f.message('type-switch-A', base + 10));
+    f.receipt(first.key, base + 15);
+    const second = f.message('type-switch-B', base + 20);
+    f.ev.emit('messages.upsert', { messages: [second], type: 'append' });
+    f.ev.emit('chats.update', [
+      { id: jid, unreadCount: 1, messages: [{ message: second }] },
+    ]);
     f.ev.flush();
-    assert.notEqual((await f.chat()).unread, false);
-    assert.equal((await f.chat()).readObservation, undefined);
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(second.key);
+    assert.equal((await f.chat()).unread, false);
+    assert.deepEqual(object((await f.chat()).readObservation).messages, [
+      { id: first.key.id, timestamp: base + 10 },
+      { id: second.key.id, timestamp: base + 20 },
+    ]);
   } finally {
     await f.close();
+  }
+});
+
+test('an unmatched buffered upsert blocks zero across restart until its coverage is resolved', async () => {
+  const f = fixture();
+  const first = f.incoming();
+  f.ev.buffer();
+  const unmatched = f.message('buffered-unmatched', base + 20);
+  f.ev.emit('messages.upsert', { messages: [unmatched], type: 'append' });
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    store.observeOwnReadReceipt(first.key, base + 15);
+    assert.equal(store.chatView(jid)?.unread, true);
+    assert.equal(store.chatView(jid)?.readObservation, undefined);
+    store.observeMessage(unmatched, true, 'append');
+    store.observeOwnReadReceipt(first.key, base + 15);
+    assert.equal(store.chatView(jid)?.unread, true);
+    assert.equal(store.chatView(jid)?.readObservation, undefined);
+  } finally {
+    store.close();
   }
 });
 

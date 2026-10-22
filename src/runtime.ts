@@ -354,6 +354,16 @@ export function createRuntime(
           }),
         );
       }
+      if (event === 'messages.upsert') {
+        const upsert = value as BaileysEventMap['messages.upsert'];
+        persist(() =>
+          store.transaction(() => {
+            // A type change can flush earlier receipts inside the SDK's emit().
+            for (const message of upsert.messages)
+              store.captureMessageRange(message);
+          }),
+        );
+      }
       return emit(event, value);
     };
     current.ev.emit = (event, value) => {
@@ -406,7 +416,7 @@ export function createRuntime(
             ),
         );
         return messages.length
-          ? emit('messages.upsert', { ...upsert, messages })
+          ? emitIndependent('messages.upsert', { ...upsert, messages })
           : true;
       }
       return emitIndependent(event, value);
