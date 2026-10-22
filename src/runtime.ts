@@ -560,8 +560,7 @@ export function createRuntime(
       persist(() =>
         store.transaction(() => {
           // Keep historical records, but signal that their current existence is no longer known.
-          for (const jid of jids)
-            store.db.prepare('DELETE FROM chats WHERE jid=?').run(jid);
+          for (const jid of jids) store.observeChatDeletion(jid);
           store.event('chats.delete', jids);
         }),
       ),
@@ -569,8 +568,10 @@ export function createRuntime(
     current.ev.on('messages.upsert', (event) =>
       persist(() =>
         store.transaction(() => {
-          for (const message of event.messages) {
+          for (const message of event.messages)
             store.observeMessage(message, true, event.type);
+          // A receipt absorbed into A cannot cover an untracked B later in this batch.
+          for (const message of event.messages) {
             for (const receipt of message.userReceipt ?? [])
               observeOwnRead(message.key, receipt);
           }

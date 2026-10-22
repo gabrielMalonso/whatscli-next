@@ -654,6 +654,18 @@ export class Store {
     return row ? decode<Chat>(String(row.json)) : undefined;
   }
 
+  observeChatDeletion(jid: string): void {
+    this.db.prepare('DELETE FROM chats WHERE jid=?').run(jid);
+    for (const category of [
+      'receipt-unread-range',
+      'manual-unread-marker',
+      'chat-read-observation',
+      'read-reconciliation',
+      'captured-unread',
+    ])
+      this.set(category, jid, null);
+  }
+
   chatView(jid: string) {
     const row = this.db
       .prepare(
@@ -842,8 +854,6 @@ export class Store {
     if (
       event.action.kind !== 'mark-read' ||
       event.source !== 'sync' ||
-      event.initialSync ||
-      event.representation !== 'patch' ||
       event.collection !== 'regular_low' ||
       !Number.isSafeInteger(event.version) ||
       event.version <= 0
@@ -892,6 +902,8 @@ export class Store {
     });
     if (
       event.action.read ||
+      event.initialSync ||
+      event.representation !== 'patch' ||
       !chat ||
       (!rebase && chatOutput(chat).unread !== false) ||
       pending?.unread ||
@@ -1410,6 +1422,27 @@ export class Store {
         message.key.remoteJid,
       );
       const member = range?.messages.find(({ id }) => id === message.key.id);
+      const marker = this.get<ManualUnreadMarker>(
+        'manual-unread-marker',
+        message.key.remoteJid,
+      );
+      if (
+        message.key.fromMe === false &&
+        !message.key.participant &&
+        !member &&
+        (range || marker)
+      ) {
+        this.set('receipt-unread-range', message.key.remoteJid, null);
+        this.set('read-reconciliation', message.key.remoteJid, null);
+        this.set(
+          'manual-unread-marker',
+          message.key.remoteJid,
+          marker || range?.manualMarker
+            ? { qualified: false, awaitingCounter: false }
+            : null,
+        );
+        return;
+      }
       if (!range || (!member && range.readFrontier === undefined)) return;
       if (
         member &&

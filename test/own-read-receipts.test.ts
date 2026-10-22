@@ -11,6 +11,7 @@ import type {
   WASocket,
 } from 'baileys';
 import { pino } from 'pino';
+import processMessage from 'baileys/lib/Utils/process-message.js';
 import { createRuntime } from '../src/runtime.js';
 import { object } from '../src/protocol.js';
 import { formatResponse } from '../src/response.js';
@@ -120,6 +121,136 @@ function fixture(initial: number | null = 0) {
     },
   };
 }
+
+for (const source of ['notify', 'append'] as const) {
+  test(`uncovered incoming ${source} content retires earlier receipt coverage`, async () => {
+    const f = fixture();
+    try {
+      const tracked = f.incoming();
+      f.ev.emit('messages.upsert', {
+        messages: [f.message('uncovered', base + 20)],
+        type: source,
+      });
+      f.receipt(tracked.key, base + 15);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+      const next = f.incoming(f.message('after-uncovered', base + 30));
+      f.receipt(next.key);
+      assert.equal((await f.chat()).unread, true);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('SDK placeholder recovery without an unread increment cannot be covered by an earlier receipt', async () => {
+  const f = fixture();
+  try {
+    const tracked = f.incoming();
+    const recovered = f.message('recovered', base + 20);
+    // This PDO fixture exercises the already-decoded message path, without Signal/key-store I/O.
+    await processMessage(
+      {
+        key: { remoteJid: me, id: 'fictional-pdo', fromMe: true },
+        messageTimestamp: base + 30,
+        message: {
+          protocolMessage: {
+            type: proto.Message.ProtocolMessage.Type
+              .PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE,
+            peerDataOperationRequestResponseMessage: {
+              stanzaId: 'fictional-resend',
+              peerDataOperationResult: [
+                {
+                  placeholderMessageResendResponse: {
+                    webMessageInfoBytes:
+                      proto.WebMessageInfo.encode(recovered).finish(),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        ev: f.ev,
+        creds: { ...initAuthCreds(), me: { id: me, name: 'Fictional owner' } },
+        shouldProcessHistoryMsg: false,
+        options: {},
+        getMessage: async () => undefined,
+      } as unknown as Parameters<typeof processMessage>[1],
+    );
+    f.receipt(tracked.key, base + 15);
+    assert.equal((await f.chat()).unread, true);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('an absorbed own receipt cannot establish zero before uncovered content later in the same upsert batch', async () => {
+  const f = fixture();
+  try {
+    f.ev.buffer();
+    const tracked = f.incoming();
+    f.receipt(tracked.key, base + 15);
+    f.ev.emit('messages.upsert', {
+      messages: [f.message('uncovered-in-batch', base + 20)],
+      type: 'notify',
+    });
+    f.ev.flush();
+    assert.notEqual((await f.chat()).unread, false);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const incomingFirst of [false, true]) {
+  test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {
+    const f = fixture();
+    try {
+      const msg = f.message();
+      if (incomingFirst) f.incoming(msg);
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('app-state.update', {
+        ...manualAction((base + 200) * 1000, 4),
+        source: 'sync',
+        initialSync: false,
+        macVerified: true,
+        representation: 'snapshot',
+        messageRange: {
+          lastMessageTimestamp: base + 10,
+          messages: [{ id: msg.key.id!, fromMe: false, timestamp: base + 10 }],
+        },
+      });
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      if (!incomingFirst) f.incoming(msg);
+      f.receipt(msg.key, base + 100);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('uncovered incoming content also retires a qualified marker before its first paired increment', async () => {
+  const f = fixture();
+  try {
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.ev.emit('messages.upsert', {
+      messages: [f.message('uncovered', base + 10)],
+      type: 'notify',
+    });
+    const msg = f.incoming(f.message('tracked', base + 20));
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, true);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
 
 for (const order of ['separate', 'upsert-first', 'receipt-first'] as const) {
   test(`own read receipts clear a fully tracked unread range (${order}), preserving archive and message time`, async () => {
@@ -261,6 +392,60 @@ for (const invalid of [
     }
   });
 }
+
+test('a delayed own receipt cannot recreate a deleted chat from retired coverage', async () => {
+  const f = fixture();
+  try {
+    const msg = f.incoming();
+    f.ev.emit('chats.delete', [jid]);
+    assert.equal(await f.runtime.execute({ command: 'chat', jid }), null);
+    f.receipt(msg.key);
+    assert.equal(await f.runtime.execute({ command: 'chat', jid }), null);
+  } finally {
+    await f.close();
+  }
+});
+
+test("reintroduced chat metadata cannot reuse a deleted chat's unread range", async () => {
+  const f = fixture();
+  try {
+    const msg = f.incoming();
+    f.ev.emit('chats.delete', [jid]);
+    f.ev.emit('chats.upsert', [{ id: jid, archived: true }]);
+    f.receipt(msg.key);
+    assert.equal((await f.chat()).unread, null);
+    assert.equal((await f.chat()).readObservation, undefined);
+  } finally {
+    await f.close();
+  }
+});
+
+test('deleted chats retire read diagnostics without discarding stored message history', async () => {
+  const f = fixture(-1);
+  try {
+    const msg = f.incoming();
+    f.receipt(msg.key);
+    assert.ok((await f.chat()).readReconciliation);
+    f.ev.emit('chats.delete', [jid]);
+    f.ev.emit('chats.upsert', [{ id: jid, archived: true }]);
+    const chat = await f.chat();
+    assert.equal(chat.unread, null);
+    assert.equal(chat.readReconciliation, undefined);
+    const messages = await f.runtime.execute({
+      command: 'messages',
+      jid,
+      limit: 10,
+      offset: 0,
+    });
+    assert.ok(
+      (messages as unknown[])
+        .map(object)
+        .some((message) => message.id === msg.key.id),
+    );
+  } finally {
+    await f.close();
+  }
+});
 
 for (const initial of [null, 2, -1]) {
   test(`receipt cannot resolve an unknown, untracked or manually unread baseline (${initial})`, async () => {
