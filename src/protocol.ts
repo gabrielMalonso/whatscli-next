@@ -6,6 +6,7 @@ export type ChatStateFilter = boolean | 'unknown';
 export type ChatFilters = {
   unread?: ChatStateFilter;
   archived?: ChatStateFilter;
+  observedOnly?: boolean;
 };
 export type QuoteSelector = {
   id: string;
@@ -109,6 +110,14 @@ function integer(value: unknown, min: number, max: number): number {
 
 function chatFilters(value: Record<string, unknown>): ChatFilters {
   const filters: ChatFilters = {};
+  if (value.observedOnly !== undefined) {
+    if (typeof value.observedOnly !== 'boolean')
+      throw new CommandError(
+        'INVALID_ARGUMENT',
+        'observedOnly must be boolean',
+      );
+    filters.observedOnly = value.observedOnly;
+  }
   for (const field of ['unread', 'archived'] as const) {
     const state = value[field];
     if (state === undefined) continue;

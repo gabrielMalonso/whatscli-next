@@ -104,6 +104,7 @@ function options() {
         cursor: { type: 'string' },
         unread: { type: 'string' },
         archived: { type: 'string' },
+        'observed-only': { type: 'boolean' },
         output: { type: 'string' },
         name: { type: 'string' },
       },
@@ -194,7 +195,7 @@ async function execute(
           'pair qr': '',
           'pair code': '--phone INTERNATIONAL_DIGITS',
           chats:
-            '[--unread true|false|unknown] [--archived true|false|unknown] [--limit 100] [--offset 0]',
+            '[--unread true|false|unknown] [--archived true|false|unknown] [--observed-only] [--limit 100] [--offset 0]',
           chat: '--jid JID',
           resolve: '--phone +INTERNATIONAL_DIGITS',
           contact: '--jid PN_OR_LID_JID',
@@ -434,11 +435,14 @@ async function execute(
         );
       break;
     case 'chats': {
-      only('limit', 'offset', 'unread', 'archived');
+      only('limit', 'offset', 'unread', 'archived', 'observed-only');
       command = {
         command: 'chats',
         limit: Number(values.limit ?? 100),
         offset: Number(values.offset ?? 0),
+        ...(values['observed-only'] === undefined
+          ? {}
+          : { observedOnly: values['observed-only'] }),
       };
       for (const field of ['unread', 'archived'] as const) {
         const state = values[field];

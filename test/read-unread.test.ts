@@ -217,7 +217,7 @@ test('rc14 buffered read then incoming establishes unread without proving reques
   }
 });
 
-test('rc14 buffered incoming then read also establishes unread until a separate explicit read arrives', async () => {
+test('rc14 buffered incoming followed by an independent read preserves its absolute zero', async () => {
   const f = fixture();
   try {
     await f.runtime.execute({
@@ -230,7 +230,8 @@ test('rc14 buffered incoming then read also establishes unread until a separate 
     await f.incoming();
     f.action(true);
     f.ev.flush();
-    assert.equal((await f.view()).unread, true);
+    assert.equal((await f.view()).unread, false);
+    assert.equal((await f.view()).unreadCount, 0);
     assert.deepEqual((await f.view()).pending, {});
     f.action(true);
     assert.equal((await f.view()).unread, false);

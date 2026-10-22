@@ -4,13 +4,20 @@ import makeWASocket, {
   areJidsSameUser,
   assertMediaContent,
   downloadMediaMessage,
+  jidNormalizedUser,
   normalizeMessageContent,
   toNumber,
   USyncQuery,
   USyncUser,
 } from 'baileys';
 import { basename } from 'node:path';
-import type { AuthenticationCreds, BaileysEventMap, WASocket } from 'baileys';
+import type {
+  AuthenticationCreds,
+  BaileysEventMap,
+  ChatUpdate,
+  WAMessageKey,
+  WASocket,
+} from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
@@ -33,6 +40,8 @@ import { prepareQuote, quotedMessage } from './quoted-text.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
+import type { PendingChatState } from './store.js';
+import { isUnreadCount } from './output.js';
 
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
@@ -339,11 +348,167 @@ export function createRuntime(
     // A preflight resync can also emit in this scope: it is SDK evidence, not
     // independent confirmation or proof that this request caused the state.
     const emit = current.ev.emit.bind(current.ev);
+    // Enumerable symbols survive SDK Object.assign/spread merges without
+    // becoming persisted/public JSON. Order is capture order, never wall time.
+    const readCapture = Symbol('read-capture');
+    const archiveCapture = Symbol('archive-capture');
+    type Capture = {
+      readonly order: number;
+      readonly pendingKey: string | null;
+      readonly applied: boolean;
+    };
+    type ReadCapture = Capture & {
+      readonly count: number | null;
+      readonly marked: boolean | null;
+    };
+    type CapturedChat = ChatUpdate & {
+      [readCapture]?: ReadCapture;
+      [archiveCapture]?: Capture;
+    };
+    const latestCaptures = new Map<
+      string,
+      Partial<Record<keyof PendingChatState, number>>
+    >();
+    let captureOrder = 0;
+    const captureChat = (chat: CapturedChat, snapshot: boolean): void => {
+      if (!chat.id) return;
+      const jid = chat.id;
+      const pending = store.get<PendingChatState>('pending-chat', jid) ?? {};
+      const order = ++captureOrder;
+      if (
+        isUnreadCount(chat.unreadCount) ||
+        typeof chat.markedAsUnread === 'boolean'
+      )
+        chat[readCapture] = {
+          order,
+          pendingKey: pending.unread?.key ?? null,
+          applied: snapshot || chat.unreadCount === 0,
+          count: isUnreadCount(chat.unreadCount) ? chat.unreadCount : null,
+          marked:
+            typeof chat.markedAsUnread === 'boolean'
+              ? chat.markedAsUnread
+              : null,
+        };
+      if (typeof chat.archived === 'boolean')
+        chat[archiveCapture] = {
+          order,
+          pendingKey: pending.archived?.key ?? null,
+          applied: snapshot,
+        };
+      const raw = { ...chat };
+      delete raw.conditional;
+      let activated = false;
+      const activate = (): void => {
+        if (activated) return;
+        activated = true;
+        persist(() =>
+          store.transaction(() => {
+            const latest = latestCaptures.get(jid) ?? {};
+            const accepted = { ...raw };
+            if (raw[readCapture]) {
+              if (order > (latest.unread ?? 0)) latest.unread = order;
+              else {
+                delete accepted.unreadCount;
+                delete accepted.markedAsUnread;
+              }
+            }
+            if (raw[archiveCapture]) {
+              if (order > (latest.archived ?? 0)) latest.archived = order;
+              else delete accepted.archived;
+            }
+            latestCaptures.set(jid, latest);
+            if (snapshot) store.observeChat(accepted);
+            else {
+              store.captureChatUpdate(accepted);
+              if (accepted.unreadCount === 0)
+                store.observeChat(
+                  {
+                    id: jid,
+                    unreadCount: 0,
+                    ...(typeof accepted.markedAsUnread === 'boolean'
+                      ? { markedAsUnread: accepted.markedAsUnread }
+                      : {}),
+                  },
+                  'buffered-update',
+                  { unread: raw[readCapture]?.pendingKey ?? null },
+                );
+            }
+          }),
+        );
+      };
+      const conditional = chat.conditional;
+      if (!snapshot && conditional && current.ev.isBuffering())
+        chat.conditional = (data) => {
+          const matched = conditional(data);
+          if (matched === true) activate();
+          return matched;
+        };
+      else activate();
+    };
+    const projectChat = (
+      chat: CapturedChat,
+      source: 'buffered-update' | 'buffered-snapshot',
+    ): void => {
+      const projected = { ...chat };
+      const latest = chat.id ? latestCaptures.get(chat.id) : undefined;
+      const pendingKeys: Partial<
+        Record<keyof PendingChatState, string | null>
+      > = {};
+      const read = chat[readCapture];
+      if (read) {
+        if (read.applied || latest?.unread !== read.order) {
+          delete projected.unreadCount;
+          delete projected.markedAsUnread;
+        } else {
+          if (read.count === null) delete projected.unreadCount;
+          // Zero and -1 are absolute observations, never numeric deltas.
+          // A positive delta removed by READ still cannot manufacture zero.
+          else if (read.count <= 0) projected.unreadCount = read.count;
+          if (read.marked === null) delete projected.markedAsUnread;
+          else projected.markedAsUnread = read.marked;
+          pendingKeys.unread = read.pendingKey;
+        }
+      }
+      const archive = chat[archiveCapture];
+      if (archive) {
+        if (archive.applied || latest?.archived !== archive.order)
+          delete projected.archived;
+        else pendingKeys.archived = archive.pendingKey;
+      }
+      store.observeChat(projected, source, pendingKeys);
+    };
+    const emitIndependent: typeof current.ev.emit = (event, value) => {
+      if (event === 'chats.update' || event === 'chats.upsert') {
+        const chats = value as BaileysEventMap['chats.update' | 'chats.upsert'];
+        persist(() =>
+          store.transaction(() => {
+            for (const chat of chats)
+              captureChat(chat, event === 'chats.upsert');
+          }),
+        );
+      }
+      if (event === 'messages.upsert' || event === 'messaging-history.set') {
+        const upsert = value as BaileysEventMap[
+          'messages.upsert' | 'messaging-history.set'];
+        persist(() =>
+          store.transaction(() => {
+            // A type change can flush earlier receipts inside the SDK's emit().
+            for (const message of upsert.messages)
+              store.captureMessageRange(message);
+            if (event === 'messaging-history.set') {
+              const history = value as BaileysEventMap['messaging-history.set'];
+              for (const chat of history.chats) captureChat(chat, true);
+            }
+          }),
+        );
+      }
+      return emit(event, value);
+    };
     current.ev.emit = (event, value) => {
       const invocation = sdkInvocation.getStore();
       // Recovery timers can inherit an old invocation when creating the next socket.
       if (!invocation || invocation.socketToken !== token)
-        return emit(event, value);
+        return emitIndependent(event, value);
       if (event === 'chats.update') {
         const chats = value as BaileysEventMap['chats.update'];
         const independent: BaileysEventMap['chats.update'] = [];
@@ -372,7 +537,9 @@ export function createRuntime(
               independent.push(remaining);
           }
         }
-        return independent.length ? emit('chats.update', independent) : true;
+        return independent.length
+          ? emitIndependent('chats.update', independent)
+          : true;
       }
       // Enabling own events also enables synthetic outgoing message upserts.
       // Keep those from inventing observed history or chat activity.
@@ -387,10 +554,10 @@ export function createRuntime(
             ),
         );
         return messages.length
-          ? emit('messages.upsert', { ...upsert, messages })
+          ? emitIndependent('messages.upsert', { ...upsert, messages })
           : true;
       }
-      return emit(event, value);
+      return emitIndependent(event, value);
     };
     current.ev.on('creds.update', (update) =>
       persist(() => {
@@ -482,7 +649,8 @@ export function createRuntime(
     current.ev.on('messaging-history.set', (history) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of history.chats) store.observeChat(chat);
+          for (const chat of history.chats)
+            projectChat(chat, 'buffered-snapshot');
           for (const contact of history.contacts)
             store.observeContact(contact, 'messaging-history.set');
           for (const mapping of history.lidPnMappings ?? [])
@@ -512,7 +680,7 @@ export function createRuntime(
     current.ev.on('chats.upsert', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat);
+          for (const chat of chats) projectChat(chat, 'buffered-snapshot');
           store.event(
             'chats.upsert',
             chats.map((chat) => ({ id: chat.id })),
@@ -523,17 +691,25 @@ export function createRuntime(
     current.ev.on('chats.update', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat);
+          for (const chat of chats) projectChat(chat, 'buffered-update');
           store.event('chats.update', chats);
         }),
       ),
     );
+    current.ev.on('app-state.update', (event) => {
+      persist(() =>
+        store.transaction(() => {
+          if (event.kind === 'patch-response')
+            store.recordAppStateResponse(event);
+          else store.recordAppStateChatAction(event);
+        }),
+      );
+    });
     current.ev.on('chats.delete', (jids) =>
       persist(() =>
         store.transaction(() => {
           // Keep historical records, but signal that their current existence is no longer known.
-          for (const jid of jids)
-            store.db.prepare('DELETE FROM chats WHERE jid=?').run(jid);
+          for (const jid of jids) store.observeChatDeletion(jid);
           store.event('chats.delete', jids);
         }),
       ),
@@ -541,7 +717,13 @@ export function createRuntime(
     current.ev.on('messages.upsert', (event) =>
       persist(() =>
         store.transaction(() => {
-          for (const message of event.messages) store.observeMessage(message);
+          for (const message of event.messages)
+            store.observeMessage(message, true, event.type);
+          // A receipt absorbed into A cannot cover an untracked B later in this batch.
+          for (const message of event.messages) {
+            for (const receipt of message.userReceipt ?? [])
+              observeOwnRead(message.key, receipt);
+          }
           store.event('messages.upsert', {
             type: event.type,
             keys: event.messages.map((message) => message.key),
@@ -595,11 +777,30 @@ export function createRuntime(
       ),
     );
     current.ev.on('message-receipt.update', (receipts) =>
-      persist(() => {
-        store.event('participant-receipts', receipts);
-        for (const receipt of receipts) observeMessageKey(receipt.key);
-      }),
+      persist(() =>
+        store.transaction(() => {
+          store.event('participant-receipts', receipts);
+          for (const { key, receipt } of receipts) {
+            observeOwnRead(key, receipt);
+            observeMessageKey(key);
+          }
+        }),
+      ),
     );
+    function observeOwnRead(
+      key: WAMessageKey,
+      receipt: BaileysEventMap['message-receipt.update'][number]['receipt'],
+    ): void {
+      if (!receipt.userJid || receipt.readTimestamp == null) return;
+      const user = jidNormalizedUser(receipt.userJid);
+      if (
+        ![auth.state.creds.me?.id, auth.state.creds.me?.lid].some(
+          (self) => self && jidNormalizedUser(self) === user,
+        )
+      )
+        return;
+      store.observeOwnReadReceipt(key, toNumber(receipt.readTimestamp));
+    }
     current.ev.on('messages.delete', (event) =>
       persist(() => store.deleteMessages(event)),
     );
@@ -924,7 +1125,7 @@ export function createRuntime(
           operation,
           () => {
             validateTarget(command.jid);
-            const last = store.messages(command.jid, 1)[0];
+            const last = store.chatMutationMessages(command.jid)[0];
             if (!last || toNumber(last.messageTimestamp ?? 0) === 0)
               throw new CommandError(
                 'PRECONDITION_FAILED',
@@ -933,7 +1134,7 @@ export function createRuntime(
           },
           async () => {
             const lastMessages = store
-              .messages(command.jid, 1)
+              .chatMutationMessages(command.jid)
               .map(({ key, messageTimestamp }) => ({
                 key,
                 messageTimestamp: toNumber(messageTimestamp ?? 0),
@@ -942,14 +1143,29 @@ export function createRuntime(
               command.command === 'archive'
                 ? { archive: command.value, lastMessages }
                 : { markRead: command.value, lastMessages };
-            await connected().chatModify(patch, command.jid);
+            await connected().chatModify(patch, command.jid, {
+              requestId: command.key,
+            });
           },
           sendPreparation,
         );
+        const localChat = store.chatView(command.jid);
+        const field = command.command === 'archive' ? 'archived' : 'unread';
+        const pending = localChat?.pending[field];
         return {
           request,
-          note: 'sdkReported is local SDK evidence; independent observation and phone confirmation remain separate.',
-          localChat: store.chatView(command.jid),
+          feedback: {
+            serverResponse: request.appStateResponse?.status ?? 'unknown',
+            stateObservation: pending
+              ? pending.key === request.key
+                ? 'pending'
+                : 'superseded'
+              : typeof localChat?.[field] === 'boolean'
+                ? 'available'
+                : 'unknown',
+          },
+          note: 'A server response and local SDK echo do not confirm phone application. Pending refers to a conversation-state observation; do not repeat an uncertain operation.',
+          localChat,
         };
       }
       case 'stop':

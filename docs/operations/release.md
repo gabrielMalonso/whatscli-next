@@ -43,9 +43,9 @@ Inspect the actual archive against the source. It should contain only the packag
 
 Reject links, private state, fixtures, databases, logs, QR files, `.env`, dependencies, tests, and scripts. The allowlist cannot detect secrets placed inside otherwise allowed files.
 
-The tarball excludes source, lock/workspace files, and dependencies. It is not a standalone frozen installation: installing it alone may resolve a different transitive dependency graph.
+The tarball excludes source, lock/workspace files, dependency patches, and dependencies. It is not a standalone frozen installation: installing it alone may resolve a different transitive dependency graph.
 
-To check a payload, use an isolated directory, the exact source lock/workspace files, and `--prod --frozen-lockfile --ignore-scripts`. Confirm that dependencies resolve within the payload rather than from an ancestor installation.
+To check a payload, use an isolated directory, the exact source lock/workspace files and `patches/` directory, and `--prod --frozen-lockfile --ignore-scripts`. Confirm that dependencies resolve within the payload rather than from an ancestor installation.
 
 Test the lifecycle only with a new fictional, private canonical data directory and `--offline` on every start. Check stopped/running/stopped state, `networkEnabled: false`, no account or QR, the expected build label, and normal PID exit.
 

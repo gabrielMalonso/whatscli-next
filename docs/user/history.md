@@ -25,7 +25,7 @@ node dist/src/cli.js group --jid '120363000000000001@g.us'
 
 Search matches literal substrings of current message text and captions using Unicode case normalization. `%` and `_` are literal characters. Omit `--jid` to search all stored conversations. Quoted text, contact cards, deleted bodies, SDK keys, and private audit data are excluded.
 
-`chats` accepts independent `--unread true|false|unknown` and `--archived true|false|unknown` filters, combined with AND. Omit a filter to include all its states. `unknown` matches null, including pending mutations, and is distinct from `false`. Inspect both unknown filters separately; a chat may match both.
+`chats` accepts independent `--unread true|false|unknown` and `--archived true|false|unknown` filters, combined with AND. Omit a filter to include all its states. By default boolean filters consider the latest pending intent for each field; matching rows identify those fields in `matchedBy` as `pending-intent`, while their observed values remain null. Add `--observed-only` to restrict boolean filters to known observed state. `unknown` always matches null observed state, including pending mutations, and is distinct from `false`. A pending-intent match can therefore also appear in an unknown query. Inspect both unknown filters separately; a chat may match both.
 
 Verification and SDK send returns alone do not create listed conversations. PN and LID histories remain separate.
 

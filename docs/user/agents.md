@@ -25,6 +25,8 @@ Use an exact observed JID or the exact PN JID returned by `resolve` with `data.s
 
 History is partial. Inspect unread and archived `unknown` states separately from `false`, keep pagination filters fixed, and deduplicate by exact JID as pages change. See [history and search](history.md).
 
+Queue filters also include matching pending intents. A row with `matchedBy.unread: "pending-intent"` is requested unread state, with `unread: null` until observed. Use `--observed-only` for strict observations. Mutation `feedback.serverResponse` distinguishes a matching server version, an unmatched response and no recorded response; `feedback.stateObservation` tracks the separate observation. Inspect the original key and `request.appStateResponse`; pending is not a failed command or a reason to issue another key.
+
 ## Send and inspect
 
 Choose a stable key before invoking an intended action:
