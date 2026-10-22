@@ -358,8 +358,8 @@ export function createRuntime(
       readonly applied: boolean;
     };
     type ReadCapture = Capture & {
-      readonly count: boolean;
-      readonly marked: boolean;
+      readonly count: number | null;
+      readonly marked: boolean | null;
     };
     type CapturedChat = ChatUpdate & {
       [readCapture]?: ReadCapture;
@@ -382,9 +382,12 @@ export function createRuntime(
         chat[readCapture] = {
           order,
           pendingKey: pending.unread?.key ?? null,
-          applied: snapshot,
-          count: isUnreadCount(chat.unreadCount),
-          marked: typeof chat.markedAsUnread === 'boolean',
+          applied: snapshot || chat.unreadCount === 0,
+          count: isUnreadCount(chat.unreadCount) ? chat.unreadCount : null,
+          marked:
+            typeof chat.markedAsUnread === 'boolean'
+              ? chat.markedAsUnread
+              : null,
         };
       if (typeof chat.archived === 'boolean')
         chat[archiveCapture] = {
@@ -415,7 +418,21 @@ export function createRuntime(
             }
             latestCaptures.set(jid, latest);
             if (snapshot) store.observeChat(accepted);
-            else store.captureChatUpdate(accepted);
+            else {
+              store.captureChatUpdate(accepted);
+              if (accepted.unreadCount === 0)
+                store.observeChat(
+                  {
+                    id: jid,
+                    unreadCount: 0,
+                    ...(typeof accepted.markedAsUnread === 'boolean'
+                      ? { markedAsUnread: accepted.markedAsUnread }
+                      : {}),
+                  },
+                  'buffered-update',
+                  { unread: raw[readCapture]?.pendingKey ?? null },
+                );
+            }
           }),
         );
       };
@@ -443,8 +460,12 @@ export function createRuntime(
           delete projected.unreadCount;
           delete projected.markedAsUnread;
         } else {
-          if (!read.count) delete projected.unreadCount;
-          if (!read.marked) delete projected.markedAsUnread;
+          if (read.count === null) delete projected.unreadCount;
+          // Zero and -1 are absolute observations, never numeric deltas.
+          // A positive delta removed by READ still cannot manufacture zero.
+          else if (read.count <= 0) projected.unreadCount = read.count;
+          if (read.marked === null) delete projected.markedAsUnread;
+          else projected.markedAsUnread = read.marked;
           pendingKeys.unread = read.pendingKey;
         }
       }

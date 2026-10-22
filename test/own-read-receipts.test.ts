@@ -721,6 +721,71 @@ for (const flushBeforeZero of [false, true]) {
   });
 }
 
+for (const buffered of [false, true]) {
+  for (const newerZero of [false, true]) {
+    test(`an independent read zero survives a positive history merge (buffered=${buffered}, newerZero=${newerZero})`, async () => {
+      const f = fixture();
+      try {
+        if (buffered) f.ev.buffer();
+        const history = (unreadCount: number) =>
+          f.ev.emit('messaging-history.set', {
+            chats: [{ id: jid, unreadCount }],
+            contacts: [],
+            messages: [f.message('previous', base)],
+            isLatest: false,
+          });
+        history(2);
+        if (newerZero) history(0);
+        const patch = chatModificationToAppPatch(
+          {
+            markRead: true,
+            lastMessages: [
+              {
+                key: { remoteJid: jid, id: 'previous', fromMe: false },
+                messageTimestamp: base,
+              },
+            ],
+          },
+          jid,
+        );
+        processSyncAction(
+          { index: patch.index, syncAction: { value: patch.syncAction } },
+          f.ev,
+          { id: me },
+          undefined,
+          pino({ level: 'silent' }),
+        );
+        f.ev.flush();
+        assert.equal((await f.chat()).unread, false);
+        assert.equal((await f.chat()).unreadCount, 0);
+        assert.deepEqual(await f.queue(true), []);
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+test('a raw read zero supplies the baseline for a later buffered incoming message', async () => {
+  const f = fixture(2);
+  try {
+    f.ev.buffer();
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
+    const fresh = f.message('after-read-zero', base + 20);
+    f.ev.emit('messages.upsert', { messages: [fresh], type: 'notify' });
+    await f.process(fresh);
+    f.ev.flush();
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(fresh.key);
+    assert.equal((await f.chat()).unread, false);
+    assert.deepEqual(object((await f.chat()).readObservation).messages, [
+      { id: fresh.key.id, timestamp: base + 20 },
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
 for (const incomingFirst of [false, true]) {
   test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {
     const f = fixture();
