@@ -99,6 +99,37 @@ function fixture(initial: number | null = 0) {
       { key, receipt: { userJid, readTimestamp: timestamp } },
     ]);
   };
+  const process = (msg: WAMessage) =>
+    processMessage(msg, {
+      ev,
+      creds: { me: { id: me }, accountSettings: {} },
+      logger: pino({ level: 'silent' }),
+      shouldProcessHistoryMsg: false,
+      options: {},
+      getMessage: async () => undefined,
+    } as unknown as Parameters<typeof processMessage>[1]);
+  const recover = (recovered: WAMessage) =>
+    process({
+      key: { remoteJid: me, id: 'fictional-pdo', fromMe: true },
+      messageTimestamp: base + 30,
+      message: {
+        protocolMessage: {
+          type: proto.Message.ProtocolMessage.Type
+            .PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE,
+          peerDataOperationRequestResponseMessage: {
+            stanzaId: 'fictional-resend',
+            peerDataOperationResult: [
+              {
+                placeholderMessageResendResponse: {
+                  webMessageInfoBytes:
+                    proto.WebMessageInfo.encode(recovered).finish(),
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
   return {
     directory,
     runtime,
@@ -106,6 +137,8 @@ function fixture(initial: number | null = 0) {
     message,
     incoming,
     receipt,
+    process,
+    recover,
     chat: async () => object(await runtime.execute({ command: 'chat', jid })),
     queue: (observedOnly = false) =>
       runtime.execute({
@@ -281,6 +314,86 @@ test('an unmatched buffered upsert blocks zero across restart until its coverage
     assert.equal(store.chatView(jid)?.readObservation, undefined);
   } finally {
     store.close();
+  }
+});
+
+for (const source of ['notify', 'append'] as const) {
+  test(`an unpaired key before the first range prevents zero after a later paired ${source}`, async () => {
+    const f = fixture();
+    try {
+      f.ev.buffer();
+      await f.recover(f.message('unpaired-before-range', base + 20));
+      const tracked = f.message('tracked-after-unpaired', base + 10);
+      f.ev.emit('messages.upsert', { messages: [tracked], type: source });
+      await f.process(tracked);
+      f.receipt(tracked.key, base + 15);
+      f.ev.flush();
+      assert.notEqual((await f.chat()).unread, false);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('an unpaired key captured before the first range blocks zero across restart', async () => {
+  const f = fixture();
+  const tracked = f.message('tracked-after-unpaired', base + 10);
+  f.ev.buffer();
+  await f.recover(f.message('unpaired-before-range', base + 20));
+  f.ev.emit('messages.upsert', { messages: [tracked], type: 'notify' });
+  await f.process(tracked);
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    store.observeMessage(tracked, true, 'notify');
+    store.observeOwnReadReceipt(tracked.key, base + 15);
+    assert.notEqual(store.chatView(jid)?.unread, false);
+    assert.equal(store.chatView(jid)?.readObservation, undefined);
+  } finally {
+    store.close();
+  }
+});
+
+for (const changedTime of [false, true]) {
+  test(`an older flushed key/time cannot consume a newer raw barrier (changedTime=${changedTime})`, async () => {
+    const f = fixture();
+    try {
+      const tracked = f.message('corrected-time', base + 10);
+      f.ev.buffer();
+      f.ev.emit('messages.upsert', { messages: [tracked], type: 'append' });
+      await f.process(tracked);
+      f.receipt(tracked.key, base + 15);
+      await f.recover(
+        f.message('corrected-time', base + (changedTime ? 20 : 10)),
+      );
+      f.ev.flush();
+      if (changedTime) {
+        assert.notEqual((await f.chat()).unread, false);
+        assert.equal((await f.chat()).readObservation, undefined);
+      } else {
+        assert.equal((await f.chat()).unread, false);
+      }
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('an exact cached replay after observed read does not block the next complete range', async () => {
+  const f = fixture();
+  try {
+    const previous = f.incoming();
+    f.receipt(previous.key);
+    f.ev.emit('messages.upsert', { messages: [previous], type: 'notify' });
+    const next = f.incoming(f.message('after-cached-replay', base + 20));
+    f.receipt(next.key);
+    assert.equal((await f.chat()).unread, false);
+    assert.deepEqual(object((await f.chat()).readObservation).messages, [
+      { id: next.key.id, timestamp: base + 20 },
+    ]);
+  } finally {
+    await f.close();
   }
 });
 
@@ -1144,6 +1257,7 @@ test('an anchored marker need not list every previously read ID sharing its time
       messages: [f.message('other-already-read', base)],
       type: 'notify',
     });
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
     f.ev.emit('app-state.update', manualAction());
     f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
     const msg = f.incoming();

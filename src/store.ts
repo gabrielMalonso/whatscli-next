@@ -1432,29 +1432,46 @@ export class Store {
   ): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || fromMe !== false || participant) return;
+    const timestamp = activityTimestamp(message.messageTimestamp);
     const pending = this.get<UnpairedUpsert[]>('unpaired-upserts', jid) ?? [];
-    if (phase === 'observed' && pending.some((entry) => entry.id === id)) {
-      const remaining = pending.filter((entry) => entry.id !== id);
+    const captured = pending.some(
+      (entry) => entry.id === id && entry.timestamp === timestamp,
+    );
+    if (phase === 'observed' && captured) {
+      const remaining = pending.filter(
+        (entry) => entry.id !== id || entry.timestamp !== timestamp,
+      );
       this.set('unpaired-upserts', jid, remaining.length ? remaining : null);
     }
     const range = this.get<ReceiptUnreadRange>('receipt-unread-range', jid);
     if (
       range?.messages.some(
-        (member) =>
-          member.id === id &&
-          member.timestamp === activityTimestamp(message.messageTimestamp),
+        (member) => member.id === id && member.timestamp === timestamp,
       )
     )
       return;
     const marker = this.get<ManualUnreadMarker>('manual-unread-marker', jid);
-    if (!range && !marker) return;
     if (phase === 'buffered' && id) {
+      const previous = this.message(message.key);
+      if (
+        !range &&
+        !marker &&
+        previous &&
+        activityTimestamp(previous.messageTimestamp) === timestamp
+      )
+        return;
       this.set('unpaired-upserts', jid, [
-        ...pending.filter((entry) => entry.id !== id),
-        { id, timestamp: activityTimestamp(message.messageTimestamp) },
+        ...pending.filter(
+          (entry) => entry.id !== id || entry.timestamp !== timestamp,
+        ),
+        { id, timestamp },
       ] satisfies UnpairedUpsert[]);
       return;
     }
+    if (!range && !marker && !captured) return;
+    // An unpaired arrival can precede the first range. Its observation does
+    // not restore the earlier zero as a complete baseline for later receipts.
+    this.set('captured-unread', jid, true);
     this.set('receipt-unread-range', jid, null);
     this.set('read-reconciliation', jid, null);
     this.set(
@@ -1472,8 +1489,21 @@ export class Store {
     source?: BaileysEventMap['messages.upsert']['type'],
   ): void {
     this.transaction(() => {
-      if (chatObserved || source !== undefined)
+      if (chatObserved || source !== undefined) {
         this.captureMessageRange(message, 'observed');
+        const jid = message.key.remoteJid;
+        if (jid && this.get<boolean>('captured-unread', jid)) {
+          // Uncovered observed content (also replayed after a crash) cannot
+          // preserve an earlier zero as the current complete read baseline.
+          this.db
+            .prepare(
+              `UPDATE chats SET json=json_set(json,'$.unreadCount',NULL,'$.markedAsUnread',NULL)
+              WHERE jid=? AND chat_unread(json)=0`,
+            )
+            .run(jid);
+          this.set('chat-read-observation', jid, null);
+        }
+      }
       this.writeObservedMessage(message, chatObserved);
       if ((!chatObserved && source === undefined) || !message.key.remoteJid)
         return;
