@@ -129,7 +129,8 @@ for (const appended of [false, true])
   test(`a write exception has an uncertain result, without retry, when underlying append=${appended}`, () => {
     const directory = temporary();
     configureObservability(directory, true);
-    const observer = new Observability(directory, 'runtime');
+    const now = Date.now();
+    const observer = new Observability(directory, 'runtime', () => now);
     observer.record('sample');
     const write = fs.writeSync;
     let attempts = 0;
@@ -164,9 +165,86 @@ for (const appended of [false, true])
     const next: Record<string, unknown> = logs(directory).at(-1)!;
     assert.equal(next.uncertain, 1);
     assert.equal(next.dropped, 0);
+    assert.deepEqual(logs(directory).at(-1)?.captureLoss, {
+      groups: [
+        {
+          reason: 'write-uncertain',
+          origin: 'runtime',
+          category: 'execution',
+          action: 'chats',
+          count: 1,
+          from: new Date(now).toISOString(),
+          to: new Date(now).toISOString(),
+        },
+      ],
+      unattributed: 0,
+    });
     assert.equal(observer.status().degraded, false);
     assert.doesNotMatch(raw(directory), new RegExp(canary));
   });
+
+test('failed appends restore carried loss details until a complete append succeeds', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  const observer = new Observability(directory, 'runtime');
+  observer.record('sample');
+  const write = fs.writeSync;
+  fs.writeSync = ((
+    fd: number,
+    data: string | NodeJS.ArrayBufferView,
+    ...args: unknown[]
+  ) => {
+    if (typeof data === 'string' && JSON.parse(data).action === 'status')
+      return 0;
+    if (typeof data === 'string' && JSON.parse(data).action === 'messages')
+      throw new Error(canary);
+    return Reflect.apply(write, fs, [fd, data, ...args]);
+  }) as typeof fs.writeSync;
+  syncBuiltinESMExports();
+  try {
+    observer.record('transport', { action: 'status' }, 'daemon');
+    observer.record('execution', { action: 'messages' });
+  } finally {
+    fs.writeSync = write;
+    syncBuiltinESMExports();
+  }
+  observer.record('execution', { action: 'contact' });
+  observer.record('sample');
+  await observer.close();
+  const rows = logs(directory);
+  assert.equal(rows[1]?.dropped, 1);
+  assert.equal(rows[1]?.uncertain, 1);
+  assert.deepEqual(
+    rows[1]?.captureLoss?.groups.map(
+      ({ reason, origin, category, action, count }) => ({
+        reason,
+        origin,
+        category,
+        action,
+        count,
+      }),
+    ),
+    [
+      {
+        reason: 'append-incomplete',
+        origin: 'daemon',
+        category: 'transport',
+        action: 'status',
+        count: 1,
+      },
+      {
+        reason: 'write-uncertain',
+        origin: 'runtime',
+        category: 'execution',
+        action: 'messages',
+        count: 1,
+      },
+    ],
+  );
+  assert.equal(rows[1]?.captureLoss?.unattributed, 0);
+  assert.equal(rows[2]?.captureLoss, undefined);
+  assert.doesNotMatch(raw(directory), new RegExp(canary));
+});
 
 test('configuration still reports cleanup failure after a committed preference rename', () => {
   const directory = temporary();
