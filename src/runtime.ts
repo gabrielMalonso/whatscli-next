@@ -14,6 +14,7 @@ import { basename } from 'node:path';
 import type {
   AuthenticationCreds,
   BaileysEventMap,
+  ChatUpdate,
   WAMessageKey,
   WASocket,
 } from 'baileys';
@@ -39,6 +40,8 @@ import { prepareQuote, quotedMessage } from './quoted-text.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
+import type { PendingChatState } from './store.js';
+import { isUnreadCount } from './output.js';
 
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
@@ -345,12 +348,121 @@ export function createRuntime(
     // A preflight resync can also emit in this scope: it is SDK evidence, not
     // independent confirmation or proof that this request caused the state.
     const emit = current.ev.emit.bind(current.ev);
-    const emitIndependent: typeof current.ev.emit = (event, value) => {
-      if (event === 'chats.update') {
-        const chats = value as BaileysEventMap['chats.update'];
+    // Enumerable symbols survive SDK Object.assign/spread merges without
+    // becoming persisted/public JSON. Order is capture order, never wall time.
+    const readCapture = Symbol('read-capture');
+    const archiveCapture = Symbol('archive-capture');
+    type Capture = {
+      readonly order: number;
+      readonly pendingKey: string | null;
+      readonly applied: boolean;
+    };
+    type ReadCapture = Capture & {
+      readonly count: boolean;
+      readonly marked: boolean;
+    };
+    type CapturedChat = ChatUpdate & {
+      [readCapture]?: ReadCapture;
+      [archiveCapture]?: Capture;
+    };
+    const latestCaptures = new Map<
+      string,
+      Partial<Record<keyof PendingChatState, number>>
+    >();
+    let captureOrder = 0;
+    const captureChat = (chat: CapturedChat, snapshot: boolean): void => {
+      if (!chat.id) return;
+      const jid = chat.id;
+      const pending = store.get<PendingChatState>('pending-chat', jid) ?? {};
+      const order = ++captureOrder;
+      if (
+        isUnreadCount(chat.unreadCount) ||
+        typeof chat.markedAsUnread === 'boolean'
+      )
+        chat[readCapture] = {
+          order,
+          pendingKey: pending.unread?.key ?? null,
+          applied: snapshot,
+          count: isUnreadCount(chat.unreadCount),
+          marked: typeof chat.markedAsUnread === 'boolean',
+        };
+      if (typeof chat.archived === 'boolean')
+        chat[archiveCapture] = {
+          order,
+          pendingKey: pending.archived?.key ?? null,
+          applied: snapshot,
+        };
+      const raw = { ...chat };
+      delete raw.conditional;
+      let activated = false;
+      const activate = (): void => {
+        if (activated) return;
+        activated = true;
         persist(() =>
           store.transaction(() => {
-            for (const chat of chats) store.captureChatUpdate(chat);
+            const latest = latestCaptures.get(jid) ?? {};
+            const accepted = { ...raw };
+            if (raw[readCapture]) {
+              if (order > (latest.unread ?? 0)) latest.unread = order;
+              else {
+                delete accepted.unreadCount;
+                delete accepted.markedAsUnread;
+              }
+            }
+            if (raw[archiveCapture]) {
+              if (order > (latest.archived ?? 0)) latest.archived = order;
+              else delete accepted.archived;
+            }
+            latestCaptures.set(jid, latest);
+            if (snapshot) store.observeChat(accepted);
+            else store.captureChatUpdate(accepted);
+          }),
+        );
+      };
+      const conditional = chat.conditional;
+      if (!snapshot && conditional && current.ev.isBuffering())
+        chat.conditional = (data) => {
+          const matched = conditional(data);
+          if (matched === true) activate();
+          return matched;
+        };
+      else activate();
+    };
+    const projectChat = (
+      chat: CapturedChat,
+      source: 'buffered-update' | 'buffered-snapshot',
+    ): void => {
+      const projected = { ...chat };
+      const latest = chat.id ? latestCaptures.get(chat.id) : undefined;
+      const pendingKeys: Partial<
+        Record<keyof PendingChatState, string | null>
+      > = {};
+      const read = chat[readCapture];
+      if (read) {
+        if (read.applied || latest?.unread !== read.order) {
+          delete projected.unreadCount;
+          delete projected.markedAsUnread;
+        } else {
+          if (!read.count) delete projected.unreadCount;
+          if (!read.marked) delete projected.markedAsUnread;
+          pendingKeys.unread = read.pendingKey;
+        }
+      }
+      const archive = chat[archiveCapture];
+      if (archive) {
+        if (archive.applied || latest?.archived !== archive.order)
+          delete projected.archived;
+        else pendingKeys.archived = archive.pendingKey;
+      }
+      store.observeChat(projected, source, pendingKeys);
+    };
+    const emitIndependent: typeof current.ev.emit = (event, value) => {
+      if (event === 'chats.update' || event === 'chats.upsert') {
+        const chats = value as BaileysEventMap['chats.update' | 'chats.upsert'];
+        persist(() =>
+          store.transaction(() => {
+            for (const chat of chats)
+              captureChat(chat, event === 'chats.upsert');
           }),
         );
       }
@@ -364,7 +476,7 @@ export function createRuntime(
               store.captureMessageRange(message);
             if (event === 'messaging-history.set') {
               const history = value as BaileysEventMap['messaging-history.set'];
-              for (const chat of history.chats) store.observeChat(chat);
+              for (const chat of history.chats) captureChat(chat, true);
             }
           }),
         );
@@ -517,7 +629,7 @@ export function createRuntime(
       persist(() =>
         store.transaction(() => {
           for (const chat of history.chats)
-            store.observeChat(chat, 'buffered-snapshot');
+            projectChat(chat, 'buffered-snapshot');
           for (const contact of history.contacts)
             store.observeContact(contact, 'messaging-history.set');
           for (const mapping of history.lidPnMappings ?? [])
@@ -547,7 +659,7 @@ export function createRuntime(
     current.ev.on('chats.upsert', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat);
+          for (const chat of chats) projectChat(chat, 'buffered-snapshot');
           store.event(
             'chats.upsert',
             chats.map((chat) => ({ id: chat.id })),
@@ -558,7 +670,7 @@ export function createRuntime(
     current.ev.on('chats.update', (chats) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of chats) store.observeChat(chat, 'buffered-update');
+          for (const chat of chats) projectChat(chat, 'buffered-update');
           store.event('chats.update', chats);
         }),
       ),

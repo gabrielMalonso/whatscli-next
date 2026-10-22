@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+  chatModificationToAppPatch,
   initAuthCreds,
   makeEventBuffer,
   processHistoryMessage,
+  processSyncAction,
   proto,
 } from 'baileys';
 import type {
@@ -49,7 +51,7 @@ function manualAction(
   };
 }
 
-function fixture(initial: number | null = 0) {
+function fixture(initial: number | null = 0, echo = false) {
   const directory = mkdtempSync(join(tmpdir(), 'own-read-'));
   const seed = new Store(directory);
   seed.set('auth', 'creds', {
@@ -70,7 +72,17 @@ function fixture(initial: number | null = 0) {
       ({
         ev,
         ws: { isClosed: true },
-        chatModify: async () => {},
+        chatModify: async (mod: Parameters<WASocket['chatModify']>[0]) => {
+          if (!echo) return;
+          const patch = chatModificationToAppPatch(mod, jid);
+          processSyncAction(
+            { index: patch.index, syncAction: { value: patch.syncAction } },
+            ev,
+            { id: me },
+            undefined,
+            pino({ level: 'silent' }),
+          );
+        },
         end: () => ev.emit('connection.update', { connection: 'close' }),
       }) as unknown as WASocket,
   );
@@ -592,6 +604,122 @@ test('snapshot-covered buffered keys survive restart without covering subsequent
     store.close();
   }
 });
+
+for (const command of ['archive', 'mark-read'] as const) {
+  for (const mode of [
+    'buffered-before',
+    'unbuffered-before',
+    'buffered-after',
+    'unrelated',
+  ] as const) {
+    test(`a delayed snapshot cannot resolve a newer ${command} intent (${mode})`, async () => {
+      const f = fixture(0, true);
+      const field = command === 'archive' ? 'archived' : 'unread';
+      const fields =
+        (command === 'archive') !== (mode === 'unrelated')
+          ? { archived: false }
+          : { unreadCount: 0 };
+      const intent = {
+        command,
+        jid,
+        value: command === 'archive',
+        key: `history-${command}-${mode}`,
+      };
+      try {
+        const history = {
+          chats: [{ id: jid, ...fields }],
+          contacts: [],
+          messages: [f.message('previous', base)],
+          isLatest: false,
+        };
+        if (mode !== 'unbuffered-before') f.ev.buffer();
+        if (mode !== 'buffered-after')
+          f.ev.emit('messaging-history.set', history);
+        await f.runtime.execute(intent);
+        if (mode === 'buffered-after')
+          f.ev.emit('messaging-history.set', history);
+        f.ev.flush();
+        const chat = await f.chat();
+        const replay = object(await f.runtime.execute(intent));
+        if (mode === 'buffered-after') {
+          assert.equal(chat[field], false);
+          assert.equal(object(chat.pending)[field], undefined);
+          assert.equal(object(replay.feedback).stateObservation, 'available');
+        } else {
+          assert.equal(chat[field], null);
+          assert.equal(object(object(chat.pending)[field]).key, intent.key);
+          assert.equal(
+            object(object(chat.sdkReported)[field]).requestKey,
+            intent.key,
+          );
+          assert.equal(object(replay.feedback).stateObservation, 'pending');
+        }
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+for (const [older, newer, buffered] of [
+  [0, 2, true],
+  [2, 0, true],
+  [0, 2, false],
+] as const) {
+  test(`buffered snapshots preserve the newest raw counter (${older}->${newer}, buffered=${buffered})`, async () => {
+    const f = fixture();
+    try {
+      if (buffered) f.ev.buffer();
+      for (const unreadCount of [older, newer])
+        f.ev.emit('messaging-history.set', {
+          chats: [{ id: jid, unreadCount }],
+          contacts: [],
+          messages: [f.message('previous', base)],
+          isLatest: false,
+        });
+      assert.equal((await f.chat()).unread, newer > 0);
+      f.ev.flush();
+      assert.equal((await f.chat()).unread, newer > 0);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const flushBeforeZero of [false, true]) {
+  test(`a zero covers an earlier paired upsert without retiring a later range (flushBeforeZero=${flushBeforeZero})`, async () => {
+    const f = fixture();
+    try {
+      f.ev.buffer();
+      const old = f.message('paired-before-zero', base + 10);
+      f.ev.emit('messages.upsert', { messages: [old], type: 'notify' });
+      await f.process(old);
+      if (flushBeforeZero) {
+        f.ev.flush();
+        f.ev.buffer();
+      }
+      f.ev.emit('messaging-history.set', {
+        chats: [{ id: jid, unreadCount: 0 }],
+        contacts: [],
+        messages: [f.message('previous', base)],
+        isLatest: false,
+      });
+      const fresh = f.message('paired-after-zero', base + 20);
+      f.ev.emit('messages.upsert', { messages: [fresh], type: 'notify' });
+      await f.process(fresh);
+      f.ev.flush();
+      f.receipt(old.key, base + 15);
+      assert.notEqual((await f.chat()).unread, false);
+      f.receipt(fresh.key);
+      assert.equal((await f.chat()).unread, false);
+      assert.deepEqual(object((await f.chat()).readObservation).messages, [
+        { id: fresh.key.id, timestamp: base + 20 },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 for (const incomingFirst of [false, true]) {
   test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {

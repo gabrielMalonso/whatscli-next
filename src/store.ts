@@ -104,7 +104,7 @@ export type RequestRecord = {
   );
 };
 
-type PendingChatState = {
+export type PendingChatState = {
   archived?: { key: string; value: boolean };
   unread?: { key: string; value: boolean };
 };
@@ -1001,23 +1001,13 @@ export class Store {
       | 'update'
       | 'buffered-update'
       | 'buffered-snapshot' = 'snapshot',
+    pendingKeys?: Partial<Record<keyof PendingChatState, string | null>>,
   ): void {
     const jid = chat.id;
     if (!jid) {
       this.event('incomplete-chat-key', {});
       return;
     }
-    // Raw history was observed before buffering. Its delayed zero cannot
-    // supersede content captured later, including deltas absorbed by READ.
-    const supersededSnapshot =
-      source === 'buffered-snapshot' &&
-      chat.unreadCount === 0 &&
-      (this.get<boolean>('captured-unread', jid) ||
-        Boolean(
-          this.get<BufferedMessageKey[]>('unpaired-upserts', jid)?.length,
-        ));
-    if (supersededSnapshot)
-      chat = { ...chat, unreadCount: null, markedAsUnread: null };
     const previous = this.chat(jid);
     const merged = { ...previous, ...chat };
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
@@ -1051,7 +1041,7 @@ export class Store {
       (source === 'buffered-update' || source === 'buffered-snapshot') &&
       !freshUnread &&
       previous?.unreadCount === 0 &&
-      (this.get<boolean>('captured-unread', jid) || supersededSnapshot) &&
+      this.get<boolean>('captured-unread', jid) &&
       (source === 'buffered-snapshot' ||
         chat.messages?.some(({ message }) => message?.key?.fromMe === false))
     ) {
@@ -1078,13 +1068,21 @@ export class Store {
         merged.unreadCount = null;
     }
     const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
-    if (typeof chat.archived === 'boolean') {
+    if (
+      typeof chat.archived === 'boolean' &&
+      (pendingKeys?.archived === undefined ||
+        pendingKeys.archived === (pending.archived?.key ?? null))
+    ) {
       delete pending.archived;
       delete sdkReported.archived;
     }
     // A valid counter supersedes pending state, not the request's unknown phone effect.
     // Positive counters establish unread even when they are increments, not totals.
-    if (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true) {
+    if (
+      (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true) &&
+      (pendingKeys?.unread === undefined ||
+        pendingKeys.unread === (pending.unread?.key ?? null))
+    ) {
       delete pending.unread;
       delete sdkReported.unread;
     }
@@ -1162,7 +1160,18 @@ export class Store {
       new Set(messages.map(({ id }) => id)).size !== messages.length
     ) {
       if (chat.unreadCount === 0) {
-        const pending = this.get<BufferedMessageKey[]>('unpaired-upserts', jid);
+        const pending = [
+          ...(this.get<BufferedMessageKey[]>('unpaired-upserts', jid) ?? []),
+          ...(range?.messages
+            .filter(
+              (member) =>
+                activityTimestamp(
+                  this.message({ remoteJid: jid, id: member.id, fromMe: false })
+                    ?.messageTimestamp,
+                ) !== member.timestamp,
+            )
+            .map(({ id, timestamp }) => ({ id, timestamp })) ?? []),
+        ];
         if (pending?.length) {
           const covered =
             this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
