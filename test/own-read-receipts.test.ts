@@ -3,7 +3,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { initAuthCreds, makeEventBuffer, proto } from 'baileys';
+import {
+  initAuthCreds,
+  makeEventBuffer,
+  processHistoryMessage,
+  proto,
+} from 'baileys';
 import type {
   ChatAppStateAction,
   WAMessage,
@@ -396,6 +401,64 @@ test('an exact cached replay after observed read does not block the next complet
     await f.close();
   }
 });
+
+for (const { zeroEvidence, incomingFirst } of [
+  { zeroEvidence: 'none', incomingFirst: false },
+  { zeroEvidence: 'after', incomingFirst: false },
+  { zeroEvidence: 'in-history', incomingFirst: false },
+  { zeroEvidence: 'none', incomingFirst: true },
+] as const) {
+  test(`history requires a complete read baseline (zeroEvidence=${zeroEvidence}, incomingFirst=${incomingFirst})`, async () => {
+    const f = fixture();
+    try {
+      const tracked = f.message('tracked-after-history', base + 10);
+      if (incomingFirst) f.incoming(tracked);
+      const input = proto.HistorySync.decode(
+        proto.HistorySync.encode({
+          syncType: proto.HistorySync.HistorySyncType.ON_DEMAND,
+          conversations: [
+            {
+              id: jid,
+              messages: [
+                { message: f.message('uncovered-history', base + 20) },
+              ],
+              ...(zeroEvidence === 'in-history' ? { unreadCount: 0 } : {}),
+            },
+          ],
+        }).finish(),
+      );
+      const history = processHistoryMessage(input, pino({ level: 'silent' }));
+      assert.equal(
+        history.chats[0]?.unreadCount,
+        zeroEvidence === 'in-history' ? 0 : null,
+      );
+      f.ev.emit('messaging-history.set', {
+        ...history,
+        progress: history.progress ?? null,
+        syncType: history.syncType ?? null,
+        pastParticipants: history.pastParticipants ?? null,
+        isLatest: false,
+      });
+      if (zeroEvidence === 'after')
+        f.ev.emit('chats.update', [{ id: jid, unreadCount: 0 }]);
+      f.ev.buffer();
+      if (!incomingFirst) {
+        f.ev.emit('messages.upsert', { messages: [tracked], type: 'notify' });
+        await f.process(tracked);
+      }
+      f.receipt(tracked.key, base + 15);
+      f.ev.flush();
+      if (zeroEvidence === 'none') {
+        assert.notEqual((await f.chat()).unread, false);
+        assert.equal((await f.chat()).readObservation, undefined);
+      } else {
+        assert.equal((await f.chat()).unread, false);
+      }
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 for (const incomingFirst of [false, true]) {
   test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {

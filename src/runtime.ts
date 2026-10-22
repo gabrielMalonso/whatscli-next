@@ -354,8 +354,9 @@ export function createRuntime(
           }),
         );
       }
-      if (event === 'messages.upsert') {
-        const upsert = value as BaileysEventMap['messages.upsert'];
+      if (event === 'messages.upsert' || event === 'messaging-history.set') {
+        const upsert = value as BaileysEventMap[
+          'messages.upsert' | 'messaging-history.set'];
         persist(() =>
           store.transaction(() => {
             // A type change can flush earlier receipts inside the SDK's emit().
