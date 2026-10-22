@@ -362,6 +362,10 @@ export function createRuntime(
             // A type change can flush earlier receipts inside the SDK's emit().
             for (const message of upsert.messages)
               store.captureMessageRange(message);
+            if (event === 'messaging-history.set') {
+              const history = value as BaileysEventMap['messaging-history.set'];
+              for (const chat of history.chats) store.observeChat(chat);
+            }
           }),
         );
       }
@@ -512,7 +516,8 @@ export function createRuntime(
     current.ev.on('messaging-history.set', (history) =>
       persist(() =>
         store.transaction(() => {
-          for (const chat of history.chats) store.observeChat(chat);
+          for (const chat of history.chats)
+            store.observeChat(chat, 'buffered-snapshot');
           for (const contact of history.contacts)
             store.observeContact(contact, 'messaging-history.set');
           for (const mapping of history.lidPnMappings ?? [])

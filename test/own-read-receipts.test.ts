@@ -460,6 +460,139 @@ for (const { zeroEvidence, incomingFirst } of [
   });
 }
 
+for (const mode of [
+  'buffered-before',
+  'unbuffered-before',
+  'buffered-after',
+] as const) {
+  test(`a history zero only covers content captured before it (${mode})`, async () => {
+    const f = fixture();
+    try {
+      const history = {
+        chats: [{ id: jid, unreadCount: 0 }],
+        contacts: [],
+        messages: [f.message('previous', base)],
+        isLatest: false,
+      };
+      if (mode !== 'unbuffered-before') f.ev.buffer();
+      if (mode !== 'buffered-after')
+        f.ev.emit('messaging-history.set', history);
+      await f.recover(f.message('unpaired-after-zero', base + 20));
+      if (mode === 'buffered-after')
+        f.ev.emit('messaging-history.set', history);
+      f.ev.flush();
+      if (mode === 'buffered-after') {
+        assert.equal((await f.chat()).unread, false);
+      } else {
+        assert.notEqual((await f.chat()).unread, false);
+        const tracked = f.message('tracked-after-old-zero', base + 10);
+        f.ev.buffer();
+        f.ev.emit('messages.upsert', { messages: [tracked], type: 'notify' });
+        await f.process(tracked);
+        f.receipt(tracked.key, base + 15);
+        f.ev.flush();
+        assert.notEqual((await f.chat()).unread, false);
+        assert.equal((await f.chat()).readObservation, undefined);
+      }
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const initial of [0, null]) {
+  test(`a buffered history zero preserves later paired coverage and requires both receipts (initial=${initial})`, async () => {
+    const f = fixture(initial);
+    try {
+      f.ev.buffer();
+      f.ev.emit('messaging-history.set', {
+        chats: [{ id: jid, unreadCount: 0 }],
+        contacts: [],
+        messages: [f.message('previous', base)],
+        isLatest: false,
+      });
+      const first = f.message('paired-after-zero-A', base + 10);
+      const second = f.message('paired-after-zero-B', base + 20);
+      for (const message of [first, second]) {
+        f.ev.emit('messages.upsert', { messages: [message], type: 'notify' });
+        await f.process(message);
+      }
+      f.receipt(first.key, base + 15);
+      f.ev.flush();
+      assert.notEqual((await f.chat()).unread, false);
+      f.receipt(second.key);
+      assert.equal((await f.chat()).unread, false);
+      assert.deepEqual(object((await f.chat()).readObservation).messages, [
+        { id: first.key.id, timestamp: base + 10 },
+        { id: second.key.id, timestamp: base + 20 },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('a snapshot zero covers earlier unpaired content without retiring later complete coverage', async () => {
+  const f = fixture();
+  try {
+    f.ev.buffer();
+    await f.recover(f.message('covered-before-zero', base + 20));
+    f.ev.emit('messaging-history.set', {
+      chats: [{ id: jid, unreadCount: 0 }],
+      contacts: [],
+      messages: [f.message('previous', base)],
+      isLatest: false,
+    });
+    const tracked = f.message('tracked-after-zero', base + 10);
+    f.ev.emit('messages.upsert', { messages: [tracked], type: 'notify' });
+    await f.process(tracked);
+    f.receipt(tracked.key, base + 15);
+    f.ev.flush();
+    assert.equal((await f.chat()).unread, false);
+    assert.deepEqual(object((await f.chat()).readObservation).messages, [
+      { id: tracked.key.id, timestamp: base + 10 },
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test('snapshot-covered buffered keys survive restart without covering subsequent content', async () => {
+  const f = fixture();
+  const covered = f.message('covered-before-zero', base + 20);
+  f.ev.buffer();
+  await f.recover(covered);
+  f.ev.emit('messaging-history.set', {
+    chats: [{ id: jid, unreadCount: 0 }],
+    contacts: [],
+    messages: [f.message('previous', base)],
+    isLatest: false,
+  });
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    store.observeMessage(covered, true, 'notify');
+    assert.equal(store.chatView(jid)?.unread, false);
+    const tracked = f.message('after-restart', base + 30);
+    const update = {
+      id: jid,
+      unreadCount: 1,
+      messages: [{ message: tracked }],
+    };
+    store.captureChatUpdate(update);
+    store.observeChat(update, 'buffered-update');
+    store.observeMessage(tracked, true, 'notify');
+    assert.equal(store.chatView(jid)?.unread, true);
+    store.observeOwnReadReceipt(tracked.key, base + 100);
+    assert.equal(store.chatView(jid)?.unread, false);
+    assert.deepEqual(object(store.chatView(jid)?.readObservation).messages, [
+      { id: tracked.key.id, timestamp: base + 30 },
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
 for (const incomingFirst of [false, true]) {
   test(`a newer snapshot retires the older patch qualification before its deduplicated counter (incomingFirst=${incomingFirst})`, async () => {
     const f = fixture();

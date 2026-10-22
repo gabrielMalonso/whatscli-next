@@ -123,7 +123,7 @@ type ReceiptUnreadRange = {
   }[];
 };
 
-type UnpairedUpsert = { id: string; timestamp: number | null };
+type BufferedMessageKey = { id: string; timestamp: number | null };
 
 type ManualUnreadMarker = { awaitingCounter: boolean } & (
   | { qualified: false }
@@ -665,6 +665,7 @@ export class Store {
       'read-reconciliation',
       'captured-unread',
       'unpaired-upserts',
+      'read-covered-upserts',
     ])
       this.set(category, jid, null);
   }
@@ -911,7 +912,7 @@ export class Store {
       (!rebase && chatOutput(chat).unread !== false) ||
       pending?.unread ||
       (!rebase && this.get<boolean>('captured-unread', event.jid)) ||
-      this.get<UnpairedUpsert[]>('unpaired-upserts', event.jid)?.length ||
+      this.get<BufferedMessageKey[]>('unpaired-upserts', event.jid)?.length ||
       marker ||
       (!rebase && range?.messages.length) ||
       timestamp === undefined ||
@@ -995,26 +996,42 @@ export class Store {
 
   observeChat(
     chat: ChatUpdate,
-    source: 'snapshot' | 'update' | 'buffered-update' = 'snapshot',
+    source:
+      | 'snapshot'
+      | 'update'
+      | 'buffered-update'
+      | 'buffered-snapshot' = 'snapshot',
   ): void {
-    if (!chat.id) {
+    const jid = chat.id;
+    if (!jid) {
       this.event('incomplete-chat-key', {});
       return;
     }
-    const previous = this.chat(chat.id);
+    // Raw history was observed before buffering. Its delayed zero cannot
+    // supersede content captured later, including deltas absorbed by READ.
+    const supersededSnapshot =
+      source === 'buffered-snapshot' &&
+      chat.unreadCount === 0 &&
+      (this.get<boolean>('captured-unread', jid) ||
+        Boolean(
+          this.get<BufferedMessageKey[]>('unpaired-upserts', jid)?.length,
+        ));
+    if (supersededSnapshot)
+      chat = { ...chat, unreadCount: null, markedAsUnread: null };
+    const previous = this.chat(jid);
     const merged = { ...previous, ...chat };
-    const pending = this.get<PendingChatState>('pending-chat', chat.id) ?? {};
+    const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
     if (
       isUnreadCount(chat.unreadCount) ||
       typeof chat.markedAsUnread === 'boolean'
     ) {
       if (source === 'update') this.captureChatUpdate(chat);
       else if (source === 'snapshot') {
-        this.set('manual-unread-marker', chat.id, null);
+        this.set('manual-unread-marker', jid, null);
         this.trackUnreadRange(chat, previous, pending, source);
       }
-      this.set('chat-read-observation', chat.id, null);
-      this.set('read-reconciliation', chat.id, null);
+      this.set('chat-read-observation', jid, null);
+      this.set('read-reconciliation', jid, null);
     }
     // Null/absent fields are neutral SDK updates, not observations of false.
     merged.archived =
@@ -1031,11 +1048,12 @@ export class Store {
     // READ absorption can remove a buffered delta. Without complete receipt
     // coverage that absence cannot preserve a stale zero as a new read result.
     if (
-      source === 'buffered-update' &&
+      (source === 'buffered-update' || source === 'buffered-snapshot') &&
       !freshUnread &&
       previous?.unreadCount === 0 &&
-      this.get<boolean>('captured-unread', chat.id) &&
-      chat.messages?.some(({ message }) => message?.key?.fromMe === false)
+      (this.get<boolean>('captured-unread', jid) || supersededSnapshot) &&
+      (source === 'buffered-snapshot' ||
+        chat.messages?.some(({ message }) => message?.key?.fromMe === false))
     ) {
       merged.unreadCount = null;
       merged.markedAsUnread = null;
@@ -1045,8 +1063,7 @@ export class Store {
       if (chat.unreadCount === 0 || chat.unreadCount === -1)
         merged.markedAsUnread = chat.unreadCount === -1;
       else if (
-        this.get<ReceiptUnreadRange>('receipt-unread-range', chat.id)
-          ?.manualMarker
+        this.get<ReceiptUnreadRange>('receipt-unread-range', jid)?.manualMarker
       )
         merged.markedAsUnread = false;
     }
@@ -1060,7 +1077,7 @@ export class Store {
       )
         merged.unreadCount = null;
     }
-    const sdkReported = this.get<SdkChatState>('sdk-chat-state', chat.id) ?? {};
+    const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
     if (typeof chat.archived === 'boolean') {
       delete pending.archived;
       delete sdkReported.archived;
@@ -1073,14 +1090,10 @@ export class Store {
     }
     this.set(
       'sdk-chat-state',
-      chat.id,
+      jid,
       Object.keys(sdkReported).length ? sdkReported : null,
     );
-    this.set(
-      'pending-chat',
-      chat.id,
-      Object.keys(pending).length ? pending : null,
-    );
+    this.set('pending-chat', jid, Object.keys(pending).length ? pending : null);
     // SDK event-buffer conditions are functions, not persisted state.
     delete merged.conditional;
     this.db
@@ -1088,12 +1101,12 @@ export class Store {
         `INSERT INTO chats(jid,json,observed_at) VALUES (?,?,?)
       ON CONFLICT(jid) DO UPDATE SET json=excluded.json,observed_at=excluded.observed_at`,
       )
-      .run(chat.id, encode(merged), Date.now());
+      .run(jid, encode(merged), Date.now());
     this.observeChatActivity(chat);
     // Persist loss of coverage across a crash before flush. Only a persisted
     // counter/positive manual observation supersedes that pre-buffer evidence.
     if (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true)
-      this.set('captured-unread', chat.id, null);
+      this.set('captured-unread', jid, null);
   }
 
   private trackUnreadRange(
@@ -1148,7 +1161,25 @@ export class Store {
       messages.length !== chat.unreadCount ||
       new Set(messages.map(({ id }) => id)).size !== messages.length
     ) {
-      if (chat.unreadCount === 0) this.set('unpaired-upserts', jid, null);
+      if (chat.unreadCount === 0) {
+        const pending = this.get<BufferedMessageKey[]>('unpaired-upserts', jid);
+        if (pending?.length) {
+          const covered =
+            this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
+          this.set('read-covered-upserts', jid, [
+            ...covered.filter(
+              (entry) =>
+                !pending.some(
+                  (member) =>
+                    member.id === entry.id &&
+                    member.timestamp === entry.timestamp,
+                ),
+            ),
+            ...pending,
+          ]);
+          this.set('unpaired-upserts', jid, null);
+        }
+      }
       this.set('receipt-unread-range', jid, null);
       this.set(
         'manual-unread-marker',
@@ -1164,7 +1195,7 @@ export class Store {
       );
       return;
     }
-    const unpaired = this.get<UnpairedUpsert[]>('unpaired-upserts', jid);
+    const unpaired = this.get<BufferedMessageKey[]>('unpaired-upserts', jid);
     if (unpaired) {
       const remaining = unpaired.filter(
         (entry) =>
@@ -1325,7 +1356,9 @@ export class Store {
       return;
     }
     if (range.messages.some(({ readAt }) => readAt === undefined)) return;
-    if (this.get<UnpairedUpsert[]>('unpaired-upserts', key.remoteJid)?.length)
+    if (
+      this.get<BufferedMessageKey[]>('unpaired-upserts', key.remoteJid)?.length
+    )
       return;
     if (range.manualMarker && range.messages.some(({ notified }) => !notified))
       return;
@@ -1433,7 +1466,25 @@ export class Store {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || fromMe !== false || participant) return;
     const timestamp = activityTimestamp(message.messageTimestamp);
-    const pending = this.get<UnpairedUpsert[]>('unpaired-upserts', jid) ?? [];
+    const covered =
+      this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
+    if (
+      covered.some((entry) => entry.id === id && entry.timestamp === timestamp)
+    ) {
+      if (phase === 'observed') {
+        const remaining = covered.filter(
+          (entry) => entry.id !== id || entry.timestamp !== timestamp,
+        );
+        this.set(
+          'read-covered-upserts',
+          jid,
+          remaining.length ? remaining : null,
+        );
+      }
+      return;
+    }
+    const pending =
+      this.get<BufferedMessageKey[]>('unpaired-upserts', jid) ?? [];
     const captured = pending.some(
       (entry) => entry.id === id && entry.timestamp === timestamp,
     );
@@ -1450,9 +1501,16 @@ export class Store {
       )
     )
       return;
+    const previous = this.message(message.key);
+    if (
+      phase === 'observed' &&
+      !captured &&
+      previous &&
+      activityTimestamp(previous.messageTimestamp) === timestamp
+    )
+      return;
     const marker = this.get<ManualUnreadMarker>('manual-unread-marker', jid);
     if (phase === 'buffered' && id) {
-      const previous = this.message(message.key);
       if (
         !range &&
         !marker &&
@@ -1465,7 +1523,7 @@ export class Store {
           (entry) => entry.id !== id || entry.timestamp !== timestamp,
         ),
         { id, timestamp },
-      ] satisfies UnpairedUpsert[]);
+      ] satisfies BufferedMessageKey[]);
       return;
     }
     if (!range && !marker && !captured) return;
