@@ -208,6 +208,119 @@ function occupied(directory: string) {
   };
 }
 
+test('the next append describes expired records by source, command and original time interval once', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  let now = Date.now() - 1000;
+  const from = new Date(now).toISOString();
+  let elapsed = 0;
+  const observer = new Observability(
+    directory,
+    'runtime',
+    () => now,
+    () => elapsed,
+  );
+  const gate = occupied(directory);
+  try {
+    observer.record('transport', { action: 'status' }, 'daemon');
+    now += 10;
+    const to = new Date(now).toISOString();
+    observer.record('transport', { action: 'status' }, 'daemon');
+    observer.record('execution', { action: 'messages' });
+    elapsed = 25;
+    await observer.drain();
+    assert.equal(observer.status().dropped, 3);
+    gate.set(false);
+    observer.record('execution', { action: 'contact' });
+    observer.record('sample');
+    await observer.close();
+    const rows = queryObservability(directory, {}).records;
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.dropped, 3);
+    assert.deepEqual(rows[0]?.captureLoss, {
+      groups: [
+        {
+          reason: 'lock-expired',
+          origin: 'daemon',
+          category: 'transport',
+          action: 'status',
+          count: 2,
+          from,
+          to,
+        },
+        {
+          reason: 'lock-expired',
+          origin: 'runtime',
+          category: 'execution',
+          action: 'messages',
+          count: 1,
+          from: to,
+          to,
+        },
+      ],
+      unattributed: 0,
+    });
+    assert.equal(rows[1]?.captureLoss, undefined);
+    assert.equal(rows[1]?.dropped, 0);
+  } finally {
+    gate.restore();
+  }
+});
+
+test('loss group overflow preserves totals and never publishes private selectors or error text', async () => {
+  const directory = temporary();
+  configureObservability(directory, true);
+  let elapsed = 0;
+  const observer = new Observability(
+    directory,
+    'runtime',
+    Date.now,
+    () => elapsed,
+  );
+  const gate = occupied(directory);
+  try {
+    for (let index = 0; index < 16; index++) observer.record('sample');
+    for (const action of [
+      'status',
+      'messages',
+      'contact',
+      'chat',
+      'archive',
+      'send',
+    ] as const)
+      observer.record('execution', {
+        action,
+        resource: 'FICTIONAL_PRIVATE_SELECTOR',
+      });
+    gate.set(false);
+    await observer.drain();
+    const rows = queryObservability(directory, {}).records;
+    assert.equal(rows[0]?.dropped, 6);
+    assert.equal(rows[0]?.captureLoss?.groups.length, 4);
+    assert.ok(
+      rows[0]?.captureLoss?.groups.every(
+        (group) => group.reason === 'buffer-overflow' && group.count === 1,
+      ),
+    );
+    assert.equal(rows[0]?.captureLoss?.unattributed, 2);
+    assert.ok(
+      rows.every(
+        (row) => Buffer.byteLength(JSON.stringify(row) + '\n') <= 4096,
+      ),
+    );
+    assert.doesNotMatch(
+      JSON.stringify(contents(directory)),
+      /FICTIONAL_PRIVATE_SELECTOR/,
+    );
+    assert.ok(rows.slice(1).every((row) => row.captureLoss === undefined));
+    await observer.close();
+  } finally {
+    elapsed = 25;
+    gate.restore();
+    await observer.close();
+  }
+});
+
 for (const busy of [false, true])
   test(`a late retry callback makes one final attempt without renewing its timer: busy=${busy}`, async (t) => {
     const directory = temporary();
@@ -437,6 +550,7 @@ test('reentrant capture stays FIFO and a later failure is not erased by the olde
   const directory = temporary();
   configureObservability(directory, true);
   const observer = new Observability(directory, 'runtime');
+  observer.failure();
   const write = fs.writeSync;
   let reentered = false;
   fs.writeSync = ((
@@ -472,6 +586,13 @@ test('reentrant capture stays FIFO and a later failure is not erased by the olde
   assert.deepEqual(
     rows.map((row) => row.uncertain),
     [0, 1],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.captureLoss),
+    [
+      { groups: [], unattributed: 1 },
+      { groups: [], unattributed: 1 },
+    ],
   );
   assert.equal(observer.status().uncertain, 1);
   assert.equal(observer.status().buffer.captured, 2);

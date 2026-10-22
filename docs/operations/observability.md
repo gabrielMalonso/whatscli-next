@@ -75,6 +75,8 @@ Capture is best effort. Every status and query reports `captureCompleteness: "un
 
 Current `dropped` counts known incomplete appends; `uncertain` counts write exceptions where bytes may already exist. Cleanup and hashing failures have separate health indicators and counters. Legacy rows may lack `uncertain` and use the older, broader meaning of dropped. Counters belong to one recorder, not a global missing-row total.
 
+The next successful append carries `captureLoss` alongside its `dropped`/`uncertain` counts. Up to four groups identify the lost record's `origin`, `category`, `action`, `count`, and original timestamp interval (`from`/`to`). Reasons distinguish `lock-expired` (the final acquisition was still busy), `buffer-overflow`, `scheduler-unavailable`, `append-incomplete`, and `write-uncertain` (bytes may exist). `unattributed` counts failures without record context or beyond the group limit. This summary describes preceding failures in the same recorder, not failures of the row carrying it. It contains no selectors or error text; legacy rows omit it. Failed appends retain the summary for a later attempt, but process exit before successful capture can lose it.
+
 ### Loss evidence
 
 A known incomplete or uncertain attempt makes one non-waiting attempt to create `loss-v1.json`.

@@ -34,6 +34,7 @@ export const OBS_LIMITS = {
   sampleMs: 60_000,
 } as const;
 const captureLimits = { records: 16, bytes: 64 * 1024, retryMs: 25 } as const;
+const lossGroupLimit = 4;
 const dayMs = 86400000;
 // A segment contains one UTC day's records. Expire only after that whole day
 // leaves the query window; per-record timestamps enforce its exact five days.
@@ -87,15 +88,35 @@ const actions = [
   'observability',
 ] as const;
 export type ObsAction = (typeof actions)[number];
-export type ObsOrigin = 'cli' | 'rpc' | 'daemon' | 'probe' | 'runtime';
-export type ObsCategory =
-  | 'command'
-  | 'transport'
-  | 'execution'
-  | 'parser'
-  | 'lifecycle'
-  | 'diagnostic'
-  | 'sample';
+const origins = ['cli', 'rpc', 'daemon', 'probe', 'runtime'] as const;
+const categories = [
+  'command',
+  'transport',
+  'execution',
+  'parser',
+  'lifecycle',
+  'diagnostic',
+  'sample',
+] as const;
+export type ObsOrigin = (typeof origins)[number];
+export type ObsCategory = (typeof categories)[number];
+const lossReasons = [
+  'lock-expired',
+  'buffer-overflow',
+  'scheduler-unavailable',
+  'append-incomplete',
+  'write-uncertain',
+] as const;
+type LossGroup = {
+  reason: (typeof lossReasons)[number];
+  origin: ObsOrigin;
+  category: ObsCategory;
+  action: ObsAction;
+  count: number;
+  from: string;
+  to: string;
+};
+type CaptureLoss = { groups: LossGroup[]; unattributed: number };
 type Preference = {
   version: 1;
   enabled: boolean;
@@ -167,6 +188,7 @@ export type ObsRecord = ObsFields & {
   session: string;
   dropped: number;
   uncertain?: number;
+  captureLoss?: CaptureLoss;
   evicted: number;
   expired: number;
 };
@@ -756,7 +778,7 @@ export function safeObsFields(input: ObsFields): ObsFields {
 type CaptureOutcome = 'invalidated' | 'not-written' | 'uncertain' | 'captured';
 type CaptureBase = Omit<
   ObsRecord,
-  'dropped' | 'uncertain' | 'evicted' | 'expired'
+  'dropped' | 'uncertain' | 'captureLoss' | 'evicted' | 'expired'
 >;
 type CaptureSnapshot = Readonly<{
   base: Readonly<CaptureBase>;
@@ -790,6 +812,7 @@ export class Observability {
   private totalDropped = 0;
   private uncertain = 0;
   private totalUncertain = 0;
+  private captureLoss: CaptureLoss = { groups: [], unattributed: 0 };
   private failed = false;
   private cleanupFailed = false;
   private cleanupFailures = 0;
@@ -911,8 +934,9 @@ export class Observability {
     origin: ObsOrigin = this.origin,
     outcome: 'dropped' | 'uncertain' = 'dropped',
     lease?: PreferenceLease,
+    snapshot?: CaptureSnapshot,
   ): void {
-    this.countFailure(outcome);
+    this.countFailure(outcome, snapshot);
     try {
       if (this.enabled) persistLoss(this.directory, origin, this.now(), lease);
     } catch {
@@ -920,7 +944,13 @@ export class Observability {
     }
     this.warn();
   }
-  private countFailure(outcome: 'dropped' | 'uncertain'): void {
+  private countFailure(
+    outcome: 'dropped' | 'uncertain',
+    snapshot?: CaptureSnapshot,
+    reason: LossGroup['reason'] = outcome === 'uncertain'
+      ? 'write-uncertain'
+      : 'append-incomplete',
+  ): void {
     this.failed = true;
     if (outcome === 'dropped') {
       this.dropped++;
@@ -929,6 +959,37 @@ export class Observability {
       this.uncertain++;
       this.totalUncertain++;
     }
+    if (snapshot)
+      this.addLossGroup({
+        reason,
+        origin: snapshot.base.origin,
+        category: snapshot.base.category,
+        action: snapshot.base.action ?? 'unknown',
+        count: 1,
+        from: snapshot.base.timestamp,
+        to: snapshot.base.timestamp,
+      });
+    else this.captureLoss.unattributed++;
+  }
+  private addLossGroup(group: LossGroup): void {
+    const index = this.captureLoss.groups.findIndex(
+      (item) =>
+        item.reason === group.reason &&
+        item.origin === group.origin &&
+        item.category === group.category &&
+        item.action === group.action,
+    );
+    const previous = this.captureLoss.groups[index];
+    if (previous)
+      this.captureLoss.groups[index] = {
+        ...previous,
+        count: previous.count + group.count,
+        from: previous.from < group.from ? previous.from : group.from,
+        to: previous.to > group.to ? previous.to : group.to,
+      };
+    else if (this.captureLoss.groups.length < lossGroupLimit)
+      this.captureLoss.groups.push(group);
+    else this.captureLoss.unattributed += group.count;
   }
   private cleanupFailure(): void {
     this.cleanupFailed = true;
@@ -1110,7 +1171,15 @@ export class Observability {
     const count = (): void => {
       counted = true;
       this.capture[reason]++;
-      this.countFailure('dropped');
+      this.countFailure(
+        'dropped',
+        snapshot,
+        reason === 'expired'
+          ? 'lock-expired'
+          : reason === 'overflow'
+            ? 'buffer-overflow'
+            : 'scheduler-unavailable',
+      );
       this.warn();
     };
     try {
@@ -1157,6 +1226,7 @@ export class Observability {
             snapshot.base.origin,
             result.kind === 'uncertain' ? 'uncertain' : 'dropped',
             snapshot.lease,
+            snapshot,
           );
         this.releaseLease(snapshot.lease);
       }
@@ -1238,6 +1308,7 @@ export class Observability {
     const attempt: { outcome: CaptureOutcome } = {
       outcome: 'not-written',
     };
+    let lossCarry: CaptureLoss | undefined;
     try {
       this.capture.lockAttempts++;
       exclusive(this.directory, () => {
@@ -1315,9 +1386,16 @@ export class Observability {
         // Counters describe failures preceding this APPEND, even when the admitted
         // snapshot is older. Subtract only this carry after a complete write.
         const carry = { dropped: this.dropped, uncertain: this.uncertain };
+        // Detach the carried groups so reentrant failures keep their own counts
+        // and timestamps. A failed append restores this carry below.
+        lossCarry = this.captureLoss;
+        this.captureLoss = { groups: [], unattributed: 0 };
         const record: ObsRecord = {
           ...snapshot.base,
           ...carry,
+          ...(carry.dropped || carry.uncertain
+            ? { captureLoss: lossCarry }
+            : {}),
           evicted,
           expired,
         };
@@ -1379,6 +1457,13 @@ export class Observability {
       if (attempt.outcome === 'captured' || attempt.outcome === 'invalidated')
         this.cleanupFailure();
       return { kind: attempt.outcome };
+    } finally {
+      if (lossCarry && attempt.outcome !== 'captured') {
+        const pending = this.captureLoss;
+        this.captureLoss = lossCarry;
+        for (const group of pending.groups) this.addLossGroup(group);
+        this.captureLoss.unattributed += pending.unattributed;
+      }
     }
   }
 }
@@ -1517,18 +1602,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
           !/^[a-f0-9]{32}$/.test(row.generation) ||
           typeof row.session !== 'string' ||
           !/^[a-f0-9]{32}$/.test(row.session) ||
-          !['cli', 'rpc', 'daemon', 'probe', 'runtime'].includes(
-            row.origin ?? '',
-          ) ||
-          ![
-            'command',
-            'transport',
-            'execution',
-            'parser',
-            'lifecycle',
-            'diagnostic',
-            'sample',
-          ].includes(row.category ?? '')
+          !origins.includes(row.origin!) ||
+          !categories.includes(row.category!)
         )
           throw new Error();
         if (
@@ -1554,6 +1629,8 @@ export function queryObservability(directory: string, query: ObsQuery) {
           evicted: safeCounter(row.evicted),
           expired: safeCounter(row.expired),
         };
+        const captureLoss = safeCaptureLoss(row.captureLoss);
+        if (captureLoss) record.captureLoss = captureLoss;
         if (
           (query.action && record.action !== query.action) ||
           (query.origin && record.origin !== query.origin) ||
@@ -1658,4 +1735,56 @@ function safeCounter(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
     ? value
     : 0;
+}
+
+function canonicalTimestamp(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length === 24 &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
+}
+
+/** Loss details are recorder-owned metadata, never arbitrary error text/selectors. */
+function safeCaptureLoss(input: unknown): CaptureLoss | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+  const loss = input as Partial<CaptureLoss>;
+  if (
+    !Array.isArray(loss.groups) ||
+    loss.groups.length > lossGroupLimit ||
+    safeCounter(loss.unattributed) !== loss.unattributed
+  )
+    return;
+  const groups: LossGroup[] = [];
+  for (const value of loss.groups) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const row = value as Partial<LossGroup>;
+    const reason = lossReasons.find((value) => value === row.reason);
+    const origin = origins.find((value) => value === row.origin);
+    const category = categories.find((value) => value === row.category);
+    const action = actions.find((value) => value === row.action);
+    const count = safeCounter(row.count);
+    if (
+      !reason ||
+      !origin ||
+      !category ||
+      !action ||
+      !count ||
+      !canonicalTimestamp(row.from) ||
+      !canonicalTimestamp(row.to) ||
+      row.from > row.to
+    )
+      return;
+    groups.push({
+      reason,
+      origin,
+      category,
+      action,
+      count,
+      from: row.from,
+      to: row.to,
+    });
+  }
+  return { groups, unattributed: loss.unattributed };
 }
