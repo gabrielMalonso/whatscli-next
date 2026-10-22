@@ -928,3 +928,153 @@ test('a discarded conditional SDK update cannot retire newer qualified coverage'
     await f.close();
   }
 });
+
+for (const buffered of [false, true]) {
+  test(`a remotely earlier manual action arriving after the increment rebases its observed-zero range (buffered=${buffered})`, async () => {
+    const f = fixture();
+    try {
+      if (buffered) f.ev.buffer();
+      const msg = f.incoming();
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      if (buffered) f.receipt(msg.key);
+      f.ev.flush();
+      if (!buffered) f.receipt(msg.key);
+      const chat = await f.chat();
+      assert.equal(chat.unread, false);
+      assert.equal(chat.unreadCount, 0);
+      assert.equal(chat.readReconciliation, undefined);
+      assert.deepEqual(object(chat.readObservation).replacedManualMarker, {
+        timestamp: (base + 5) * 1000,
+        frontier: base,
+        version: 1,
+      });
+      assert.deepEqual(await f.queue(), []);
+      assert.deepEqual(await f.queue(true), []);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('rebasing retains all incoming IDs and still requires full own-receipt coverage', async () => {
+  const f = fixture();
+  try {
+    const first = f.incoming(f.message('first', base + 10));
+    const second = f.incoming(f.message('second', base + 20));
+    f.receipt(first.key);
+    f.ev.emit('app-state.update', manualAction());
+    f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+    f.receipt(first.key);
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(second.key);
+    assert.equal((await f.chat()).unread, false);
+    assert.deepEqual(object((await f.chat()).readObservation).messages, [
+      { id: 'first', timestamp: base + 10 },
+      { id: 'second', timestamp: base + 20 },
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test('the observed-zero frontier survives restart before the delayed action arrives', async () => {
+  const f = fixture();
+  const msg = f.incoming();
+  await f.close();
+  const store = new Store(f.directory);
+  try {
+    store.recordAppStateChatAction(manualAction());
+    store.captureChatUpdate({ id: jid, unreadCount: -1 });
+    store.observeChat({ id: jid, unreadCount: -1 }, 'buffered-update');
+    store.observeOwnReadReceipt(msg.key, base + 100);
+    assert.equal(store.chatView(jid)?.unread, false);
+  } finally {
+    store.close();
+  }
+});
+
+for (const initial of [null, 2, -1]) {
+  test(`a delayed action cannot rebase an unknown/nonzero origin (${initial})`, async () => {
+    const f = fixture(initial);
+    try {
+      const msg = f.incoming();
+      f.ev.emit('app-state.update', manualAction());
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      f.receipt(msg.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const invalid of [
+  'posterior-action',
+  'same-second',
+  'unpaired-marker',
+  'read-intent',
+  'unread-intent',
+  'late-intent',
+  'incomplete',
+  'append',
+  'replay',
+  'untracked-notify',
+  'untracked-history',
+  'unknown-frontier',
+  'prior-read-after-action',
+] as const) {
+  test(`a delayed manual action cannot rebase ${invalid} evidence`, async () => {
+    const f = fixture();
+    try {
+      if (invalid === 'prior-read-after-action') {
+        const earlier = f.incoming(f.message('earlier-covered', base - 1));
+        f.receipt(earlier.key, base + 7);
+      }
+      if (invalid === 'read-intent' || invalid === 'unread-intent')
+        await f.runtime.execute({
+          command: 'mark-read',
+          jid,
+          value: invalid === 'read-intent',
+          key: 'intervening-intent',
+        });
+      const msg = f.incoming(undefined, invalid === 'incomplete' ? 2 : 1);
+      if (invalid === 'late-intent')
+        await f.runtime.execute({
+          command: 'mark-read',
+          jid,
+          value: true,
+          key: 'late-intent',
+        });
+      if (invalid === 'append')
+        f.ev.emit('messages.upsert', { messages: [msg], type: 'append' });
+      if (invalid === 'replay') f.incoming(msg);
+      if (invalid === 'untracked-notify' || invalid === 'untracked-history')
+        f.ev.emit('messages.upsert', {
+          messages: [f.message('untracked', base + 20)],
+          type: invalid === 'untracked-notify' ? 'notify' : 'append',
+        });
+      const action = manualAction(
+        invalid === 'posterior-action'
+          ? (base + 20) * 1000
+          : invalid === 'same-second'
+            ? (base + 10) * 1000
+            : undefined,
+      );
+      if (invalid === 'unknown-frontier' && action.messageRange)
+        action.messageRange.messages = [
+          { id: 'not-stored', fromMe: false, timestamp: base },
+        ];
+      f.ev.emit('app-state.update', action);
+      f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      if (invalid === 'unpaired-marker')
+        f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      f.receipt(msg.key);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}

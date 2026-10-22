@@ -112,6 +112,8 @@ type PendingChatState = {
 type ReceiptUnreadRange = {
   // Earlier persisted ranges omitted this and required an observed-zero baseline.
   baseline?: 'observed-read' | 'manual-unread';
+  // Last message boundary at the observed zero, before the first increment.
+  readFrontier?: { timestamp: number; readAt?: number };
   manualMarker?: { timestamp: number; frontier: number; version: number };
   messages: {
     id: string;
@@ -862,6 +864,17 @@ export class Store {
       'manual-unread-marker',
       event.jid,
     );
+    const timestamp = event.timestamp;
+    const frontier = event.messageRange?.lastMessageTimestamp;
+    const members = event.messageRange?.messages;
+    const rebase =
+      !marker &&
+      range?.baseline === 'observed-read' &&
+      range.readFrontier !== undefined &&
+      range.readFrontier.timestamp === frontier &&
+      timestamp !== undefined &&
+      range.messages.length > 0 &&
+      range.messages.every((message) => message.timestamp * 1000 > timestamp);
     // An unbuffered new action retires message coverage before its legacy
     // counter can be delayed/merged. This never promotes observed chat state.
     this.set('receipt-unread-range', event.jid, null);
@@ -877,17 +890,14 @@ export class Store {
         ? { timestamp: event.timestamp }
         : {}),
     });
-    const timestamp = event.timestamp;
-    const frontier = event.messageRange?.lastMessageTimestamp;
-    const members = event.messageRange?.messages;
     if (
       event.action.read ||
       !chat ||
-      chatOutput(chat).unread !== false ||
+      (!rebase && chatOutput(chat).unread !== false) ||
       pending?.unread ||
-      this.get<boolean>('captured-unread', event.jid) ||
+      (!rebase && this.get<boolean>('captured-unread', event.jid)) ||
       marker ||
-      range?.messages.length ||
+      (!rebase && range?.messages.length) ||
       timestamp === undefined ||
       !Number.isSafeInteger(timestamp) ||
       timestamp <= 0 ||
@@ -907,19 +917,11 @@ export class Store {
           member.timestamp <= 0 ||
           member.timestamp > frontier,
       ) ||
-      !this.chatMutationMessages(event.jid).some(
-        (message) =>
-          activityTimestamp(message.messageTimestamp) === frontier &&
-          members.some(
-            (member) =>
-              member.id === message.key.id &&
-              member.fromMe === message.key.fromMe &&
-              member.timestamp === frontier,
-          ),
-      ) ||
-      this.chatMutationMessages(event.jid).some(
-        (message) => activityTimestamp(message.messageTimestamp) !== frontier,
-      ) ||
+      !members.some((member) => member.timestamp === frontier) ||
+      (!rebase &&
+        this.chatMutationMessages(event.jid).some(
+          (message) => activityTimestamp(message.messageTimestamp) !== frontier,
+        )) ||
       members.some(
         (member) =>
           !member.id ||
@@ -934,11 +936,10 @@ export class Store {
       )
     )
       return;
-    const read = this.get<{ readAt: number }>(
-      'chat-read-observation',
-      event.jid,
-    );
-    if (read && read.readAt * 1000 >= timestamp) return;
+    const read = rebase
+      ? range?.readFrontier
+      : this.get<{ readAt: number }>('chat-read-observation', event.jid);
+    if (read?.readAt !== undefined && read.readAt * 1000 >= timestamp) return;
     this.set('manual-unread-marker', event.jid, {
       qualified: true,
       awaitingCounter: true,
@@ -946,6 +947,11 @@ export class Store {
       frontier,
       version: event.version,
     } satisfies ManualUnreadMarker);
+    if (rebase && range)
+      this.set('receipt-unread-range', event.jid, {
+        ...range,
+        manualMarker: { timestamp, frontier, version: event.version },
+      } satisfies ReceiptUnreadRange);
   }
 
   captureChatUpdate(chat: ChatUpdate): void {
@@ -956,14 +962,14 @@ export class Store {
         typeof chat.markedAsUnread !== 'boolean')
     )
       return;
-    this.set('chat-read-observation', chat.id, null);
-    this.set('read-reconciliation', chat.id, null);
     this.trackUnreadRange(
       chat,
       this.chat(chat.id),
       this.get<PendingChatState>('pending-chat', chat.id) ?? {},
       'update',
     );
+    this.set('chat-read-observation', chat.id, null);
+    this.set('read-reconciliation', chat.id, null);
     if (
       (isUnreadCount(chat.unreadCount) && chat.unreadCount !== 0) ||
       chat.markedAsUnread === true
@@ -986,13 +992,13 @@ export class Store {
       isUnreadCount(chat.unreadCount) ||
       typeof chat.markedAsUnread === 'boolean'
     ) {
-      this.set('chat-read-observation', chat.id, null);
-      this.set('read-reconciliation', chat.id, null);
       if (source === 'update') this.captureChatUpdate(chat);
       else if (source === 'snapshot') {
         this.set('manual-unread-marker', chat.id, null);
         this.trackUnreadRange(chat, previous, pending, source);
       }
+      this.set('chat-read-observation', chat.id, null);
+      this.set('read-reconciliation', chat.id, null);
     }
     // Null/absent fields are neutral SDK updates, not observations of false.
     merged.archived =
@@ -1083,6 +1089,22 @@ export class Store {
     const jid = chat.id;
     if (!jid) return;
     const marker = this.get<ManualUnreadMarker>('manual-unread-marker', jid);
+    const range = previous
+      ? this.get<ReceiptUnreadRange>('receipt-unread-range', jid)
+      : undefined;
+    // The paired legacy -1 belongs to the action already rebased above;
+    // it must not retire the newer IDs a second time. An unpaired -1 still does.
+    if (
+      source === 'update' &&
+      chat.unreadCount === -1 &&
+      !chat.messages?.length &&
+      marker?.qualified &&
+      marker.awaitingCounter &&
+      range?.manualMarker?.version === marker.version
+    ) {
+      this.set('manual-unread-marker', jid, null);
+      return;
+    }
     const messages = (chat.messages ?? []).flatMap(({ message }) => {
       const timestamp = activityTimestamp(message?.messageTimestamp);
       const key = message?.key;
@@ -1125,9 +1147,6 @@ export class Store {
       );
       return;
     }
-    const range = previous
-      ? this.get<ReceiptUnreadRange>('receipt-unread-range', jid)
-      : undefined;
     if (
       pending.unread?.value === true ||
       (!range &&
@@ -1182,6 +1201,34 @@ export class Store {
     const combined = new Map(
       range?.messages.map((message) => [message.id, message]),
     );
+    let readFrontier: ReceiptUnreadRange['readFrontier'];
+    if (
+      !manualMarker &&
+      !marker &&
+      !pending.unread &&
+      messages.every(
+        (message) =>
+          !combined.has(message.id) &&
+          !this.message({ remoteJid: jid, id: message.id, fromMe: false }),
+      )
+    ) {
+      if (range) readFrontier = range.readFrontier;
+      else if (
+        previous &&
+        chatOutput(previous).unread === false &&
+        !this.get<boolean>('captured-unread', jid)
+      ) {
+        const timestamp = activityTimestamp(
+          this.chatMutationMessages(jid)[0]?.messageTimestamp,
+        );
+        const read = this.get<{ readAt: number }>('chat-read-observation', jid);
+        if (timestamp !== null)
+          readFrontier = {
+            timestamp,
+            ...(read ? { readAt: read.readAt } : {}),
+          };
+      }
+    }
     for (const message of messages) {
       if (combined.get(message.id)?.timestamp !== message.timestamp)
         combined.set(message.id, message);
@@ -1193,6 +1240,7 @@ export class Store {
           ? 'manual-unread'
           : (range?.baseline ?? 'observed-read'),
       ...(manualMarker ? { manualMarker } : {}),
+      ...(readFrontier !== undefined ? { readFrontier } : {}),
       messages: [...combined.values()],
     } satisfies ReceiptUnreadRange);
   }
@@ -1355,21 +1403,32 @@ export class Store {
   ): void {
     this.transaction(() => {
       this.writeObservedMessage(message, chatObserved);
-      if (source === undefined || !message.key.remoteJid) return;
+      if ((!chatObserved && source === undefined) || !message.key.remoteJid)
+        return;
       const range = this.get<ReceiptUnreadRange>(
         'receipt-unread-range',
         message.key.remoteJid,
       );
       const member = range?.messages.find(({ id }) => id === message.key.id);
-      if (!range?.manualMarker || !member) return;
-      if (source === 'notify') member.notified = true;
+      if (!range || (!member && range.readFrontier === undefined)) return;
+      if (
+        member &&
+        source === 'notify' &&
+        message.key.fromMe === false &&
+        !message.key.participant &&
+        activityTimestamp(message.messageTimestamp) === member.timestamp
+      )
+        member.notified = true;
       else {
-        range.baseline = 'manual-unread';
-        delete range.manualMarker;
-        this.set('manual-unread-marker', message.key.remoteJid, {
-          qualified: false,
-          awaitingCounter: false,
-        });
+        delete range.readFrontier;
+        if (range.manualMarker && source !== undefined) {
+          range.baseline = 'manual-unread';
+          delete range.manualMarker;
+          this.set('manual-unread-marker', message.key.remoteJid, {
+            qualified: false,
+            awaitingCounter: false,
+          });
+        }
       }
       this.set('receipt-unread-range', message.key.remoteJid, range);
     });
