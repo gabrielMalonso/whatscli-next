@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   chatModificationToAppPatch,
+  getChatAppStateAction,
   initAuthCreds,
   makeEventBuffer,
   processHistoryMessage,
@@ -72,16 +73,25 @@ function fixture(initial: number | null = 0, echo = false) {
       ({
         ev,
         ws: { isClosed: true },
-        chatModify: async (mod: Parameters<WASocket['chatModify']>[0]) => {
+        chatModify: async (
+          mod: Parameters<WASocket['chatModify']>[0],
+          targetJid: string,
+          options?: Parameters<WASocket['chatModify']>[2],
+        ) => {
           if (!echo) return;
-          const patch = chatModificationToAppPatch(mod, jid);
-          processSyncAction(
+          const patch = chatModificationToAppPatch(mod, targetJid);
+          const action = getChatAppStateAction(
             { index: patch.index, syncAction: { value: patch.syncAction } },
-            ev,
-            { id: me },
-            undefined,
-            pino({ level: 'silent' }),
+            {
+              source: 'local-echo',
+              collection: patch.type,
+              version: 1,
+              ...(options?.requestId !== undefined
+                ? { requestId: options.requestId }
+                : {}),
+            },
           );
+          if (action) ev.emit('app-state.update', action);
         },
         end: () => ev.emit('connection.update', { connection: 'close' }),
       }) as unknown as WASocket,
@@ -95,6 +105,20 @@ function fixture(initial: number | null = 0, echo = false) {
     key: { remoteJid: jid, id, fromMe: false },
     messageTimestamp: timestamp,
     message: { conversation: 'Fictional fixture' },
+  });
+  const reaction = (
+    timestamp = base + 7,
+    target: WAMessageKey = { remoteJid: jid, id: 'previous', fromMe: false },
+  ): WAMessage => ({
+    key: { remoteJid: jid, id: 'fictional-reaction', fromMe: false },
+    messageTimestamp: timestamp,
+    message: {
+      reactionMessage: {
+        key: target,
+        text: '👍',
+        senderTimestampMs: timestamp * 1000,
+      },
+    },
   });
   const incoming = (msg = message(), count = 1) => {
     ev.emit('chats.update', [
@@ -116,15 +140,26 @@ function fixture(initial: number | null = 0, echo = false) {
       { key, receipt: { userJid, readTimestamp: timestamp } },
     ]);
   };
-  const process = (msg: WAMessage) =>
+  const process = (msg: WAMessage, unarchiveChats = false) =>
     processMessage(msg, {
       ev,
-      creds: { me: { id: me }, accountSettings: {} },
+      creds: { me: { id: me }, accountSettings: { unarchiveChats } },
       logger: pino({ level: 'silent' }),
       shouldProcessHistoryMsg: false,
       options: {},
       getMessage: async () => undefined,
     } as unknown as Parameters<typeof processMessage>[1]);
+  const notify = async (msg: WAMessage, unarchiveChats = false) => {
+    // The SDK buffers each upsertMessage call, even between separate flushes.
+    const separateFlush = !ev.isBuffering();
+    if (separateFlush) ev.buffer();
+    try {
+      ev.emit('messages.upsert', { messages: [msg], type: 'notify' });
+      await process(msg, unarchiveChats);
+    } finally {
+      if (separateFlush) ev.flush();
+    }
+  };
   const recover = (recovered: WAMessage) =>
     process({
       key: { remoteJid: me, id: 'fictional-pdo', fromMe: true },
@@ -152,9 +187,11 @@ function fixture(initial: number | null = 0, echo = false) {
     runtime,
     ev,
     message,
+    reaction,
     incoming,
     receipt,
     process,
+    notify,
     recover,
     chat: async () => object(await runtime.execute({ command: 'chat', jid })),
     queue: (observedOnly = false) =>
@@ -170,6 +207,134 @@ function fixture(initial: number | null = 0, echo = false) {
       ev.destroy();
     },
   };
+}
+
+for (const { position, manual, batch } of [
+  { position: 'before-range', manual: false, batch: true },
+  { position: 'between-messages', manual: false, batch: false },
+  { position: 'before-range', manual: true, batch: false },
+  { position: 'between-messages', manual: true, batch: true },
+] as const) {
+  test(`a decoded reaction preserves complete SDK receipt coverage (${position}, manual=${manual}, batch=${batch})`, async () => {
+    const f = fixture();
+    try {
+      if (batch) f.ev.buffer();
+      if (manual) {
+        f.ev.emit('app-state.update', manualAction());
+        f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
+      }
+      const first = f.message('reaction-range-A', base + 10);
+      const second = f.message('reaction-range-B', base + 20);
+      if (position === 'before-range') await f.notify(f.reaction());
+      await f.notify(first);
+      if (position === 'between-messages')
+        await f.notify(f.reaction(base + 15));
+      await f.notify(second);
+      if (batch) f.receipt(first.key, base + 15);
+      f.ev.flush();
+      if (!batch) f.receipt(first.key, base + 15);
+      assert.equal((await f.chat()).unread, true);
+      assert.equal((await f.chat()).readObservation, undefined);
+      f.receipt(first.key, base + 15);
+      assert.equal((await f.chat()).unread, true);
+      f.receipt(second.key);
+      const chat = await f.chat();
+      assert.equal(chat.unread, false);
+      assert.equal(chat.unreadCount, 0);
+      assert.equal(chat.archived, true);
+      assert.equal(chat.readReconciliation, undefined);
+      assert.deepEqual(object(chat.readObservation).messages, [
+        { id: first.key.id, timestamp: base + 10 },
+        { id: second.key.id, timestamp: base + 20 },
+      ]);
+      if (manual)
+        assert.deepEqual(object(chat.readObservation).replacedManualMarker, {
+          timestamp: (base + 5) * 1000,
+          frontier: base,
+          version: 1,
+        });
+      assert.deepEqual(await f.queue(true), []);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const content of [
+  'ciphertext',
+  'empty-payload',
+  'unknown-payload',
+] as const) {
+  test(`SDK ${content} before the first range still blocks receipt-derived zero`, async () => {
+    const f = fixture();
+    try {
+      const unknown = f.message('unresolved-before-range', base + 7);
+      if (content === 'empty-payload') unknown.message = {};
+      else {
+        delete unknown.message;
+        if (content === 'ciphertext')
+          unknown.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT;
+      }
+      f.ev.buffer();
+      await f.notify(unknown);
+      const tracked = f.message('tracked-after-unresolved', base + 10);
+      await f.notify(tracked);
+      f.receipt(tracked.key);
+      f.ev.flush();
+      const chat = await f.chat();
+      assert.notEqual(chat.unread, false);
+      assert.equal(chat.readObservation, undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test('a decoded reaction cannot qualify an unqualified manual marker', async () => {
+  const f = fixture(-1);
+  try {
+    f.ev.buffer();
+    await f.notify(f.reaction());
+    const tracked = f.message();
+    await f.notify(tracked);
+    f.ev.flush();
+    f.receipt(tracked.key);
+    const chat = await f.chat();
+    assert.equal(chat.unread, true);
+    assert.equal(chat.readObservation, undefined);
+    assert.equal(
+      object(chat.readReconciliation).reason,
+      'manual-unread-marker-unconfirmed',
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+for (const unarchiveChats of [false, true]) {
+  test(`a decoded reaction adds no unread count while retaining SDK unarchive behavior (unarchiveChats=${unarchiveChats})`, async () => {
+    const f = fixture();
+    try {
+      f.ev.buffer();
+      await f.notify(
+        f.reaction(base + 7, {
+          remoteJid: jid,
+          id: 'fictional-outgoing-target',
+          fromMe: true,
+        }),
+        unarchiveChats,
+      );
+      f.ev.flush();
+      const chat = await f.chat();
+      assert.equal(chat.unread, false);
+      assert.equal(chat.unreadCount, 0);
+      assert.equal(chat.archived, !unarchiveChats);
+      assert.equal(chat.readObservation, undefined);
+      assert.deepEqual(await f.queue(true), []);
+    } finally {
+      await f.close();
+    }
+  });
 }
 
 for (const source of ['notify', 'append'] as const) {
@@ -1469,12 +1634,15 @@ for (const invalid of [
   });
 }
 
-test('qualified manual replacement and partial coverage persist across restart', async () => {
+test('qualified manual replacement and partial coverage survive a decoded reaction and restart', async () => {
   const f = fixture();
   f.ev.emit('app-state.update', manualAction());
   f.ev.emit('chats.update', [{ id: jid, unreadCount: -1 }]);
-  const first = f.incoming(f.message('first', base + 10));
-  const second = f.incoming(f.message('second', base + 20));
+  const first = f.message('first', base + 10);
+  const second = f.message('second', base + 20);
+  await f.notify(first);
+  await f.notify(f.reaction(base + 15));
+  await f.notify(second);
   f.receipt(first.key);
   await f.close();
   const store = new Store(f.directory);

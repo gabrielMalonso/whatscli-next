@@ -253,11 +253,24 @@ test('positive unread observations supersede only unread pending and SDK reports
         () => {},
         async () => {},
       );
-      store.reportSdkChat('read-state', {
-        id: pn,
-        unreadCount: value ? 0 : -1,
+      store.recordAppStateChatAction({
+        kind: 'chat-action',
+        source: 'local-echo',
+        collection: 'regular_low',
+        version: 1,
+        requestId: 'read-state',
+        jid: pn,
+        action: { kind: 'mark-read', read: value },
       });
-      store.reportSdkChat('archive', { id: pn, archived: true });
+      store.recordAppStateChatAction({
+        kind: 'chat-action',
+        source: 'local-echo',
+        collection: 'regular_low',
+        version: 2,
+        requestId: 'archive',
+        jid: pn,
+        action: { kind: 'archive', archived: true },
+      });
       const archiveReport = store.chatView(pn)?.sdkReported?.archived;
       assert.ok(archiveReport);
       store.observeChat({ id: pn, unreadCount: 1 });
@@ -272,9 +285,14 @@ test('positive unread observations supersede only unread pending and SDK reports
       assert.deepEqual(store.request('read-state'), request);
       assert.deepEqual(ids(store, true, 'unknown'), [pn]);
       assert.deepEqual(ids(store, 'unknown'), []);
-      store.reportSdkChat('read-state', {
-        id: pn,
-        unreadCount: value ? 0 : -1,
+      store.recordAppStateChatAction({
+        kind: 'chat-action',
+        source: 'local-echo',
+        collection: 'regular_low',
+        version: 1,
+        requestId: 'read-state',
+        jid: pn,
+        action: { kind: 'mark-read', read: value },
       });
       assert.deepEqual(store.chatView(pn)?.sdkReported, {
         archived: archiveReport,

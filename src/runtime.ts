@@ -82,34 +82,10 @@ export function createRuntime(
     invoked: boolean;
     replay: boolean;
   }>();
-  const sdkInvocation = new AsyncLocalStorage<{
-    socketToken: object | undefined;
-    key: string;
-    jid: string;
-    messageId: string | null;
-    field: 'archived' | 'unread' | null;
-  }>();
   function perform(
     ...args: Parameters<typeof performOperation>
   ): ReturnType<typeof performOperation> {
     const context = execution.getStore();
-    const invoke = args[4];
-    args[4] = (messageId, jid, record) =>
-      sdkInvocation.run(
-        {
-          socketToken: owner,
-          key: record.key,
-          jid,
-          messageId,
-          field:
-            record.operation.kind === 'archive'
-              ? 'archived'
-              : record.operation.kind === 'mark-read'
-                ? 'unread'
-                : null,
-        },
-        () => invoke(messageId, jid, record),
-      );
     args[6] = (phase) => {
       if (context) {
         if (phase === 'invoke') context.invoked = true;
@@ -314,7 +290,7 @@ export function createRuntime(
         },
         logger,
         markOnlineOnConnect: false,
-        emitOwnEvents: true,
+        emitOwnEvents: false,
         syncFullHistory: false,
         enableRecentMessageCache: false,
         // The SDK can re-relay outgoing messages on retry receipts. Withhold that content
@@ -344,57 +320,23 @@ export function createRuntime(
         fatal();
       }
     };
-    // Capture before the SDK buffer can merge local echoes with remote events.
-    // A preflight resync can also emit in this scope: it is SDK evidence, not
-    // independent confirmation or proof that this request caused the state.
+    // Local echoes have their own typed event; legacy callbacks are independent.
+    // Apply accepted state before buffering can sum absolute actions with deltas.
     const emit = current.ev.emit.bind(current.ev);
-    // Enumerable symbols survive SDK Object.assign/spread merges without
-    // becoming persisted/public JSON. Order is capture order, never wall time.
-    const readCapture = Symbol('read-capture');
-    const archiveCapture = Symbol('archive-capture');
-    type Capture = {
-      readonly order: number;
-      readonly pendingKey: string | null;
-      readonly applied: boolean;
-    };
-    type ReadCapture = Capture & {
-      readonly count: number | null;
-      readonly marked: boolean | null;
-    };
-    type CapturedChat = ChatUpdate & {
-      [readCapture]?: ReadCapture;
-      [archiveCapture]?: Capture;
-    };
     const latestCaptures = new Map<
       string,
       Partial<Record<keyof PendingChatState, number>>
     >();
     let captureOrder = 0;
-    const captureChat = (chat: CapturedChat, snapshot: boolean): void => {
+    const captureChat = (chat: ChatUpdate, snapshot: boolean): void => {
       if (!chat.id) return;
       const jid = chat.id;
       const pending = store.get<PendingChatState>('pending-chat', jid) ?? {};
+      const pendingKeys = {
+        unread: pending.unread?.key ?? null,
+        archived: pending.archived?.key ?? null,
+      };
       const order = ++captureOrder;
-      if (
-        isUnreadCount(chat.unreadCount) ||
-        typeof chat.markedAsUnread === 'boolean'
-      )
-        chat[readCapture] = {
-          order,
-          pendingKey: pending.unread?.key ?? null,
-          applied: snapshot || chat.unreadCount === 0,
-          count: isUnreadCount(chat.unreadCount) ? chat.unreadCount : null,
-          marked:
-            typeof chat.markedAsUnread === 'boolean'
-              ? chat.markedAsUnread
-              : null,
-        };
-      if (typeof chat.archived === 'boolean')
-        chat[archiveCapture] = {
-          order,
-          pendingKey: pending.archived?.key ?? null,
-          applied: snapshot,
-        };
       const raw = { ...chat };
       delete raw.conditional;
       let activated = false;
@@ -405,34 +347,26 @@ export function createRuntime(
           store.transaction(() => {
             const latest = latestCaptures.get(jid) ?? {};
             const accepted = { ...raw };
-            if (raw[readCapture]) {
+            if (
+              isUnreadCount(raw.unreadCount) ||
+              typeof raw.markedAsUnread === 'boolean'
+            ) {
               if (order > (latest.unread ?? 0)) latest.unread = order;
               else {
                 delete accepted.unreadCount;
                 delete accepted.markedAsUnread;
               }
             }
-            if (raw[archiveCapture]) {
+            if (typeof raw.archived === 'boolean') {
               if (order > (latest.archived ?? 0)) latest.archived = order;
               else delete accepted.archived;
             }
             latestCaptures.set(jid, latest);
-            if (snapshot) store.observeChat(accepted);
-            else {
-              store.captureChatUpdate(accepted);
-              if (accepted.unreadCount === 0)
-                store.observeChat(
-                  {
-                    id: jid,
-                    unreadCount: 0,
-                    ...(typeof accepted.markedAsUnread === 'boolean'
-                      ? { markedAsUnread: accepted.markedAsUnread }
-                      : {}),
-                  },
-                  'buffered-update',
-                  { unread: raw[readCapture]?.pendingKey ?? null },
-                );
-            }
+            store.observeChat(
+              accepted,
+              snapshot ? 'snapshot' : 'update',
+              pendingKeys,
+            );
           }),
         );
       };
@@ -446,38 +380,18 @@ export function createRuntime(
       else activate();
     };
     const projectChat = (
-      chat: CapturedChat,
+      chat: ChatUpdate,
       source: 'buffered-update' | 'buffered-snapshot',
     ): void => {
-      const projected = { ...chat };
-      const latest = chat.id ? latestCaptures.get(chat.id) : undefined;
-      const pendingKeys: Partial<
-        Record<keyof PendingChatState, string | null>
-      > = {};
-      const read = chat[readCapture];
-      if (read) {
-        if (read.applied || latest?.unread !== read.order) {
-          delete projected.unreadCount;
-          delete projected.markedAsUnread;
-        } else {
-          if (read.count === null) delete projected.unreadCount;
-          // Zero and -1 are absolute observations, never numeric deltas.
-          // A positive delta removed by READ still cannot manufacture zero.
-          else if (read.count <= 0) projected.unreadCount = read.count;
-          if (read.marked === null) delete projected.markedAsUnread;
-          else projected.markedAsUnread = read.marked;
-          pendingKeys.unread = read.pendingKey;
-        }
-      }
-      const archive = chat[archiveCapture];
-      if (archive) {
-        if (archive.applied || latest?.archived !== archive.order)
-          delete projected.archived;
-        else pendingKeys.archived = archive.pendingKey;
-      }
-      store.observeChat(projected, source, pendingKeys);
+      const metadata = { ...chat };
+      // State was already applied at capture, or its condition was not accepted.
+      // A consolidated callback cannot apply it again or resolve a newer intent.
+      delete metadata.unreadCount;
+      delete metadata.markedAsUnread;
+      delete metadata.archived;
+      store.observeChat(metadata, source);
     };
-    const emitIndependent: typeof current.ev.emit = (event, value) => {
+    current.ev.emit = (event, value) => {
       if (event === 'chats.update' || event === 'chats.upsert') {
         const chats = value as BaileysEventMap['chats.update' | 'chats.upsert'];
         persist(() =>
@@ -503,61 +417,6 @@ export function createRuntime(
         );
       }
       return emit(event, value);
-    };
-    current.ev.emit = (event, value) => {
-      const invocation = sdkInvocation.getStore();
-      // Recovery timers can inherit an old invocation when creating the next socket.
-      if (!invocation || invocation.socketToken !== token)
-        return emitIndependent(event, value);
-      if (event === 'chats.update') {
-        const chats = value as BaileysEventMap['chats.update'];
-        const independent: BaileysEventMap['chats.update'] = [];
-        for (const chat of chats) {
-          if (chat.id !== invocation.jid) {
-            independent.push(chat);
-            continue;
-          }
-          persist(() =>
-            store.transaction(() => store.reportSdkChat(invocation.key, chat)),
-          );
-          // Keep unrelated fields from a mutation's preflight sync observable.
-          // Send echoes can also invent activity, so their target update stays excluded.
-          if (invocation.field) {
-            const remaining = { ...chat };
-            if (invocation.field === 'archived') delete remaining.archived;
-            else {
-              delete remaining.unreadCount;
-              delete remaining.markedAsUnread;
-            }
-            if (
-              Object.keys(remaining).some(
-                (key) => key !== 'id' && key !== 'conditional',
-              )
-            )
-              independent.push(remaining);
-          }
-        }
-        return independent.length
-          ? emitIndependent('chats.update', independent)
-          : true;
-      }
-      // Enabling own events also enables synthetic outgoing message upserts.
-      // Keep those from inventing observed history or chat activity.
-      if (event === 'messages.upsert' && invocation.messageId) {
-        const upsert = value as BaileysEventMap['messages.upsert'];
-        const messages = upsert.messages.filter(
-          ({ key }) =>
-            !(
-              key.fromMe === true &&
-              key.id === invocation.messageId &&
-              key.remoteJid === invocation.jid
-            ),
-        );
-        return messages.length
-          ? emitIndependent('messages.upsert', { ...upsert, messages })
-          : true;
-      }
-      return emitIndependent(event, value);
     };
     current.ev.on('creds.update', (update) =>
       persist(() => {

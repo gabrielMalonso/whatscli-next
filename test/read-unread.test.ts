@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   chatModificationToAppPatch,
+  getChatAppStateAction,
   initAuthCreds,
   makeEventBuffer,
   processSyncAction,
@@ -36,25 +37,29 @@ function fixture() {
   const runtime = createRuntime(
     { dataDir: directory, connect: true, allowedJid: pn },
     (config) => {
-      assert.equal(config.emitOwnEvents, true);
+      assert.equal(config.emitOwnEvents, false);
       return {
         ev,
         ws: { isClosed: true },
         chatModify: async (
-          ...[mod, jid]: Parameters<WASocket['chatModify']>
+          ...[mod, jid, options]: Parameters<WASocket['chatModify']>
         ) => {
           calls++;
           assert.equal(jid, pn);
           assert.ok('markRead' in mod);
           assert.deepEqual(mod.lastMessages, [last]);
           const patch = chatModificationToAppPatch(mod, jid);
-          processSyncAction(
+          const action = getChatAppStateAction(
             { index: patch.index, syncAction: { value: patch.syncAction } },
-            ev,
-            me,
-            undefined,
-            logger,
+            {
+              source: 'local-echo',
+              collection: 'regular_low',
+              version: calls,
+              requestId: options!.requestId!,
+            },
           );
+          assert.ok(action);
+          ev.emit('app-state.update', action);
         },
         end: () => ev.emit('connection.update', { connection: 'close' }),
       } as unknown as WASocket;

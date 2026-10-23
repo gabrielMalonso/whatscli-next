@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   chatModificationToAppPatch,
+  getChatAppStateAction,
+  initAuthCreds,
   makeEventBuffer,
-  processSyncAction,
+  proto,
 } from 'baileys';
 import type { WASocket, WAMessage } from 'baileys';
 import { pino } from 'pino';
@@ -23,9 +25,16 @@ const me = { id: '12025550199@s.whatsapp.net', name: 'Fictional owner' };
 const logger = pino({ level: 'silent' });
 type Modification = Parameters<WASocket['chatModify']>[0];
 
-function fixture(modify?: (mod: Modification, call: number) => Promise<void>) {
+function fixture(
+  modify?: (
+    mod: Modification,
+    call: number,
+    requestId: string,
+  ) => Promise<void>,
+) {
   const directory = mkdtempSync(join(tmpdir(), 'sdk-chat-state-'));
   const seed = new Store(directory);
+  seed.set('auth', 'creds', { ...initAuthCreds(), me });
   seed.observeChat({ id: jid, archived: false, unreadCount: 0 });
   seed.observeChat({ id: other, archived: false, unreadCount: 0 });
   seed.observeMessage({
@@ -36,27 +45,34 @@ function fixture(modify?: (mod: Modification, call: number) => Promise<void>) {
   seed.close();
   const ev = makeEventBuffer(logger);
   let calls = 0;
-  const apply = (mod: Modification, target = jid) => {
+  const echo = (mod: Modification, requestId: string, target = jid) => {
     const patch = chatModificationToAppPatch(mod, target);
-    processSyncAction(
+    const action = getChatAppStateAction(
       { index: patch.index, syncAction: { value: patch.syncAction } },
-      ev,
-      me,
-      undefined,
-      logger,
+      {
+        source: 'local-echo',
+        collection: 'regular_low',
+        version: calls,
+        requestId,
+      },
     );
+    assert.ok(action);
+    ev.emit('app-state.update', action);
   };
   const runtime = createRuntime(
     { dataDir: directory, connect: true },
     (config) => {
-      assert.equal(config.emitOwnEvents, true);
+      assert.equal(config.emitOwnEvents, false);
       return {
         ev,
         ws: { isClosed: true },
-        chatModify: async (mod: Modification) => {
+        chatModify: async (
+          ...[mod, , options]: Parameters<WASocket['chatModify']>
+        ) => {
           calls++;
-          if (modify) await modify(mod, calls);
-          else apply(mod);
+          assert.ok(options?.requestId);
+          if (modify) await modify(mod, calls, options.requestId);
+          else echo(mod, options.requestId);
         },
         sendMessage: async (
           ...[target, _content, options]: Parameters<WASocket['sendMessage']>
@@ -69,16 +85,20 @@ function fixture(modify?: (mod: Modification, call: number) => Promise<void>) {
             message: { conversation: 'Fictional outgoing text' },
           };
           // rc14 schedules the synthetic upsert after sendMessage returns.
-          process.nextTick(() => {
-            ev.emit('messages.upsert', { type: 'append', messages: [message] });
-            ev.emit('chats.update', [
-              {
-                id: target,
-                archived: false,
-                conversationTimestamp: 1900000000,
-              },
-            ]);
-          });
+          if (config.emitOwnEvents)
+            process.nextTick(() => {
+              ev.emit('messages.upsert', {
+                type: 'append',
+                messages: [message],
+              });
+              ev.emit('chats.update', [
+                {
+                  id: target,
+                  archived: false,
+                  conversationTimestamp: 1900000000,
+                },
+              ]);
+            });
           return message;
         },
         end: () => ev.emit('connection.update', { connection: 'close' }),
@@ -91,7 +111,7 @@ function fixture(modify?: (mod: Modification, call: number) => Promise<void>) {
     directory,
     runtime,
     ev,
-    apply,
+    echo,
     calls: () => calls,
     view: async () => object(await runtime.execute({ command: 'chat', jid })),
     close: async () => {
@@ -107,7 +127,7 @@ for (const [command, value, field, expected] of [
   ['mark-read', true, 'unread', false],
   ['mark-read', false, 'unread', true],
 ] as const) {
-  test(`${command}=${value} captures the rc14 echo before buffering without turning it into independent state`, async () => {
+  test(`${command}=${value} captures the typed local echo before buffering without turning it into independent state`, async () => {
     const f = fixture();
     const intent = { command, jid, value, key: 'fictional-action' };
     try {
@@ -124,7 +144,7 @@ for (const [command, value, field, expected] of [
       });
       const report = object(object(chat.sdkReported)[field]);
       assert.equal(report.value, expected);
-      assert.equal(report.source, 'sdk-event-during-request');
+      assert.equal(report.source, 'sdk-local-echo');
       assert.equal(report.requestKey, intent.key);
       assert.equal(typeof report.reportedAt, 'number');
       const compact = object(
@@ -176,7 +196,7 @@ test('SDK return without an event and SDK failure do not manufacture a reported 
   }
 });
 
-test('positive unread events during a read/unread call stay SDK-only until an outside observation supersedes them', async () => {
+test('independent positive unread events inside a command resolve its pending observation', async () => {
   for (const value of [true, false]) {
     const f = fixture(async () => {
       f.ev.emit('chats.update', [{ id: jid, unreadCount: 1 }]);
@@ -192,20 +212,15 @@ test('positive unread events during a read/unread call stay SDK-only until an ou
         }),
       );
       f.ev.flush();
-      const before = await f.view();
-      assert.equal(before.unread, null);
-      assert.deepEqual(object(before.pending).unread, {
-        key: 'positive-during-call',
-        value: !value,
+      const chat = await f.view();
+      assert.equal(chat.unread, true);
+      assert.equal(chat.unreadCount, null);
+      assert.deepEqual(chat.pending, {});
+      assert.equal('sdkReported' in chat, false);
+      assert.deepEqual(result.feedback, {
+        serverResponse: 'unknown',
+        stateObservation: 'available',
       });
-      assert.equal(object(object(before.sdkReported).unread).value, true);
-      const request = result.request;
-      f.ev.emit('chats.update', [{ id: jid, unreadCount: 1 }]);
-      const after = await f.view();
-      assert.equal(after.unread, true);
-      assert.equal(after.unreadCount, null);
-      assert.deepEqual(after.pending, {});
-      assert.equal('sdkReported' in after, false);
       const replay = object(
         await f.runtime.execute({
           command: 'mark-read',
@@ -214,7 +229,7 @@ test('positive unread events during a read/unread call stay SDK-only until an ou
           key: 'positive-during-call',
         }),
       );
-      assert.deepEqual(replay.request, request);
+      assert.deepEqual(replay.request, result.request);
       assert.equal(f.calls(), 1);
     } finally {
       await f.close();
@@ -222,47 +237,184 @@ test('positive unread events during a read/unread call stay SDK-only until an ou
   }
 });
 
-test('preflight SDK events stay local; an outside observation supersedes the report without claiming request causality', async () => {
-  const f = fixture(async (mod) => {
-    f.ev.emit('chats.update', [
-      { id: jid, archived: false, name: 'Fictional rename', unreadCount: 1 },
-      { id: other, archived: true },
-    ]);
-    f.apply(mod);
+for (const value of [true, false]) {
+  test(`an independent increment resolves pending before READ absorption (markRead=${value})`, async () => {
+    const f = fixture();
+    try {
+      await f.runtime.execute({
+        command: 'mark-read',
+        jid,
+        value,
+        key: 'before-absorption',
+      });
+      const message: WAMessage = {
+        key: { remoteJid: jid, id: 'independent-incoming', fromMe: false },
+        messageTimestamp: 1700000010,
+        message: { conversation: 'Fictional independent incoming' },
+      };
+      f.ev.buffer();
+      f.ev.emit('messages.upsert', { type: 'notify', messages: [message] });
+      f.ev.emit('chats.update', [
+        { id: jid, unreadCount: 1, messages: [{ message }] },
+      ]);
+      const captured = await f.view();
+      assert.equal(captured.unread, true);
+      assert.deepEqual(captured.pending, {});
+      assert.equal('sdkReported' in captured, false);
+      f.ev.emit('messages.update', [
+        {
+          key: message.key,
+          update: { status: proto.WebMessageInfo.Status.READ },
+        },
+      ]);
+      f.ev.emit('message-receipt.update', [
+        {
+          key: message.key,
+          receipt: { userJid: me.id, readTimestamp: 1700000020 },
+        },
+      ]);
+      f.ev.flush();
+      const chat = await f.view();
+      assert.deepEqual(chat.pending, {});
+      // The unread intent retired coverage; a receipt cannot qualify it again.
+      assert.equal(chat.unread, !value);
+      assert.equal(Boolean(chat.readObservation), value);
+      assert.equal(
+        object(
+          await f.runtime.execute({
+            command: 'request',
+            key: 'before-absorption',
+          }),
+        ).attempt,
+        'sdk-returned',
+      );
+    } finally {
+      await f.close();
+    }
   });
+}
+
+test('uncorrelated or mismatched typed echoes cannot manufacture an SDK report', async () => {
+  const f = fixture(async () => {});
   try {
     await f.runtime.execute({
       command: 'archive',
       jid,
       value: true,
-      key: 'preflight',
+      key: 'target',
     });
-    f.ev.flush();
+    const echo = {
+      kind: 'chat-action',
+      source: 'local-echo',
+      collection: 'regular_low',
+      version: 1,
+      requestId: 'target',
+      jid,
+      action: { kind: 'archive', archived: true },
+    } as const;
+    for (const invalid of [
+      { ...echo, requestId: undefined },
+      { ...echo, requestId: 'unknown' },
+      { ...echo, jid: other },
+      { ...echo, collection: 'regular' as const },
+      { ...echo, version: 0 },
+      { ...echo, action: { kind: 'mark-read', read: true } as const },
+    ]) {
+      const { requestId, ...action } = invalid;
+      f.ev.emit('app-state.update', {
+        ...action,
+        ...(requestId === undefined ? {} : { requestId }),
+      });
+      assert.equal('sdkReported' in (await f.view()), false);
+    }
     assert.equal((await f.view()).archived, null);
-    assert.equal((await f.view()).name, 'Fictional rename');
-    assert.equal((await f.view()).unread, true);
-    assert.equal(
-      object(object((await f.view()).sdkReported).archived).value,
-      true,
-    );
-    assert.equal(
-      object(await f.runtime.execute({ command: 'chat', jid: other })).archived,
-      true,
-    );
-    f.ev.emit('chats.update', [{ id: jid, unreadCount: 1 }]);
-    assert.equal(
-      object(object((await f.view()).sdkReported).archived).value,
-      true,
-    );
-    f.ev.emit('chats.update', [{ id: jid, archived: false }]);
-    const chat = await f.view();
-    assert.equal(chat.archived, false);
-    assert.deepEqual(chat.pending, {});
-    assert.equal('sdkReported' in chat, false);
   } finally {
     await f.close();
   }
 });
+
+test('legacy invocation-context reports remain readable without acquiring stronger provenance', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'legacy-sdk-report-'));
+  const seed = new Store(directory);
+  seed.observeChat({ id: jid, archived: false });
+  const report = {
+    value: true,
+    source: 'sdk-event-during-request',
+    requestKey: 'historical-command',
+    reportedAt: 1700000000000,
+  };
+  seed.set('sdk-chat-state', jid, { archived: report });
+  seed.close();
+  const runtime = createRuntime({ dataDir: directory, connect: false });
+  try {
+    const chat = object(await runtime.execute({ command: 'chat', jid }));
+    assert.deepEqual(chat.sdkReported, { archived: report });
+  } finally {
+    await runtime.close();
+  }
+});
+
+for (const [command, value, field, observed] of [
+  ['archive', true, 'archived', false],
+  ['archive', false, 'archived', true],
+  ['mark-read', true, 'unread', true],
+  ['mark-read', false, 'unread', false],
+] as const) {
+  test(`${command}=${value} preserves independent preflight state separately from the later local echo`, async () => {
+    const f = fixture(async (mod, _call, requestId) => {
+      f.ev.emit('app-state.update', {
+        kind: 'chat-action',
+        source: 'sync',
+        collection: 'regular_low',
+        version: 1,
+        initialSync: false,
+        representation: 'patch',
+        macVerified: false,
+        jid,
+        action:
+          field === 'archived'
+            ? { kind: 'archive', archived: observed }
+            : { kind: 'mark-read', read: !observed },
+      });
+      f.ev.emit('chats.update', [
+        {
+          id: jid,
+          name: 'Fictional rename',
+          ...(field === 'archived'
+            ? { archived: observed }
+            : { unreadCount: observed ? -1 : 0 }),
+        },
+        { id: other, archived: true },
+      ]);
+      f.echo(mod, requestId);
+    });
+    try {
+      f.ev.buffer();
+      const result = object(
+        await f.runtime.execute({
+          command,
+          jid,
+          value,
+          key: 'preflight',
+        }),
+      );
+      f.ev.flush();
+      const chat = await f.view();
+      assert.equal(chat[field], observed);
+      assert.equal(chat.name, 'Fictional rename');
+      assert.deepEqual(chat.pending, {});
+      assert.equal('sdkReported' in chat, false);
+      assert.equal(object(result.feedback).stateObservation, 'available');
+      assert.equal(
+        object(await f.runtime.execute({ command: 'chat', jid: other }))
+          .archived,
+        true,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 test('late echoes cannot replace a newer request or an independent observation', async () => {
   for (const independent of [false, true]) {
@@ -270,9 +422,9 @@ test('late echoes cannot replace a newer request or an independent observation',
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const f = fixture(async (mod, call) => {
+    const f = fixture(async (mod, call, requestId) => {
       if (call === 1) await gate;
-      f.apply(mod);
+      f.echo(mod, requestId);
     });
     try {
       const first = f.runtime.execute({
@@ -313,8 +465,8 @@ test('late echoes cannot replace a newer request or an independent observation',
 });
 
 test('an event before SDK failure remains local evidence alongside an uncertain attempt', async () => {
-  const f = fixture(async (mod) => {
-    f.apply(mod);
+  const f = fixture(async (mod, _call, requestId) => {
+    f.echo(mod, requestId);
     throw new Error('Fictional failure after echo');
   });
   try {
@@ -343,7 +495,7 @@ test('an event before SDK failure remains local evidence alongside an uncertain 
   }
 });
 
-test('enabling own events cannot create observed outgoing history or activity', async () => {
+test('disabling legacy own events prevents synthetic outgoing history or activity', async () => {
   const f = fixture();
   try {
     const before = await f.view();
@@ -450,9 +602,22 @@ for (const interrupted of ['archive', 'send'] as const) {
             ev,
             ws,
             executeUSyncQuery: async () => ({ list: [] }),
-            chatModify: async () => {
+            chatModify: async (
+              ...[mod, target, options]: Parameters<WASocket['chatModify']>
+            ) => {
               if (first) fail();
-              ev.emit('chats.update', [{ id: jid, archived: true }]);
+              const patch = chatModificationToAppPatch(mod, target);
+              const action = getChatAppStateAction(
+                { index: patch.index, syncAction: { value: patch.syncAction } },
+                {
+                  source: 'local-echo',
+                  collection: 'regular_low',
+                  version: 1,
+                  requestId: options!.requestId!,
+                },
+              );
+              assert.ok(action);
+              ev.emit('app-state.update', action);
             },
             sendMessage: async (
               ...[, , options]: Parameters<WASocket['sendMessage']>
