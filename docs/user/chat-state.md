@@ -42,7 +42,7 @@ An SDK/local failure can coexist with a server response. Inspect `request.attemp
 
 ## Local SDK state
 
-When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's `localChat` expose a separate `sdkReported` projection. For example:
+When the SDK emits the explicitly correlated local echo of a mutation, `chat`, `chats`, and the mutation's `localChat` expose a separate `sdkReported` projection. For example:
 
 ```json
 {
@@ -53,7 +53,7 @@ When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's 
   "sdkReported": {
     "archived": {
       "value": true,
-      "source": "sdk-event-during-request",
+      "source": "sdk-local-echo",
       "requestKey": "example-archive-001",
       "reportedAt": 1700000000000
     }
@@ -61,9 +61,9 @@ When the SDK emits state during a mutation, `chat`, `chats`, and the mutation's 
 }
 ```
 
-This provides the SDK's local state without treating it as independent confirmation. `requestKey` identifies the local invocation context in which the legacy chat event was emitted. The patched SDK separately carries a local `requestId` on patch responses; it never assigns that ID to synced actions. `reportedAt` is the local capture time, not the remote action time. A preflight resync can also emit state during the call.
+This provides the SDK's decoded local echo without treating it as independent confirmation. `requestKey` is the `requestId` supplied to the SDK for that exact command. Synced actions never acquire that ID. `reportedAt` is the local capture time, not the remote action time. Historical reports with `source: sdk-event-during-request` remain readable; that older source described the invocation context and could include preflight sync.
 
-`request.attempt: "sdk-returned"` means the call returned. The response's note explains that SDK evidence, independent observation, and phone confirmation remain separate. `sdkReported` only appears after an actual SDK event; a return without an event or an error cannot manufacture a value.
+`request.attempt: "sdk-returned"` means the call returned. A return without an echo or an error cannot manufacture a report. An independent update received in the preflight remains a state observation and can supersede pending; a later local echo cannot replace it. The response's note explains that SDK evidence, independent observation, and phone confirmation remain separate.
 
 The ordinary `archived`/`unread` fields retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known, the server replied, and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
 
@@ -73,11 +73,11 @@ Full and compact output both preserve `sdkReported`. Pending indicates missing s
 
 ## Interpreting unread observations
 
-A positive SDK unread update observed outside the mutation's invocation context establishes `unread: true`, including while a read/unread intent is pending. It supersedes the pending unread intent and its previous SDK report, while preserving the original request and its outcome. This does not confirm that the requested read/unread action worked on the phone. Events captured during the call remain only in `sdkReported`.
+An independently observed positive SDK unread update establishes `unread: true`, including while a read/unread intent is pending. It supersedes the pending unread intent and its previous SDK report, while preserving the original request and its outcome. This does not confirm that the requested read/unread action worked on the phone. Only explicitly identified local echoes populate `sdkReported`; the timing of an independent event within a call does not make it local.
 
 The exact unread total remains unknown and is returned as `unreadCount: null`. The SDK can report increments rather than absolute totals.
 
-Incoming messages received online or during a disconnection use this same SDK observation path. Positive history counters and duplicate increments can also establish unread, including after a read observation. These observations do not guarantee the current state on another device. If buffering combines read and incoming into a positive aggregate, unread wins in that callback; a later explicit zero establishes read.
+Incoming messages received online or during a disconnection use this same SDK observation path. Positive history counters and duplicate increments can also establish unread, including after a read observation. These observations do not guarantee the current state on another device. The app preserves accepted observation order before SDK buffering: read followed by incoming establishes unread, and incoming followed by an explicit zero establishes read. Buffer absorption of a message READ cannot by itself manufacture conversation zero.
 
 ### Counter values
 
@@ -98,6 +98,8 @@ Clearing the marker cannot erase a positive counter or prove the conversation is
 
 ## Confirmation limits
 
+`observedAt` belongs to the whole local chat row. Metadata can refresh it without a new read/archive observation; it is not a per-field freshness guarantee.
+
 Archive observations cannot confirm read state. Read observations cannot confirm archive state.
 
 An observed state may differ from the requested state. Clearing `pending` does not prove the request caused the change.
@@ -111,6 +113,8 @@ See [read/unread implementation constraints](../internals/read-unread.md).
 Opening a conversation or choosing the WhatsApp read menu can produce message receipts without a manual chat-state patch. The CLI can remove that conversation from unread queues when receipts from the account's own device cover every tracked incoming unread message since an observed read baseline. `readObservation.source` is `own-device-receipts`; its `scope` is `tracked-incoming-messages`. Message timestamps stay unchanged; `readAt` is the receipt time in seconds.
 
 An old receipt cannot clear newer incoming messages or a newer manual unread marker. Unknown baselines, incomplete message ranges and pending read/unread intents remain uncertain until sufficient evidence arrives. The CLI does not turn a single message receipt into a global claim about unseen history or the effect of a previous command.
+
+Decoded reactions are excluded from unread-message coverage, matching the SDK's counter behavior. They remain stored and can unarchive a conversation according to the account setting. Unknown or undecryptable content still makes coverage insufficient; this does not repair a baseline lost before the fix.
 
 ### New content after a manual marker
 

@@ -51,6 +51,8 @@ Quotes expose one level of received snapshot, not a fetch, verified author, or c
 
 Shared cards expose supported plain vCard name and phone fields. Unsupported encodings or malformed content may remain incomplete. Phone-number spelling, including local numbers, is preserved; raw cards and extra fields are omitted. Shared numbers and `waid` never establish mappings, recipient verification, or permission to send. Use [recipient identity](identity.md) independently.
 
+Once a message's decoded content is stored, a later decryption-failure replay without new content for that exact identity preserves its content and original timestamp. The diagnostic event `message-content-unavailable` then includes `retainedContent: true`; the replay does not renew chat activity or invalidate read coverage. Identity evidence and status updates remain observable, while content-bearing updates follow the ordinary path. New unknown messages remain insufficient evidence. This rule does not restore previously degraded records or deleted bodies.
+
 ## Deletion and revocation
 
 Exact deletion evidence retains the history row but clears `text`, `contentType`, `media`, `quote`, and `contacts`. Search, downloads, and the SDK content callback withhold deleted bodies. Updates, duplicate history, edits, and restarts cannot restore hidden content. `message: null` alone is not deletion evidence.

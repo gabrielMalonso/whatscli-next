@@ -1,0 +1,157 @@
+diff --git a/src/Socket/chats.ts b/src/Socket/chats.ts
+index 6c726e2e17be3e3bd7c6b7b62b6e4a72962b85e0..b5f5370a63bccc6c37ded71667511f91c411c2eb 100644
+--- a/src/Socket/chats.ts
++++ b/src/Socket/chats.ts
+@@ -1020,27 +1020,25 @@ export const makeChatsSocket = (config: SocketConfig) => {
+ 			if (response) ev.emit('app-state.update', response)
+ 		})
+ 
+-		if (config.emitOwnEvents) {
+-			const { onMutation } = newAppStateChunkHandler(false)
+-			const { mutationMap } = await decodePatches(
+-				name,
+-				[{ ...encodeResult!.patch, version: { version: encodeResult!.state.version } }],
+-				initial!,
+-				getAppStateSyncKey,
+-				config.options,
+-				undefined,
+-				logger
+-			)
+-			for (const key in mutationMap) {
+-				const observation = getChatAppStateAction(mutationMap[key]!, {
+-					source: 'local-echo',
+-					collection: name,
+-					version: encodeResult!.state.version,
+-					...(options.requestId !== undefined ? { requestId: options.requestId } : {})
+-				})
+-				if (observation) ev.emit('app-state.update', observation)
+-				onMutation(mutationMap[key]!)
+-			}
++		const { onMutation } = newAppStateChunkHandler(false)
++		const { mutationMap } = await decodePatches(
++			name,
++			[{ ...encodeResult!.patch, version: { version: encodeResult!.state.version } }],
++			initial!,
++			getAppStateSyncKey,
++			config.options,
++			undefined,
++			logger
++		)
++		for (const key in mutationMap) {
++			const observation = getChatAppStateAction(mutationMap[key]!, {
++				source: 'local-echo',
++				collection: name,
++				version: encodeResult!.state.version,
++				...(options.requestId !== undefined ? { requestId: options.requestId } : {})
++			})
++			if (observation) ev.emit('app-state.update', observation)
++			if (config.emitOwnEvents) onMutation(mutationMap[key]!)
+ 		}
+ 	}
+ 
+diff --git a/src/__tests__/Socket/app-state-observability.test.ts b/src/__tests__/Socket/app-state-observability.test.ts
+index c9874801852c13753016057e0beeed5e2bd896e4..3656c1eaaa7c25df4c974131290de857f0de9b29 100644
+--- a/src/__tests__/Socket/app-state-observability.test.ts
++++ b/src/__tests__/Socket/app-state-observability.test.ts
+@@ -1,6 +1,6 @@
+ import { jest } from '@jest/globals'
+ import { proto } from '../../../WAProto/index.js'
+-import { decodeSyncdSnapshot } from '../../Utils/chat-utils'
++import { chatModificationToAppPatch, decodeSyncdSnapshot } from '../../Utils/chat-utils'
+ import { encodedAction, fixture, JID, KEY_ID, modification, silentLogger, syncResponse } from './app-state-fixtures'
+ 
+ beforeEach(() => {
+@@ -158,18 +158,51 @@ describe('app-state observations preserve evidence before chat consolidation', (
+ 		}
+ 	})
+ 
+-	it('receives server response evidence with own events disabled', async () => {
+-		const f = fixture({ emitOwnEvents: false })
+-		try {
+-			await f.modifyWithRequestId(modification('read', true), 'without-echo')
+-			expect(f.observations).toEqual([
+-				expect.objectContaining({ kind: 'patch-response', requestId: 'without-echo', status: 'version-matched' })
+-			])
+-			f.ev.flush()
+-			expect(f.batches).toEqual([])
+-		} finally {
+-			f.close()
+-		}
++	describe.each([false, true])('appPatch with emitOwnEvents=%s', emitOwnEvents => {
++		it.each([
++			['read', true],
++			['read', false],
++			['archive', true],
++			['archive', false]
++		] as const)('emits one typed %s=%s echo and preserves response correlation', async (kind, value) => {
++			const f = fixture({ emitOwnEvents })
++			const requestId = `fictional-${kind}-${value}-${emitOwnEvents}`
++			try {
++				const patch = chatModificationToAppPatch(modification(kind, value), JID)
++				await f.sock.appPatch(patch, { requestId })
++				expect(f.observations).toEqual([
++					{
++						kind: 'patch-response',
++						collection: 'regular_low',
++						version: 1,
++						requestId,
++						status: 'version-matched',
++						serverVersion: 1
++					},
++					{
++						kind: 'chat-action',
++						source: 'local-echo',
++						collection: 'regular_low',
++						version: 1,
++						requestId,
++						jid: JID,
++						action: kind === 'read' ? { kind: 'mark-read', read: value } : { kind: 'archive', archived: value },
++						timestamp: 1700000100000,
++						messageRange: {
++							lastMessageTimestamp: 1700000000,
++							messages: [{ id: 'fictional-last', fromMe: false, timestamp: 1700000000 }]
++						}
++					}
++				])
++				const legacyUpdate = [{ id: JID, ...(kind === 'read' ? { unreadCount: value ? 0 : -1 } : { archived: value }) }]
++				expect(f.raw).toEqual(emitOwnEvents ? [legacyUpdate] : [])
++				f.ev.flush()
++				expect(f.batches).toEqual(emitOwnEvents ? [{ 'chats.update': legacyUpdate }] : [])
++				expect(await f.version()).toBe(1)
++			} finally {
++				f.close()
++			}
++		})
+ 	})
+ 
+ 	it('preserves a decoded initial read action even when its old range is discarded from chat state', async () => {
+@@ -221,7 +254,13 @@ describe('app-state observations preserve evidence before chat consolidation', (
+ 		try {
+ 			await f.modifyWithRequestId(modification('archive', true), 'limited-evidence')
+ 			expect(f.observations).toEqual([
+-				expect.objectContaining({ kind: 'patch-response', status: 'response-received', version: 1 })
++				expect.objectContaining({ kind: 'patch-response', status: 'response-received', version: 1 }),
++				expect.objectContaining({
++					kind: 'chat-action',
++					source: 'local-echo',
++					requestId: 'limited-evidence',
++					version: 1
++				})
+ 			])
+ 		} finally {
+ 			f.close()
+diff --git a/src/__tests__/Socket/app-state-reentry.test.ts b/src/__tests__/Socket/app-state-reentry.test.ts
+index 7c78d1743d79af07ce93f4e316ad4ed96d52fc7f..4ee36a37107e59749114b68461190c3c6f06a914 100644
+--- a/src/__tests__/Socket/app-state-reentry.test.ts
++++ b/src/__tests__/Socket/app-state-reentry.test.ts
+@@ -27,7 +27,9 @@ it('commits a follow-up chatModify started from a preflight sync observation', a
+ 		expect(f.observations).toEqual([
+ 			expect.objectContaining({ kind: 'chat-action', source: 'sync', version: 1 }),
+ 			expect.objectContaining({ kind: 'patch-response', requestId: 'outer', version: 2 }),
+-			expect.objectContaining({ kind: 'patch-response', requestId: 'followup', version: 3 })
++			expect.objectContaining({ kind: 'chat-action', source: 'local-echo', requestId: 'outer', version: 2 }),
++			expect.objectContaining({ kind: 'patch-response', requestId: 'followup', version: 3 }),
++			expect.objectContaining({ kind: 'chat-action', source: 'local-echo', requestId: 'followup', version: 3 })
+ 		])
+ 		// Both outgoing calls resolved and version 3 was acknowledged, so the key store must contain it.
+ 		expect(await f.version()).toBe(3)

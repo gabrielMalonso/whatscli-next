@@ -7,7 +7,6 @@ import {
   chatModificationToAppPatch,
   getChatAppStateAction,
   makeEventBuffer,
-  processSyncAction,
   proto,
 } from 'baileys';
 import type { ChatAppStateAction, WASocket } from 'baileys';
@@ -75,13 +74,6 @@ function fixture() {
             requestId: options!.requestId!,
           });
           ev.emit('app-state.update', action);
-          processSyncAction(
-            mutation,
-            ev,
-            { id: '12025550199@s.whatsapp.net' },
-            undefined,
-            logger,
-          );
         },
         end: () => ev.emit('connection.update', { connection: 'close' }),
       }) as unknown as WASocket,

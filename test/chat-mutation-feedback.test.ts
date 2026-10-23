@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import {
   chatModificationToAppPatch,
   makeEventBuffer,
-  processSyncAction,
+  getChatAppStateAction,
 } from 'baileys';
 import type { AppStatePatchResponse, WASocket } from 'baileys';
 import { pino } from 'pino';
@@ -45,15 +45,19 @@ function fixture(reply: Reply = 'matched', includeSend = false) {
   seed.close();
   const ev = makeEventBuffer(logger);
   let calls = 0;
-  const apply = (mod: Modification) => {
+  const apply = (mod: Modification, requestId: string) => {
     const patch = chatModificationToAppPatch(mod, jid);
-    processSyncAction(
+    const action = getChatAppStateAction(
       { index: patch.index, syncAction: { value: patch.syncAction } },
-      ev,
-      { id: '12025550199@s.whatsapp.net', name: 'Fictional owner' },
-      undefined,
-      logger,
+      {
+        source: 'local-echo',
+        collection: 'regular_low',
+        version: calls,
+        requestId,
+      },
     );
+    assert.ok(action);
+    ev.emit('app-state.update', action);
   };
   const runtime = createRuntime({ dataDir: directory, connect: true }, () => {
     return {
@@ -84,7 +88,7 @@ function fixture(reply: Reply = 'matched', includeSend = false) {
           });
         }
         if (reply === 'commit-error') throw new Error('SDK_PRIVATE_FIXTURE');
-        apply(mod);
+        apply(mod, options.requestId);
       },
       end: () => ev.emit('connection.update', { connection: 'close' }),
     } as unknown as WASocket;

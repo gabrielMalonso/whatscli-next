@@ -8,6 +8,7 @@ import {
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  getContentType,
   jidNormalizedUser,
   normalizeMessageContent,
   proto,
@@ -150,7 +151,7 @@ type SdkChatState = Partial<
     'archived' | 'unread',
     {
       value: boolean;
-      source: 'sdk-event-during-request';
+      source: 'sdk-event-during-request' | 'sdk-local-echo';
       requestKey: string;
       reportedAt: number;
     }
@@ -174,6 +175,14 @@ function activityTimestamp(
       .conversationTimestamp ?? 0,
   );
   return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null;
+}
+
+/** A decoded reaction never contributes an unread message in the pinned SDK. */
+function isReaction(message: WAMessage): boolean {
+  return (
+    message.messageStubType == null &&
+    !!normalizeMessageContent(message.message)?.reactionMessage
+  );
 }
 
 type ContactMetadata = Partial<
@@ -725,22 +734,37 @@ export class Store {
     );
   }
 
-  reportSdkChat(key: string, chat: ChatUpdate): void {
+  private reportSdkChat(
+    event: Extract<ChatAppStateAction, { source: 'local-echo' }>,
+  ): void {
+    const key = event.requestId;
+    if (
+      !key ||
+      event.collection !== 'regular_low' ||
+      !Number.isSafeInteger(event.version) ||
+      event.version < 1
+    )
+      return;
     const request = this.request(key);
     if (!request || isSendOperation(request.operation)) return;
     const { operation } = request;
-    if (chat.id !== operation.jid) return;
+    if (event.jid !== operation.jid) return;
+    if ((operation.kind === 'archive') !== (event.action.kind === 'archive'))
+      return;
     const field = operation.kind === 'archive' ? 'archived' : 'unread';
     const pending = this.get<PendingChatState>('pending-chat', operation.jid);
     // Late completions cannot overwrite a newer intent or independent state.
     if (pending?.[field]?.key !== key) return;
-    const value = chatOutput(chat)[field];
+    const value =
+      event.action.kind === 'archive'
+        ? event.action.archived
+        : !event.action.read;
     if (typeof value !== 'boolean') return;
     const sdkReported =
       this.get<SdkChatState>('sdk-chat-state', operation.jid) ?? {};
     const report = {
       value,
-      source: 'sdk-event-during-request' as const,
+      source: 'sdk-local-echo' as const,
       requestKey: key,
       reportedAt: Date.now(),
     };
@@ -798,6 +822,7 @@ export class Store {
   }
 
   recordAppStateChatAction(event: ChatAppStateAction): void {
+    if (event.source === 'local-echo') this.reportSdkChat(event);
     this.captureReadAction(event);
     const range = event.messageRange;
     this.event('app-state.chat-action', {
@@ -1009,6 +1034,7 @@ export class Store {
       | 'buffered-update'
       | 'buffered-snapshot' = 'snapshot',
     pendingKeys?: Partial<Record<keyof PendingChatState, string | null>>,
+    failedReplayTimes?: ReadonlySet<number>,
   ): void {
     const jid = chat.id;
     if (!jid) {
@@ -1107,7 +1133,9 @@ export class Store {
       ON CONFLICT(jid) DO UPDATE SET json=excluded.json,observed_at=excluded.observed_at`,
       )
       .run(jid, encode(merged), Date.now());
-    this.observeChatActivity(chat);
+    // Consolidated callbacks cannot reapply activity already accepted at capture.
+    if (source === 'snapshot' || source === 'update')
+      this.observeChatActivity(chat, failedReplayTimes);
     // Persist loss of coverage across a crash before flush. Only a persisted
     // counter/positive manual observation supersedes that pre-buffer evidence.
     if (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true)
@@ -1416,18 +1444,53 @@ export class Store {
       .run(timestamp, source, jid, timestamp, timestamp, source);
   }
 
-  private observeChatActivity(chat: ChatUpdate): void {
+  failedReplayTimes(
+    messages: readonly proto.IWebMessageInfo[],
+  ): Map<string, Set<number>> {
+    const times = new Map<string, Set<number>>();
+    for (const message of messages) {
+      const jid = message.key?.remoteJid;
+      const timestamp = activityTimestamp(message.messageTimestamp);
+      if (
+        !jid ||
+        message.key?.fromMe !== false ||
+        timestamp === null ||
+        !this.isFailedReplay(message)
+      )
+        continue;
+      const chatTimes = times.get(jid) ?? new Set<number>();
+      chatTimes.add(timestamp);
+      times.set(jid, chatTimes);
+    }
+    return times;
+  }
+
+  private observeChatActivity(
+    chat: ChatUpdate,
+    failedReplayTimes?: ReadonlySet<number>,
+  ): void {
     if (!chat.id) return;
+    const messages = (chat.messages ?? []).flatMap(({ message }) =>
+      message ? [message] : [],
+    );
+    const replayTimes =
+      failedReplayTimes ?? this.failedReplayTimes(messages).get(chat.id);
     for (const field of [
       'conversationTimestamp',
       'lastMsgTimestamp',
       'lastMessageRecvTimestamp',
     ] as const) {
+      // processHistoryMessage can derive this field from a failed replay, even
+      // when that incoming message is not the chat's one embedded message.
+      if (
+        field === 'lastMessageRecvTimestamp' &&
+        replayTimes?.has(activityTimestamp(chat[field]) ?? 0)
+      )
+        continue;
       this.observeActivity(chat.id, chat[field], `chat.${field}`);
     }
-    for (const entry of chat.messages ?? []) {
-      const message = entry.message;
-      if (message?.key?.remoteJid === chat.id)
+    for (const message of messages) {
+      if (message.key?.remoteJid === chat.id && !this.isFailedReplay(message))
         this.observeActivity(
           chat.id,
           message.messageTimestamp,
@@ -1487,7 +1550,14 @@ export class Store {
     phase: 'buffered' | 'observed' = 'buffered',
   ): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
-    if (!jid || fromMe !== false || participant) return;
+    if (
+      !jid ||
+      fromMe !== false ||
+      participant ||
+      isReaction(message) ||
+      this.isFailedReplay(message)
+    )
+      return;
     const timestamp = activityTimestamp(message.messageTimestamp);
     const covered =
       this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
@@ -1570,7 +1640,28 @@ export class Store {
     source?: BaileysEventMap['messages.upsert']['type'],
   ): void {
     this.transaction(() => {
-      if (chatObserved || source !== undefined) {
+      if (this.isFailedReplay(message)) {
+        // A later decryption failure cannot replace already decoded content,
+        // its original time, or the coverage established for that exact key.
+        this.event('message-content-unavailable', {
+          jid: message.key.remoteJid,
+          id: message.key.id,
+          stubType: message.messageStubType,
+          retainedContent: true,
+        });
+        this.observeMessageIdentities(message.key);
+        const jid = message.key.remoteJid;
+        if (chatObserved && jid && !this.chat(jid))
+          this.observeChat({ id: jid });
+        if (message.status != null)
+          this.updateMessage({
+            key: message.key,
+            update: { status: message.status },
+          });
+        return;
+      }
+      const reaction = isReaction(message);
+      if ((chatObserved || source !== undefined) && !reaction) {
         this.captureMessageRange(message, 'observed');
         const jid = message.key.remoteJid;
         if (jid && this.get<boolean>('captured-unread', jid)) {
@@ -1586,7 +1677,11 @@ export class Store {
         }
       }
       this.writeObservedMessage(message, chatObserved);
-      if ((!chatObserved && source === undefined) || !message.key.remoteJid)
+      if (
+        reaction ||
+        (!chatObserved && source === undefined) ||
+        !message.key.remoteJid
+      )
         return;
       const range = this.get<ReceiptUnreadRange>(
         'receipt-unread-range',
@@ -1615,6 +1710,20 @@ export class Store {
       }
       this.set('receipt-unread-range', message.key.remoteJid, range);
     });
+  }
+
+  private isFailedReplay(message: proto.IWebMessageInfo): boolean {
+    if (
+      !message.key ||
+      message.messageStubType !== proto.WebMessageInfo.StubType.CIPHERTEXT ||
+      getContentType(normalizeMessageContent(message.message))
+    )
+      return false;
+    const previous = this.message(message.key);
+    return (
+      previous?.messageStubType == null &&
+      !!getContentType(normalizeMessageContent(previous?.message))
+    );
   }
 
   private writeObservedMessage(
