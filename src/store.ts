@@ -1034,6 +1034,7 @@ export class Store {
       | 'buffered-update'
       | 'buffered-snapshot' = 'snapshot',
     pendingKeys?: Partial<Record<keyof PendingChatState, string | null>>,
+    failedReplayTimes?: ReadonlySet<number>,
   ): void {
     const jid = chat.id;
     if (!jid) {
@@ -1132,7 +1133,9 @@ export class Store {
       ON CONFLICT(jid) DO UPDATE SET json=excluded.json,observed_at=excluded.observed_at`,
       )
       .run(jid, encode(merged), Date.now());
-    this.observeChatActivity(chat);
+    // Consolidated callbacks cannot reapply activity already accepted at capture.
+    if (source === 'snapshot' || source === 'update')
+      this.observeChatActivity(chat, failedReplayTimes);
     // Persist loss of coverage across a crash before flush. Only a persisted
     // counter/positive manual observation supersedes that pre-buffer evidence.
     if (isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true)
@@ -1441,18 +1444,53 @@ export class Store {
       .run(timestamp, source, jid, timestamp, timestamp, source);
   }
 
-  private observeChatActivity(chat: ChatUpdate): void {
+  failedReplayTimes(
+    messages: readonly proto.IWebMessageInfo[],
+  ): Map<string, Set<number>> {
+    const times = new Map<string, Set<number>>();
+    for (const message of messages) {
+      const jid = message.key?.remoteJid;
+      const timestamp = activityTimestamp(message.messageTimestamp);
+      if (
+        !jid ||
+        message.key?.fromMe !== false ||
+        timestamp === null ||
+        !this.isFailedReplay(message)
+      )
+        continue;
+      const chatTimes = times.get(jid) ?? new Set<number>();
+      chatTimes.add(timestamp);
+      times.set(jid, chatTimes);
+    }
+    return times;
+  }
+
+  private observeChatActivity(
+    chat: ChatUpdate,
+    failedReplayTimes?: ReadonlySet<number>,
+  ): void {
     if (!chat.id) return;
+    const messages = (chat.messages ?? []).flatMap(({ message }) =>
+      message ? [message] : [],
+    );
+    const replayTimes =
+      failedReplayTimes ?? this.failedReplayTimes(messages).get(chat.id);
     for (const field of [
       'conversationTimestamp',
       'lastMsgTimestamp',
       'lastMessageRecvTimestamp',
     ] as const) {
+      // processHistoryMessage can derive this field from a failed replay, even
+      // when that incoming message is not the chat's one embedded message.
+      if (
+        field === 'lastMessageRecvTimestamp' &&
+        replayTimes?.has(activityTimestamp(chat[field]) ?? 0)
+      )
+        continue;
       this.observeActivity(chat.id, chat[field], `chat.${field}`);
     }
-    for (const entry of chat.messages ?? []) {
-      const message = entry.message;
-      if (message?.key?.remoteJid === chat.id)
+    for (const message of messages) {
+      if (message.key?.remoteJid === chat.id && !this.isFailedReplay(message))
         this.observeActivity(
           chat.id,
           message.messageTimestamp,
@@ -1674,8 +1712,9 @@ export class Store {
     });
   }
 
-  private isFailedReplay(message: WAMessage): boolean {
+  private isFailedReplay(message: proto.IWebMessageInfo): boolean {
     if (
+      !message.key ||
       message.messageStubType !== proto.WebMessageInfo.StubType.CIPHERTEXT ||
       getContentType(normalizeMessageContent(message.message))
     )

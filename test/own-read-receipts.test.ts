@@ -394,6 +394,97 @@ test('failed replays of a decoded reaction and its removal preserve read coverag
   }
 });
 
+for (const mode of [
+  'unbuffered',
+  'buffered',
+  'mixed-history',
+  'independent-chat-time',
+  'unknown-message',
+] as const) {
+  test(`history activity excludes only known failed replay times (${mode})`, async () => {
+    const f = fixture();
+    const expected =
+      mode === 'independent-chat-time'
+        ? base + 200
+        : mode === 'unknown-message'
+          ? base + 100
+          : mode === 'mixed-history'
+            ? base + 10
+            : base;
+    try {
+      const outgoing = {
+        ...f.message('known-outgoing', base + 10),
+        key: { remoteJid: jid, id: 'known-outgoing', fromMe: true },
+      };
+      if (mode === 'mixed-history')
+        f.ev.emit('messages.upsert', { type: 'notify', messages: [outgoing] });
+      const failure: WAMessage = {
+        key: {
+          remoteJid: jid,
+          id: mode === 'unknown-message' ? 'unknown-history' : 'previous',
+          fromMe: false,
+        },
+        messageTimestamp: base + 100,
+        messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+      };
+      const history = processHistoryMessage(
+        proto.HistorySync.decode(
+          proto.HistorySync.encode({
+            syncType: proto.HistorySync.HistorySyncType.ON_DEMAND,
+            conversations: [
+              {
+                id: jid,
+                archived: false,
+                ...(mode === 'independent-chat-time'
+                  ? { conversationTimestamp: base + 200 }
+                  : {}),
+                messages: [
+                  ...(mode === 'mixed-history' ? [{ message: outgoing }] : []),
+                  { message: failure },
+                ],
+              },
+            ],
+          }).finish(),
+        ),
+        pino({ level: 'silent' }),
+      );
+      assert.equal(history.chats[0]?.lastMessageRecvTimestamp, base + 100);
+      if (mode !== 'unbuffered') f.ev.buffer();
+      f.ev.emit('messaging-history.set', {
+        ...history,
+        progress: history.progress ?? null,
+        syncType: history.syncType ?? null,
+        pastParticipants: history.pastParticipants ?? null,
+        isLatest: false,
+      });
+      // Check capture separately from the consolidated history callback.
+      assert.equal(object((await f.chat()).activity).timestamp, expected);
+      f.ev.flush();
+      const chat = await f.chat();
+      assert.equal(object(chat.activity).timestamp, expected);
+      assert.equal(chat.archived, false);
+      assert.equal(chat.unread, mode === 'unknown-message' ? null : false);
+      // The SDK still receives its original history fields for range conditions.
+      assert.equal(history.chats[0]?.lastMessageRecvTimestamp, base + 100);
+    } finally {
+      await f.close();
+    }
+    const reopened = new Store(f.directory);
+    try {
+      assert.equal(reopened.chatView(jid)?.activity.timestamp, expected);
+      const original = reopened.message({
+        remoteJid: jid,
+        id: 'previous',
+        fromMe: false,
+      });
+      assert.equal(original?.messageTimestamp, base);
+      assert.equal(original?.messageStubType, undefined);
+    } finally {
+      reopened.close();
+    }
+  });
+}
+
 test('a decoded edit absorbed into a ciphertext upsert still updates message content and search', async () => {
   const f = fixture();
   try {

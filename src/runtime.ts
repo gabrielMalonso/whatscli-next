@@ -328,7 +328,11 @@ export function createRuntime(
       Partial<Record<keyof PendingChatState, number>>
     >();
     let captureOrder = 0;
-    const captureChat = (chat: ChatUpdate, snapshot: boolean): void => {
+    const captureChat = (
+      chat: ChatUpdate,
+      snapshot: boolean,
+      failedReplayTimes?: ReadonlySet<number>,
+    ): void => {
       if (!chat.id) return;
       const jid = chat.id;
       const pending = store.get<PendingChatState>('pending-chat', jid) ?? {};
@@ -366,6 +370,7 @@ export function createRuntime(
               accepted,
               snapshot ? 'snapshot' : 'update',
               pendingKeys,
+              failedReplayTimes,
             );
           }),
         );
@@ -411,7 +416,9 @@ export function createRuntime(
               store.captureMessageRange(message);
             if (event === 'messaging-history.set') {
               const history = value as BaileysEventMap['messaging-history.set'];
-              for (const chat of history.chats) captureChat(chat, true);
+              const replayTimes = store.failedReplayTimes(history.messages);
+              for (const chat of history.chats)
+                if (chat.id) captureChat(chat, true, replayTimes.get(chat.id));
             }
           }),
         );
