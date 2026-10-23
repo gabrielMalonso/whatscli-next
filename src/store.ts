@@ -8,6 +8,7 @@ import {
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  getContentType,
   jidNormalizedUser,
   normalizeMessageContent,
   proto,
@@ -1511,7 +1512,14 @@ export class Store {
     phase: 'buffered' | 'observed' = 'buffered',
   ): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
-    if (!jid || fromMe !== false || participant || isReaction(message)) return;
+    if (
+      !jid ||
+      fromMe !== false ||
+      participant ||
+      isReaction(message) ||
+      this.isFailedReplay(message)
+    )
+      return;
     const timestamp = activityTimestamp(message.messageTimestamp);
     const covered =
       this.get<BufferedMessageKey[]>('read-covered-upserts', jid) ?? [];
@@ -1594,6 +1602,26 @@ export class Store {
     source?: BaileysEventMap['messages.upsert']['type'],
   ): void {
     this.transaction(() => {
+      if (this.isFailedReplay(message)) {
+        // A later decryption failure cannot replace already decoded content,
+        // its original time, or the coverage established for that exact key.
+        this.event('message-content-unavailable', {
+          jid: message.key.remoteJid,
+          id: message.key.id,
+          stubType: message.messageStubType,
+          retainedContent: true,
+        });
+        this.observeMessageIdentities(message.key);
+        const jid = message.key.remoteJid;
+        if (chatObserved && jid && !this.chat(jid))
+          this.observeChat({ id: jid });
+        if (message.status != null)
+          this.updateMessage({
+            key: message.key,
+            update: { status: message.status },
+          });
+        return;
+      }
       const reaction = isReaction(message);
       if ((chatObserved || source !== undefined) && !reaction) {
         this.captureMessageRange(message, 'observed');
@@ -1644,6 +1672,19 @@ export class Store {
       }
       this.set('receipt-unread-range', message.key.remoteJid, range);
     });
+  }
+
+  private isFailedReplay(message: WAMessage): boolean {
+    if (
+      message.messageStubType !== proto.WebMessageInfo.StubType.CIPHERTEXT ||
+      getContentType(normalizeMessageContent(message.message))
+    )
+      return false;
+    const previous = this.message(message.key);
+    return (
+      previous?.messageStubType == null &&
+      !!getContentType(normalizeMessageContent(previous?.message))
+    );
   }
 
   private writeObservedMessage(

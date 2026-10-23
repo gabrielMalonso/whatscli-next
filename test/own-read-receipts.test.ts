@@ -337,6 +337,100 @@ for (const unarchiveChats of [false, true]) {
   });
 }
 
+test('failed replays of a decoded reaction and its removal preserve read coverage and original message times', async () => {
+  const f = fixture();
+  try {
+    const original = f.incoming(f.message('own-message-target', base + 10));
+    f.receipt(original.key);
+    const reaction = f.reaction(base + 11, original.key);
+    const removal = f.reaction(base + 12, original.key);
+    removal.key.id = 'fictional-reaction-removal';
+    removal.message!.reactionMessage!.text = '';
+    for (const message of [reaction, removal]) await f.notify(message);
+    const before = await f.chat();
+    assert.equal(before.unread, false);
+    for (const message of [reaction, removal]) {
+      const failed: WAMessage = {
+        key: message.key,
+        messageTimestamp: base + 40,
+        messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+        messageStubParameters: ['FICTIONAL_PRIVATE_DECRYPTION_ERROR'],
+      };
+      await f.notify(failed);
+      await f.notify(failed);
+    }
+    const after = await f.chat();
+    assert.equal(after.unread, false);
+    assert.equal(after.unreadCount, 0);
+    assert.deepEqual(after.readObservation, before.readObservation);
+    assert.deepEqual(after.activity, before.activity);
+    const rows = (await f.runtime.execute({
+      command: 'messages',
+      jid,
+      limit: 10,
+      offset: 0,
+    })) as unknown[];
+    for (const message of [reaction, removal]) {
+      const stored = object(
+        rows.find((row) => object(row).id === message.key.id),
+      );
+      assert.equal(stored.timestamp, message.messageTimestamp);
+      assert.equal(stored.stubType, null);
+      assert.equal(stored.contentType, 'reactionMessage');
+    }
+    const first = f.incoming(f.message('after-reaction-replay-A', base + 50));
+    const second = f.incoming(f.message('after-reaction-replay-B', base + 60));
+    f.receipt(first.key);
+    assert.equal((await f.chat()).unread, true);
+    f.receipt(second.key);
+    assert.equal((await f.chat()).unread, false);
+    const journal = await f.runtime.execute({ command: 'events', after: 0 });
+    assert.doesNotMatch(
+      JSON.stringify(journal),
+      /FICTIONAL_PRIVATE_DECRYPTION_ERROR/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('a decoded edit absorbed into a ciphertext upsert still updates message content and search', async () => {
+  const f = fixture();
+  try {
+    const key = { remoteJid: jid, id: 'previous', fromMe: false };
+    f.ev.buffer();
+    f.ev.emit('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key,
+          messageTimestamp: base + 50,
+          messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+        },
+      ],
+    });
+    f.ev.emit('messages.update', [
+      {
+        key,
+        update: { message: { conversation: 'Fictional decoded edit' } },
+      },
+    ]);
+    f.ev.flush();
+    const edited = (await f.runtime.execute({
+      command: 'search',
+      query: 'decoded edit',
+      jid,
+      limit: 10,
+      offset: 0,
+    })) as unknown[];
+    assert.equal(edited.length, 1);
+    assert.equal(object(edited[0]).id, key.id);
+    assert.equal(object(edited[0]).text, 'Fictional decoded edit');
+  } finally {
+    await f.close();
+  }
+});
+
 for (const source of ['notify', 'append'] as const) {
   test(`uncovered incoming ${source} content retires earlier receipt coverage`, async () => {
     const f = fixture();
