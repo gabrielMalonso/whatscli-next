@@ -2,11 +2,12 @@
   "name": "whatscli-next",
   "version": "0.1.0",
   "private": true,
-  "description": "A small JSON-only WhatsApp CLI for agents, using Baileys and a local Unix socket",
+  "description": "A small WhatsApp CLI for agents with an optional read-only terminal monitor",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "whatscli": "dist/src/cli.js"
+    "whatscli": "dist/src/cli.js",
+    "whatscli-tui": "dist/src/tui-cli.js"
   },
   "files": [
     "dist/src/*.js",
@@ -34,6 +35,7 @@
     "benchmark:output": "pnpm build && node dist/scripts/benchmark-output.js",
     "probe": "node dist/src/probe.js",
     "whatscli": "node dist/src/cli.js",
+    "tui": "node dist/src/tui-cli.js",
     "lint": "eslint --max-warnings 0 \"{src,scripts,test}/**/*.ts\" eslint.config.mjs",
     "format:check": "prettier --check \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml .github/workflows/ci.yml README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\"",
     "format": "prettier --write \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml .github/workflows/ci.yml README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\""
@@ -41,7 +43,8 @@
   "dependencies": {
     "baileys": "7.0.0-rc14",
     "pino": "9.14.0",
-    "qrcode": "1.5.4"
+    "qrcode": "1.5.4",
+    "string-width": "8.3.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
