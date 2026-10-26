@@ -21,7 +21,7 @@ node dist/src/cli.js help
 
 Follow [Getting started](docs/user/getting-started.md) to pair your account.
 
-Use `--account pessoal` or `--account central-ES` on every command to keep named accounts in separate private directories. Without a selector, commands use the original default session; `--data-dir PATH` selects an explicit directory.
+Use `--account NAME` on every command to keep named accounts in separate private directories. Without a selector, commands use the default session; `--data-dir PATH` selects an explicit directory.
 
 Linux has been tested; macOS has not been verified. No npm package is published.
 

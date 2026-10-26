@@ -128,10 +128,10 @@ Markers over unknown/positive state, incomplete batches, cached/replayed IDs, hi
 
 ## Inspect a command's SDK range
 
-Use the current release's CLI and a recent event sequence supplied with the candidate:
+Use `events` with a sequence from a previous response, or `0` for the first page:
 
 ```sh
-node /absolute/release/dist/src/cli.js --account example events --after SEQUENCE
+node dist/src/cli.js --account example events --after 0
 ```
 
 The response's `data` array contains `kind: app-state.chat-action` entries. Their nested `data` includes `source`, `action` and `messageRange.messages` (minimal IDs, direction and original message timestamps). Match a `local-echo` entry's `requestId` to the command key. It is decoded SDK output, not proof of application on another device. Synced entries identify `source: sync` with their sync/MAC qualifiers. Continue from the last returned `sequence` when a page has 100 events; no history scan or forced resync is needed.

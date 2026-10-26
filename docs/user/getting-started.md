@@ -35,18 +35,18 @@ Default locations:
 To select a named account, pass `--account NAME` on **every command**, starting with pairing:
 
 ```sh
-node dist/src/cli.js --account pessoal start
-node dist/src/cli.js --account pessoal status
-node dist/src/cli.js --account pessoal pair qr
-node dist/src/cli.js --account pessoal chats --limit 20
-node dist/src/cli.js --account pessoal stop
+node dist/src/cli.js --account example start
+node dist/src/cli.js --account example status
+node dist/src/cli.js --account example pair qr
+node dist/src/cli.js --account example chats --limit 20
+node dist/src/cli.js --account example stop
 ```
 
-Names such as `pessoal`, `central-ES`, and `central-RJ` select separate directories under `accounts/` inside the default location above. Names are normalized to lowercase: `central-ES` and `central-es` select the same account on both platforms. Use 1–32 ASCII letters, digits, hyphens, or underscores, starting with a letter or digit. Spaces, dots, and path separators are rejected.
+Each name selects a separate directory under `accounts/` inside the default location above. Names are normalized to lowercase: `Example` and `example` select the same account on both platforms. Use 1–32 ASCII letters, digits, hyphens, or underscores, starting with a letter or digit. Spaces, dots, and path separators are rejected.
 
 Each directory has its own credentials, history, request keys, and daemon. The name is a local selector; confirm the actual WhatsApp account JID with its owner after pairing. Naming an account does not move or relabel an existing session.
 
-For an explicit directory, pass `--data-dir /absolute/private/path` on every command. Do not combine it with `--account` or repeat either selector. Omitting both preserves the original default session; it does not select the last account used. The remaining examples below use that default.
+For an explicit directory, pass `--data-dir /absolute/private/path` on every command. Do not combine it with `--account` or repeat either selector. Omitting both uses the default session; it does not select the last account used. The remaining examples below use that default.
 
 The path must meet these requirements:
 

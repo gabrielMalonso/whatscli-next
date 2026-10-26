@@ -56,7 +56,7 @@ A validated incoming range can have an observed-read or unqualified manual-unrea
 
 For a manual baseline, `readReconciliation` persists a narrow diagnostic and `chat-read-insufficient` records it in the public journal. It contains a minimal message ID/original time, receipt time, local capture time and the explicit reason `manual-unread-marker-unconfirmed`. It does not change observed read state, pending, request evidence or filters. The lifecycle is documented in [chat-state usage](../user/chat-state.md#message-read-manual-marker-unconfirmed).
 
-The controlled capture established that message READ and an own-device receipt arrived without a decoded synced read=true action or a chat zero in that observation window. That absence alone neither proves a protocol impossibility nor rules out a local modeling defect. The diagnostic keeps insufficient cases visible while the qualified transition below distinguishes a prior manual marker from a real untracked backlog.
+A message READ and an own-device receipt do not guarantee a corresponding synced read action or chat zero. The diagnostic keeps insufficient cases visible while the qualified transition below distinguishes a prior manual marker from a real untracked backlog.
 
 ## Manual markers over observed zero
 
@@ -80,28 +80,4 @@ History batches use the same capture guard before SDK buffering. Their chat stat
 
 The minimal key/time barrier is persisted before forwarding raw upserts, even before the first range exists, since a notify/append type change can synchronously flush earlier receipts inside the SDK. Only the exact ID/timestamp pair consumes it. It survives a crash before flush; observing uncovered content makes a stale zero unknown rather than renewing that read baseline. Every message in an upsert batch is stored before its absorbed receipts are applied, so an early member cannot establish zero before an uncovered later member is seen. Chat deletion retires the range, marker and derived read projections while preserving message history and the action-version watermark; a delayed receipt cannot recreate a deleted conversation or reuse that proof when metadata reappears.
 
-Unknown/positive baselines, snapshots/history, incomplete batches, cached IDs and ambiguous ordering remain unqualified. No local clock or capture timestamp is used to infer remote ordering. Equal-second arrivals or device clock disagreement may therefore still yield insufficient evidence. A remains subject to controlled live retesting for this narrower correction; complete synchronization outside these conditions is not claimed.
-
-## Controlled diagnostic validation
-
-Round 4 on 2026-10-21 validated CLI `afe20c389e2480d482b40aedfb931f6c1c01b526` with SDK `de9235c398aa50b3e12aaf2a8d0f04503bdeae92` on the ES candidate. The RJ control retained its original release. This was a coordinated browser/CLI comparison using four internal messages between owned accounts, separate from automated fictional fixtures. The private report, focused DOM observations and per-step JSON remain outside Git.
-
-All eleven diagnostic checks passed, with no new divergence:
-
-| Check | Observed result                                                                                                                                       |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D01   | Normal baseline had no diagnostic.                                                                                                                    |
-| D02   | Three reproductions retained unread/count while exposing the exact message ID, original timestamp, read time and local capture time.                  |
-| D03   | Native/adapter chat and archived lists preserved the field in full/compact and normal/observed-only output.                                           |
-| D04   | Archive/unarchive intents and archive-only observations preserved the entire diagnostic, including `receivedAt`.                                      |
-| D05   | Eligible main/archived rows, pending, `matchedBy` and observed-only filtering retained their meanings.                                                |
-| D06   | A new arrival removed the previous example; its own receipt created an example for the new ID.                                                        |
-| D07   | Both read and unread intents removed the diagnostic while leaving the affected state null/pending.                                                    |
-| D08   | A subsequent normal read from an observed-zero baseline produced `readObservation` and read/zero, without an insufficient-evidence diagnostic.        |
-| D09   | All four new messages retained their original timestamps after reading.                                                                               |
-| D10   | One bounded page of 68 journal events contained three new minimal diagnostics identical to their public chat fields; no historical backfill occurred. |
-| D11   | Restoration left the internal conversation archived/read-zero, with no pending intent or diagnostic.                                                  |
-
-Restart persistence, invalid/foreign/duplicate/retired receipts, replacement by a newer `readAt` and isolated zero-observation cleanup remain supported by offline regressions, not an additional live test. The live reset and subsequent normal read do not demonstrate isolated-zero cleanup from an existing diagnostic. No synthetic receipts, restart or forced resync were used in this live round. Lifecycle rules remain those documented above; this validation adds no broader guarantee.
-
-At the end of round 4, scenario A remained **open**: manual unread, archive, new message with automatic unarchive, archive again, then browser menu read left the CLI unread while the browser showed read. That approval covered the diagnostic surface only. Operationally, an unqualified conversation can remain eligible for unread queues; consumers must preserve the insufficient-evidence qualifier rather than silently treating it as reconciled read or repeating a command. Round 4 itself required no new candidate; the subsequent baseline/buffer investigation produced the qualified transition above. PRs remain open for independent review, without merge authorization.
+Unknown/positive baselines, snapshots/history, incomplete batches, cached IDs and ambiguous ordering remain unqualified. No local clock or capture timestamp is used to infer remote ordering. Equal-second arrivals or device clock disagreement may therefore still yield insufficient evidence. Complete synchronization outside these conditions is not guaranteed. An unqualified conversation can remain eligible for unread queues; consumers must preserve the insufficient-evidence qualifier rather than treating it as reconciled read or repeating a command.
