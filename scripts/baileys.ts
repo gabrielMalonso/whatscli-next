@@ -323,7 +323,12 @@ function generatePackage(
     'patchedDependencies',
     '{}',
   ]);
-  command(stage, 'pnpm', ['install', '--ignore-scripts']);
+  // Only this temporary package may rewrite its lockfile during regeneration.
+  command(stage, 'pnpm', [
+    'install',
+    '--no-frozen-lockfile',
+    '--ignore-scripts',
+  ]);
   const edit = join(work, 'edit');
   command(stage, 'pnpm', [
     'patch',
@@ -361,6 +366,7 @@ function generatePackage(
       ...process.env,
       npm_config_ignore_scripts: 'true',
       npm_config_lockfile_only: 'true',
+      npm_config_frozen_lockfile: 'false',
     },
   );
   // Check the integrity actually recorded by pnpm, not only the registry response.
