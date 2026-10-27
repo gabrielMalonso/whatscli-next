@@ -1,29 +1,57 @@
-# Pinned Baileys patch
+# Maintaining the pinned Baileys SDK
 
-`baileys@7.0.0-rc14` remains pinned in package.json. pnpm applies `baileys@7.0.0-rc14.patch` during frozen installation, including `--ignore-scripts`; the patch and its hash are recorded in the lockfile. This uses [pnpm's dependency patch mechanism](https://pnpm.io/10.x/cli/patch), so installation needs neither a private experimental tarball nor an SDK build step.
+The CLI installs the exact npm release in `package.json`, with pnpm applying a generated dependency patch during `--frozen-lockfile --ignore-scripts` installation. Installation does not build the SDK or require a separately published fork package.
 
-The patch contains the 32 compiled JavaScript, declaration and source-map files that differ between the published rc14 package and the SDK build described below. The base is `f5cd20ff83176c41a021e9ec0735e978dc3ff9b6`, whose source tree matches [gabrielMalonso/Baileys at 43055207616cac61c8c4ae95f7c29506df4a1f8c](https://github.com/gabrielMalonso/Baileys/commit/43055207616cac61c8c4ae95f7c29506df4a1f8c). Existing sources are proposed in [SDK PR #1](https://github.com/gabrielMalonso/Baileys/pull/1), [SDK PR #2](https://github.com/gabrielMalonso/Baileys/pull/2) and [SDK PR #3](https://github.com/gabrielMalonso/Baileys/pull/3), with the review correction in [SDK PR #4](https://github.com/gabrielMalonso/Baileys/pull/4). The fork also includes upstream's WIN_HYBRID platform change. The preflight sync commits outside the outgoing patch transaction, so a listener follow-up cannot reuse an already committed transaction context. Direct-chat receipt times now use `message-receipt.update`, leaving message timestamps unchanged. No dependency versions, credentials, Signal flows, MAC-verification defaults or generated WAProto bindings are changed by the patch.
+## Source of truth
 
-`baileys-typed-echo.source.patch` is a reviewable source-and-test diff against that exact base. It makes the typed `app-state.update` chat action with `source: 'local-echo'` independent of `emitOwnEvents`; only legacy `processSyncAction` events remain gated. The patch is decoded once, preserving response evidence, request IDs, versions, ranges and transaction behavior. Local echo remains local evidence, separate from independently observed sync state.
+[`baileys-source.json`](baileys-source.json) records the npm release, its upstream Git commit, published SHA-512 integrity and ordered source patches. The npm `gitHead` and the source package version must match this manifest. The source patches include their offline regression tests:
 
-To regenerate, start with a clean isolated SDK checkout at `f5cd20ff83176c41a021e9ec0735e978dc3ff9b6`. Set `cli_dir` to an absolute CLI checkout path and `sdk_dir` to the isolated SDK path, then run:
+- `01-windows-platform.patch`: upstream's Windows platform correction, preserving the behavior already included in our pinned package.
+- `02-app-state.patch`: typed action observations, response evidence, independent local echoes, transaction and event-buffer corrections, including the final review fixes in [upstream PR #2878](https://github.com/WhiskeySockets/Baileys/pull/2878).
+- `03-receipts.patch`: separate direct receipt times, preserving original message timestamps and broadcast handling, including the final review fixes in [upstream PR #2879](https://github.com/WhiskeySockets/Baileys/pull/2879).
 
-```sh
-cd "$sdk_dir"
-git apply --check "$cli_dir/patches/baileys-typed-echo.source.patch"
-git apply "$cli_dir/patches/baileys-typed-echo.source.patch"
-corepack yarn install --immutable --mode=skip-build
-corepack yarn build
-```
+Edit source patches and their tests rather than the compiled `baileys@VERSION.patch`. The generated patch, dependency version, pnpm workspace mapping, lockfile and manifest belong in the same PR. No installation references a moving Git branch.
 
-In an isolated CLI checkout with its dependencies installed, regenerate using pnpm 10.24.0:
+## Rebuild and verify
+
+Use the project's pinned Node.js and pnpm versions; Corepack, Git and npm must also be available. With CLI dependencies installed:
 
 ```sh
-pnpm patch baileys@7.0.0-rc14 --ignore-existing --edit-dir .tmp/baileys-patch
-cp -R "$sdk_dir/lib/." .tmp/baileys-patch/lib/
-npm_config_ignore_scripts=true npm_config_lockfile_only=true pnpm patch-commit .tmp/baileys-patch --patches-dir patches
+pnpm sdk:verify
 ```
 
-This updates the compiled patch and the three patch-hash references in `pnpm-lock.yaml`. Review and copy only those files back to the working CLI checkout. Do not edit an installed package in place. Validate the regenerated patch in the isolated CLI checkout with `pnpm install --frozen-lockfile --ignore-scripts` and the contributor checks.
+This fetches the exact upstream commit into a new ignored `.tmp/baileys-*` directory, applies the source patches, installs SDK dependencies with its immutable Yarn lockfile and build scripts skipped, and runs SDK formatting, lint/types, unit/integration tests and build. It then regenerates the pnpm package patch in isolation and compares it, the project dependency files and the installed SDK with the committed result.
 
-`test/baileys-patch.test.ts` exercises the installed package with fictional encrypted fixtures and MAC verification enabled. It checks that retiring an old record cannot reverse the new read/archive action, including the final hash/map. The source patch includes SDK tests covering read/unread and archive/unarchive with `emitOwnEvents` both disabled and enabled. They assert exactly one typed echo, preserved response/request correlation and ranges, and legacy events only when enabled. CLI tests separately cover the response event integration and queue projection. No live session is used by these tests.
+Production dependency metadata, exports, package inventory, WAProto and engine requirements are checked against the published release before replacing compiled `lib/` files. Missing, added or changed generated files are accounted for. Source patches cannot modify SDK packaging, dependencies, workflows or generated bindings. Source maps may differ only by terminal newline normalization; executable files and declarations must match exactly.
+
+The existing CLI CI and the SDK CI job run independently and are both required before merging. SDK checks here are offline with respect to WhatsApp: no account, credentials or live session is used. Bartender E2E is not part of this gate.
+
+## Prepare an update
+
+```sh
+# No changes when the pinned release is already npm's latest.
+pnpm sdk:update
+
+# An exact published version also rebuilds the current release after patch edits.
+pnpm sdk:update 7.0.0-rc14
+
+pnpm install --frozen-lockfile --ignore-scripts
+pnpm lint
+pnpm format:check
+pnpm check
+pnpm test
+pnpm verify:build
+pnpm sdk:verify
+```
+
+SDK checks and isolated package validation finish before the command copies generated dependency files into the CLI checkout. It preserves the temporary directories for diagnosis and does not automatically remove them. Run maintenance in a development checkout, separately from any deployed runtime directory.
+
+A failed patch application stops the update with its patch name and workspace path. An application without textual conflicts still requires both CI jobs. When upstream incorporates a fix, review behavioral equivalence, retire only the redundant production hunks and keep the regression tests as a test-only source patch. Patches are never silently skipped or automatically removed.
+
+## Automated proposals
+
+[`update-baileys.yml`](../.github/workflows/update-baileys.yml) checks npm's `latest` release daily and supports manual dispatch with an exact version. The preparation job has read access and builds/tests the SDK. A separate job with write access receives only the proposed dependency data, preserves canonical source patches and unrelated package settings, and opens or updates one PR on `automation/baileys-update`. A branch edited by someone other than the bot is preserved and requires intervention.
+
+The workflow uses the repository's `GITHUB_TOKEN`, without a personal token or GitHub App secret. Repository settings must allow Actions to create PRs. It explicitly dispatches `ci.yml` on the update branch because ordinary PR events created by `GITHUB_TOKEN` can await approval. The dispatched CI runs with read permissions and supplies the same required checks as ordinary PR CI.
+
+The proposal remains open if CLI CI fails; a source conflict or SDK preparation failure leaves a failed update workflow for diagnosis. There is no automatic merge, release publication or runtime deployment. Review the diff and squash merge after both required checks pass. Leave the bot branch to the workflow; make manual patch changes on a separate branch.

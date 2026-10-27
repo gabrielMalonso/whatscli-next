@@ -1,0 +1,2 @@
+# Patch context preserves upstream whitespace; validate it after application.
+patches/baileys-source/*.patch -whitespace

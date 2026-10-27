@@ -13,6 +13,7 @@ import {
   getBinaryNodeChild,
   getBinaryNodeChildren,
   getStatusFromReceiptType,
+  isJidBroadcast,
   isJidGroup,
   isJidStatusBroadcast,
   jidNormalizedUser,
@@ -182,6 +183,7 @@ function installedReceipt(
     `(() => { ${source.slice(start, end)} return handleReceipt; })()`,
     {
       areJidsSameUser,
+      isJidBroadcast,
       isJidGroup,
       isJidStatusBroadcast,
       getBinaryNodeChildren,
