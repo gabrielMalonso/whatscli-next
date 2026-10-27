@@ -1,0 +1,13 @@
+diff --git a/src/Utils/validate-connection.ts b/src/Utils/validate-connection.ts
+index 45745aab68..9bfc5d6891 100644
+--- a/src/Utils/validate-connection.ts
++++ b/src/Utils/validate-connection.ts
+@@ -37,7 +37,7 @@ const getUserAgent = (config: SocketConfig): proto.ClientPayload.IUserAgent => {
+ 
+ const PLATFORM_MAP = {
+ 	'Mac OS': proto.ClientPayload.WebInfo.WebSubPlatform.DARWIN,
+-	Windows: proto.ClientPayload.WebInfo.WebSubPlatform.WIN32
++	Windows: proto.ClientPayload.WebInfo.WebSubPlatform.WIN_HYBRID
+ }
+ 
+ const getWebInfo = (config: SocketConfig): proto.ClientPayload.IWebInfo => {

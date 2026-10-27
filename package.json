@@ -35,8 +35,10 @@
     "probe": "node dist/src/probe.js",
     "whatscli": "node dist/src/cli.js",
     "lint": "eslint --max-warnings 0 \"{src,scripts,test}/**/*.ts\" eslint.config.mjs",
-    "format:check": "prettier --check \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml .github/workflows/ci.yml README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\"",
-    "format": "prettier --write \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml .github/workflows/ci.yml README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\""
+    "format:check": "prettier --check \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml \".github/workflows/*.yml\" README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\" patches/README.md patches/baileys-source.json",
+    "format": "prettier --write \"{src,scripts,test}/**/*.ts\" eslint.config.mjs .prettierrc.json package.json tsconfig.json pnpm-workspace.yaml \".github/workflows/*.yml\" README.md CONTRIBUTING.md AGENTS.md \"docs/**/*.md\" patches/README.md patches/baileys-source.json",
+    "sdk:verify": "node scripts/baileys.ts verify",
+    "sdk:update": "node scripts/baileys.ts update"
   },
   "dependencies": {
     "baileys": "7.0.0-rc14",

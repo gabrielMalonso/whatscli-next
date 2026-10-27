@@ -1,0 +1,10 @@
+{
+  "version": "7.0.0-rc14",
+  "commit": "7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a",
+  "integrity": "sha512-pewtrljhWx5JTUBvvkXZz1fL3JPiwzjBsnhx/DWf2LWBx1cZNH7J/sF22xDehba5mySWUQU4a1Pwt7lWARUxaA==",
+  "patches": [
+    "baileys-source/01-windows-platform.patch",
+    "baileys-source/02-app-state.patch",
+    "baileys-source/03-receipts.patch"
+  ]
+}
