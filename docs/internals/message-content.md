@@ -14,7 +14,7 @@ Incoming card projection unfolds continued plain `FN`/`TEL` lines and unescapes 
 
 [message-edits.ts](../../src/message-edits.ts) uses the pinned SDK's authenticated MESSAGE_EDIT decryption helper. Target validation uses the envelope's exact account-relative conversation, direction and author; a sender-relative target must identify that same author. PN/LID candidates come from observed envelope addressing, authenticated self identities or an unambiguous stored mapping; they do not merge histories.
 
-The store preserves the original message secret privately across content replacement and restores protobuf base64 fields before decryption. Applied edit timestamps are persisted separately from the original send timestamp. Search indexes only current content. A one-time recovery replays stored envelopes; unresolved originals/secrets retain exact pending envelope references across restart. SDK retry/resend lookups retain their existing outgoing-content restriction.
+The store preserves the original message secret privately across content replacement and restores protobuf base64 fields before decryption. Legacy edits are projected from validated envelopes; the lossy derived SDK edit body/timestamp is stripped before buffering so it cannot replace an original's secret/time or bypass target validation. Other update fields, including receipt status, remain observable. Applied edit timestamps are persisted separately from the original send timestamp. Search indexes only current content. A one-time recovery replays stored envelopes; unresolved originals/secrets retain exact pending envelope references across restart. SDK retry/resend lookups retain their existing outgoing-content restriction.
 
 ## Revocation validation
 

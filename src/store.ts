@@ -48,6 +48,7 @@ import {
   messageEditTarget,
   messageEditTimestamp,
   retainMessageSecret,
+  withoutDerivedMessageEdit,
 } from './message-edits.js';
 import {
   checkPrivatePath,
@@ -2344,24 +2345,12 @@ export class Store {
   }
 
   updateMessage(change: WAMessageUpdate): void {
-    this.transaction(() => this.writeMessageUpdate(change));
+    this.transaction(() =>
+      this.writeMessageUpdate(withoutDerivedMessageEdit(change)),
+    );
   }
 
   private writeMessageUpdate({ key, update }: WAMessageUpdate): void {
-    const edited = update.message?.editedMessage?.message;
-    if (edited) {
-      const timestamp =
-        update.messageTimestamp == null
-          ? null
-          : activityTimestamp(update.messageTimestamp);
-      this.applyMessageEdit(
-        key,
-        edited,
-        timestamp === null ? null : timestamp * 1000,
-      );
-      if (update.status != null) this.receipt(key, update.status);
-      return;
-    }
     // update.key in a REVOKE is the notification key, not the target key.
     if (update.messageStubType === proto.WebMessageInfo.StubType.REVOKE) {
       if (update.key) {

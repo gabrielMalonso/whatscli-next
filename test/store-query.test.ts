@@ -169,20 +169,27 @@ test('edits, status/null updates and own participant enrichment replace search t
       false,
     );
     assert.equal(store.search('original', 100, 0).length, 1);
-    store.updateMessage({
-      key: own.key,
-      update: {
+    store.observeMessage(
+      {
+        key: { ...own.key, id: 'own-edit' },
+        messageTimestamp: 110,
         message: {
-          editedMessage: {
-            message: { imageMessage: { caption: 'Edited caption' } },
+          protocolMessage: {
+            type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+            key: own.key,
+            editedMessage: { imageMessage: { caption: 'Edited caption' } },
+            timestampMs: 110000,
           },
         },
       },
-    });
+      false,
+    );
     assert.deepEqual(store.search('original', 100, 0), []);
     assert.equal(store.search('edited caption', 100, 0).length, 1);
     assert.equal(
-      store.db.prepare('SELECT COUNT(*) AS n FROM message_text').get()?.n,
+      store.db
+        .prepare("SELECT COUNT(*) AS n FROM message_text WHERE text<>''")
+        .get()?.n,
       1,
     );
     assert.equal(

@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { initAuthCreds, makeEventBuffer, proto } from 'baileys';
 import type { WAMessage, WAMessageKey, WASocket } from 'baileys';
 import { pino } from 'pino';
+import processMessage from 'baileys/lib/Utils/process-message.js';
 import { createRuntime } from '../src/runtime.js';
 import { messageOutput } from '../src/output.js';
 import { Store, encode } from '../src/store.js';
@@ -106,6 +107,29 @@ function fixture() {
     me: { id: me, lid: meLid, name: 'Fictional owner' },
   });
   return { directory, store };
+}
+
+function runtimeFixture(messages: WAMessage[] = []) {
+  const f = fixture();
+  for (const message of messages) f.store.observeMessage(message, false);
+  f.store.close();
+  const ev = makeEventBuffer(pino({ level: 'silent' }));
+  let lookup:
+    ((key: WAMessageKey) => Promise<proto.IMessage | undefined>) | undefined;
+  const runtime = createRuntime(
+    { dataDir: f.directory, connect: true },
+    (config) => {
+      lookup = config.getMessage;
+      return {
+        ev,
+        ws: { isClosed: true },
+        end: () => ev.emit('connection.update', { connection: 'close' }),
+      } as unknown as WASocket;
+    },
+  );
+  runtime.start();
+  assert.ok(lookup);
+  return { runtime, ev, lookup };
 }
 
 function text(store: Store, key: WAMessageKey) {
@@ -293,7 +317,7 @@ test('deletion and chat boundaries remain authoritative over edits and upgrade r
   }
 });
 
-test('legacy edit and SDK update paths preserve the secret needed for a later encrypted edit', () => {
+test('legacy envelopes preserve the secret and derived SDK updates cannot supply edit authority', () => {
   for (const sdk of [false, true]) {
     const { store } = fixture();
     const message = original();
@@ -308,7 +332,8 @@ test('legacy edit and SDK update paths preserve the secret needed for a later en
             },
           },
         });
-      else store.observeMessage(edit(message, 10, 'Legacy corrected', true));
+      assert.equal(text(store, message.key), 'Fictional typo');
+      store.observeMessage(edit(message, 10, 'Legacy corrected', true));
       assert.equal(text(store, message.key), 'Legacy corrected');
       store.observeMessage(edit(message, 20, 'Encrypted latest'));
       assert.equal(text(store, message.key), 'Encrypted latest');
@@ -318,27 +343,64 @@ test('legacy edit and SDK update paths preserve the secret needed for a later en
   }
 });
 
-test('runtime projects buffered encrypted upserts and keeps automatic resend content withheld', async () => {
-  const f = fixture();
-  const message = original();
-  f.store.observeMessage(message, false);
-  f.store.close();
-  const ev = makeEventBuffer(pino({ level: 'silent' }));
-  let lookup:
-    ((key: WAMessageKey) => Promise<proto.IMessage | undefined>) | undefined;
-  const runtime = createRuntime(
-    { dataDir: f.directory, connect: true },
-    (config) => {
-      lookup = config.getMessage;
-      return {
+for (const foreignTarget of [false, true]) {
+  test(`buffered original and legacy edit preserve original evidence (foreign target=${foreignTarget})`, async () => {
+    const { runtime, ev } = runtimeFixture();
+    const message = original();
+    const envelope = edit(message, 14, 'Legacy corrected', true);
+    if (foreignTarget)
+      envelope.message!.protocolMessage!.key!.remoteJid =
+        '12025550102@s.whatsapp.net';
+    try {
+      ev.buffer();
+      ev.emit('messages.upsert', {
+        type: 'notify',
+        messages: [message, envelope],
+      });
+      const creds = initAuthCreds();
+      creds.me = { id: me, lid: meLid };
+      await processMessage(envelope, {
         ev,
-        ws: { isClosed: true },
-        end: () => ev.emit('connection.update', { connection: 'close' }),
-      } as unknown as WASocket;
-    },
-  );
+        creds,
+        shouldProcessHistoryMsg: false,
+        options: {},
+        getMessage: async () => undefined,
+      } as unknown as Parameters<typeof processMessage>[1]);
+      ev.flush();
+      const rows = (await runtime.execute({
+        command: 'messages',
+        jid: peer,
+        limit: 10,
+        offset: 0,
+      })) as { id: string; text: string; timestamp: number }[];
+      const current = rows.find(({ id }) => id === message.key.id);
+      assert.equal(
+        current?.text,
+        foreignTarget ? 'Fictional typo' : 'Legacy corrected',
+      );
+      assert.equal(current?.timestamp, base);
+      ev.emit('messages.upsert', {
+        type: 'notify',
+        messages: [edit(message, 25, 'Encrypted latest')],
+      });
+      const updated = (await runtime.execute({
+        command: 'search',
+        query: 'Encrypted latest',
+        limit: 10,
+        offset: 0,
+      })) as { text: string; timestamp: number }[];
+      assert.equal(updated[0]?.text, 'Encrypted latest');
+      assert.equal(updated[0]?.timestamp, base);
+    } finally {
+      await runtime.close();
+    }
+  });
+}
+
+test('runtime projects buffered encrypted upserts and keeps automatic resend content withheld', async () => {
+  const message = original();
+  const { runtime, ev, lookup } = runtimeFixture([message]);
   try {
-    runtime.start();
     ev.buffer();
     ev.emit('messages.upsert', { type: 'notify', messages: [edit(message)] });
     ev.flush();

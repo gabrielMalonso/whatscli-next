@@ -5,7 +5,20 @@ import {
   proto,
   toNumber,
 } from 'baileys';
-import type { WAMessage } from 'baileys';
+import type { WAMessage, WAMessageUpdate } from 'baileys';
+
+/** Legacy envelopes are validated/projected locally; their lossy SDK update
+ * must not replace originals inside the SDK buffer before persistence. */
+export function withoutDerivedMessageEdit({
+  key,
+  update,
+}: WAMessageUpdate): WAMessageUpdate {
+  if (!update.message?.editedMessage) return { key, update };
+  const remaining = { ...update };
+  delete remaining.message;
+  delete remaining.messageTimestamp;
+  return { key, update: remaining };
+}
 
 export function isMessageEdit(message: proto.IWebMessageInfo): boolean {
   const content = normalizeMessageContent(message.message);
