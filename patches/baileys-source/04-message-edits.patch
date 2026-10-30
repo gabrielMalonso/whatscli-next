@@ -1,0 +1,209 @@
+diff --git a/src/Utils/decode-wa-message.ts b/src/Utils/decode-wa-message.ts
+index 39432e5..2faa396 100644
+--- a/src/Utils/decode-wa-message.ts
++++ b/src/Utils/decode-wa-message.ts
+@@ -339,7 +339,20 @@ export const decryptMessageNode = (
+ 						let msg: proto.IMessage = proto.Message.decode(
+ 							e2eType !== 'plaintext' ? unpadRandomMax16(msgBuffer) : msgBuffer
+ 						)
+-						msg = msg.deviceSentMessage?.message || msg
++						if (msg.deviceSentMessage?.message) {
++							const innerMessage = msg.deviceSentMessage.message
++							const outerMessage = { ...msg }
++							delete outerMessage.deviceSentMessage
++							msg = {
++								...outerMessage,
++								...innerMessage,
++								messageContextInfo: {
++									...outerMessage.messageContextInfo,
++									...innerMessage.messageContextInfo
++								}
++							}
++						}
++
+ 						if (msg.senderKeyDistributionMessage) {
+ 							//eslint-disable-next-line max-depth
+ 							try {
+diff --git a/src/Utils/decrypt-message-edit.ts b/src/Utils/decrypt-message-edit.ts
+new file mode 100644
+index 0000000..d39d306
+--- /dev/null
++++ b/src/Utils/decrypt-message-edit.ts
+@@ -0,0 +1,48 @@
++import { proto } from '../../WAProto/index.js'
++import { aesDecryptGCM, hmacSign } from './crypto'
++
++type MessageEditContext = {
++	originalSenderJid: string
++	originalMsgId: string
++	messageSecret: Uint8Array
++	editorJid: string
++}
++
++export const isEncryptedMessageEdit = (
++	content: proto.IMessage | null | undefined
++): content is proto.IMessage & { secretEncryptedMessage: proto.Message.ISecretEncryptedMessage } =>
++	content?.secretEncryptedMessage?.secretEncType === proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT
++
++/**
++ * MESSAGE_EDIT uses the same single-block HKDF-SHA256 construction as other
++ * encrypted add-ons, but binds the edit identities in the info and uses empty AAD.
++ */
++export const decryptMessageEdit = (
++	{ encPayload, encIv }: proto.Message.ISecretEncryptedMessage,
++	{ originalSenderJid, originalMsgId, messageSecret, editorJid }: MessageEditContext
++): proto.Message => {
++	if (messageSecret.byteLength !== 32) {
++		throw new Error(`Invalid MESSAGE_EDIT message secret length: expected 32, got ${messageSecret.byteLength}`)
++	}
++
++	if (!encPayload?.length) {
++		throw new Error('Invalid MESSAGE_EDIT payload: missing encrypted content')
++	}
++
++	if (encIv?.length !== 12) {
++		throw new Error(`Invalid MESSAGE_EDIT IV length: expected 12, got ${encIv?.length ?? 0}`)
++	}
++
++	const info = Buffer.concat([
++		Buffer.from(originalMsgId),
++		Buffer.from(originalSenderJid),
++		Buffer.from(editorJid),
++		Buffer.from('Message Edit'),
++		new Uint8Array([1])
++	])
++	const extractedKey = hmacSign(messageSecret, new Uint8Array(32), 'sha256')
++	const decryptionKey = hmacSign(info, extractedKey, 'sha256')
++	const plaintext = aesDecryptGCM(encPayload, decryptionKey, encIv, new Uint8Array(0))
++
++	return proto.Message.decode(plaintext)
++}
+diff --git a/src/Utils/index.ts b/src/Utils/index.ts
+index 06fcdd5..2fadbdf 100644
+--- a/src/Utils/index.ts
++++ b/src/Utils/index.ts
+@@ -19,3 +19,4 @@ export * from './browser-utils'
+ export * from './companion-reg-client-utils'
+ export * from './identity-change-handler'
+ export * from './stanza-ack'
++export * from './decrypt-message-edit'
+diff --git a/src/Utils/process-message.ts b/src/Utils/process-message.ts
+index 8cb7eaa..da45e3a 100644
+--- a/src/Utils/process-message.ts
++++ b/src/Utils/process-message.ts
+@@ -31,6 +31,7 @@ import {
+ 	jidNormalizedUser
+ } from '../WABinary'
+ import { aesDecryptGCM, hmacSign } from './crypto'
++import { isEncryptedMessageEdit } from './decrypt-message-edit'
+ import { getKeyAuthor, toNumber } from './generics'
+ import { downloadAndProcessHistorySyncNotification } from './history'
+ import type { ILogger } from './logger'
+@@ -178,7 +179,8 @@ export const isRealMessage = (message: WAMessage) => {
+ 		hasSomeContent &&
+ 		!normalizedContent?.protocolMessage &&
+ 		!normalizedContent?.reactionMessage &&
+-		!normalizedContent?.pollUpdateMessage
++		!normalizedContent?.pollUpdateMessage &&
++		!isEncryptedMessageEdit(normalizedContent)
+ 	)
+ }
+ 
+diff --git a/src/__tests__/Utils/decrypt-message-edit.test.ts b/src/__tests__/Utils/decrypt-message-edit.test.ts
+new file mode 100644
+index 0000000..fd05e53
+--- /dev/null
++++ b/src/__tests__/Utils/decrypt-message-edit.test.ts
+@@ -0,0 +1,92 @@
++import { createCipheriv, hkdfSync } from 'node:crypto'
++import { pino } from 'pino'
++import { proto } from '../../../WAProto/index.js'
++import type { SignalRepositoryWithLIDStore } from '../../Types'
++import { decryptMessageNode } from '../../Utils/decode-wa-message'
++import { decryptMessageEdit, isEncryptedMessageEdit } from '../../Utils/decrypt-message-edit'
++import { isRealMessage } from '../../Utils/process-message'
++
++const author = '123450001@lid'
++const id = 'fictional-original'
++const messageSecret = Buffer.alloc(32, 7)
++const encIv = Buffer.alloc(12, 8)
++const context = { originalSenderJid: author, editorJid: author, originalMsgId: id, messageSecret }
++const plaintext = proto.Message.encode({
++	protocolMessage: {
++		type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
++		key: { id, fromMe: true },
++		editedMessage: { conversation: 'Fictional correction' }
++	}
++}).finish()
++const key = Buffer.from(
++	hkdfSync('sha256', messageSecret, Buffer.alloc(32), Buffer.from(id + author + author + 'Message Edit'), 32)
++)
++const cipher = createCipheriv('aes-256-gcm', key, encIv)
++const encPayload = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()])
++const secretEncryptedMessage = {
++	secretEncType: proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT,
++	targetMessageKey: { id, fromMe: true },
++	encIv,
++	encPayload
++}
++
++describe('encrypted message edits', () => {
++	it('authenticates an independently encrypted MESSAGE_EDIT without counting a new message', () => {
++		const decoded = decryptMessageEdit(secretEncryptedMessage, context)
++		expect(decoded.protocolMessage?.editedMessage?.conversation).toBe('Fictional correction')
++		expect(isEncryptedMessageEdit({ secretEncryptedMessage })).toBe(true)
++		expect(
++			isRealMessage({
++				key: { remoteJid: author, id: 'fictional-edit', fromMe: false },
++				message: { secretEncryptedMessage }
++			})
++		).toBe(false)
++	})
++
++	it('rejects a wrong author, secret, IV, or modified ciphertext', () => {
++		expect(() => decryptMessageEdit(secretEncryptedMessage, { ...context, editorJid: '123450002@lid' })).toThrow()
++		expect(() =>
++			decryptMessageEdit(secretEncryptedMessage, { ...context, messageSecret: Buffer.alloc(32, 9) })
++		).toThrow()
++		expect(() => decryptMessageEdit({ ...secretEncryptedMessage, encIv: Buffer.alloc(11) }, context)).toThrow(
++			/IV length/
++		)
++		const corrupt = Buffer.from(encPayload)
++		corrupt[0] = corrupt[0]! ^ 1
++		expect(() => decryptMessageEdit({ ...secretEncryptedMessage, encPayload: corrupt }, context)).toThrow()
++	})
++})
++
++it('retains the outer message secret when decoding a linked-device message', async () => {
++	const repository = { lidMapping: { getLIDForPN: async () => null } } as unknown as SignalRepositoryWithLIDStore
++	const decoded = decryptMessageNode(
++		{
++			tag: 'message',
++			attrs: { id: 'fictional-linked', from: '12025550199@s.whatsapp.net', recipient: author, t: '1700000000' },
++			content: [
++				{
++					tag: 'plaintext',
++					attrs: {},
++					content: proto.Message.encode({
++						messageContextInfo: { messageSecret },
++						deviceSentMessage: {
++							destinationJid: author,
++							message: {
++								conversation: 'Fictional phone message',
++								messageContextInfo: { deviceListMetadataVersion: 2 }
++							}
++						}
++					}).finish()
++				}
++			]
++		},
++		'12025550199@s.whatsapp.net',
++		'123450002@lid',
++		repository,
++		pino({ level: 'silent' })
++	)
++	await decoded.decrypt()
++	expect(decoded.fullMessage.message?.conversation).toBe('Fictional phone message')
++	expect(Buffer.from(decoded.fullMessage.message?.messageContextInfo?.messageSecret!)).toEqual(messageSecret)
++	expect(decoded.fullMessage.message?.messageContextInfo?.deviceListMetadataVersion).toBe(2)
++})

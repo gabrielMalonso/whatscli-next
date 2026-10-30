@@ -21,5 +21,21 @@ export function decodeMessage(value: string): WAMessage {
   if (protocol?.type != null)
     protocol.type =
       proto.Message.ProtocolMessage.fromObject(protocol).type ?? null;
+  // Protobuf toJSON also encodes bytes as base64. Restore only the fields needed
+  // by edit decryption, preserving extended SDK message/key properties.
+  for (const content of [
+    message.message,
+    normalizeMessageContent(message.message),
+  ]) {
+    if (content?.messageContextInfo)
+      content.messageContextInfo = proto.MessageContextInfo.fromObject(
+        content.messageContextInfo,
+      );
+    if (content?.secretEncryptedMessage)
+      content.secretEncryptedMessage =
+        proto.Message.SecretEncryptedMessage.fromObject(
+          content.secretEncryptedMessage,
+        );
+  }
   return message;
 }
