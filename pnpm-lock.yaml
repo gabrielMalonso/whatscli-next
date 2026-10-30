@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   baileys@7.0.0-rc14:
-    hash: 6e2e1f15d45ba25c8da7d89c42f1d8522eb38e9696147352d8355ca3a4d9b58b
+    hash: c3f8a68063c9bf346e2e6f743060fa77d198ac9690e26550ffdf0bf58c2b3dde
     path: patches/baileys@7.0.0-rc14.patch
 
 importers:
@@ -15,7 +15,7 @@ importers:
     dependencies:
       baileys:
         specifier: 7.0.0-rc14
-        version: 7.0.0-rc14(patch_hash=6e2e1f15d45ba25c8da7d89c42f1d8522eb38e9696147352d8355ca3a4d9b58b)(sharp@0.35.5(@types/node@24.19.2))
+        version: 7.0.0-rc14(patch_hash=c3f8a68063c9bf346e2e6f743060fa77d198ac9690e26550ffdf0bf58c2b3dde)(sharp@0.35.5(@types/node@24.19.2))
       pino:
         specifier: 9.14.0
         version: 9.14.0
@@ -1300,7 +1300,7 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  baileys@7.0.0-rc14(patch_hash=6e2e1f15d45ba25c8da7d89c42f1d8522eb38e9696147352d8355ca3a4d9b58b)(sharp@0.35.5(@types/node@24.19.2)):
+  baileys@7.0.0-rc14(patch_hash=c3f8a68063c9bf346e2e6f743060fa77d198ac9690e26550ffdf0bf58c2b3dde)(sharp@0.35.5(@types/node@24.19.2)):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4

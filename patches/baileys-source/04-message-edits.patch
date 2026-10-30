@@ -1,21 +1,19 @@
 diff --git a/src/Utils/decode-wa-message.ts b/src/Utils/decode-wa-message.ts
-index 39432e5..2faa396 100644
+index 39432e5..169815f 100644
 --- a/src/Utils/decode-wa-message.ts
 +++ b/src/Utils/decode-wa-message.ts
-@@ -339,7 +339,20 @@ export const decryptMessageNode = (
+@@ -339,7 +339,18 @@ export const decryptMessageNode = (
  						let msg: proto.IMessage = proto.Message.decode(
  							e2eType !== 'plaintext' ? unpadRandomMax16(msgBuffer) : msgBuffer
  						)
 -						msg = msg.deviceSentMessage?.message || msg
 +						if (msg.deviceSentMessage?.message) {
 +							const innerMessage = msg.deviceSentMessage.message
-+							const outerMessage = { ...msg }
-+							delete outerMessage.deviceSentMessage
++							const outerContext = msg.messageContextInfo
 +							msg = {
-+								...outerMessage,
 +								...innerMessage,
 +								messageContextInfo: {
-+									...outerMessage.messageContextInfo,
++									...outerContext,
 +									...innerMessage.messageContextInfo
 +								}
 +							}
