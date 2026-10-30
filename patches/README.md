@@ -9,6 +9,7 @@ The CLI installs the exact npm release in `package.json`, with pnpm applying a g
 - `01-windows-platform.patch`: upstream's Windows platform correction, preserving the behavior already included in our pinned package.
 - `02-app-state.patch`: typed action observations, response evidence, independent local echoes, transaction and event-buffer corrections, including the final review fixes in [upstream PR #2878](https://github.com/WhiskeySockets/Baileys/pull/2878).
 - `03-receipts.patch`: separate direct receipt times, preserving original message timestamps and broadcast handling, including the final review fixes in [upstream PR #2879](https://github.com/WhiskeySockets/Baileys/pull/2879).
+- `04-message-edits.patch`: authenticated encrypted-edit helpers adapted from [upstream PR #2743](https://github.com/WhiskeySockets/Baileys/pull/2743), linked-device message-secret preservation and exclusion of encrypted edits from new-message accounting. The CLI materializes edits from private stored originals without changing the SDK retry/resend callback.
 
 Edit source patches and their tests rather than the compiled `baileys@VERSION.patch`. The generated patch, dependency version, pnpm workspace mapping, lockfile and manifest belong in the same PR. No installation references a moving Git branch.
 

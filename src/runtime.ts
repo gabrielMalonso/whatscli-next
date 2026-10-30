@@ -42,6 +42,7 @@ import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
 import type { PendingChatState } from './store.js';
 import { isUnreadCount } from './output.js';
+import { withoutDerivedMessageEdit } from './message-edits.js';
 
 import { object } from './protocol.js';
 import type { Command } from './protocol.js';
@@ -397,6 +398,13 @@ export function createRuntime(
       store.observeChat(metadata, source);
     };
     current.ev.emit = (event, value) => {
+      if (event === 'messages.update')
+        return emit(
+          'messages.update',
+          (value as BaileysEventMap['messages.update']).map(
+            withoutDerivedMessageEdit,
+          ),
+        );
       if (event === 'chats.update' || event === 'chats.upsert') {
         const chats = value as BaileysEventMap['chats.update' | 'chats.upsert'];
         persist(() =>

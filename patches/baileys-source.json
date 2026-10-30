@@ -5,6 +5,7 @@
   "patches": [
     "baileys-source/01-windows-platform.patch",
     "baileys-source/02-app-state.patch",
-    "baileys-source/03-receipts.patch"
+    "baileys-source/03-receipts.patch",
+    "baileys-source/04-message-edits.patch"
   ]
 }

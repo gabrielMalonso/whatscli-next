@@ -43,6 +43,14 @@ import { receiptUserJid } from './send-route.js';
 import type { SendRoute } from './send-route.js';
 import { CommandError } from './errors.js';
 import {
+  decodeMessageEdit,
+  isMessageEdit,
+  messageEditTarget,
+  messageEditTimestamp,
+  retainMessageSecret,
+  withoutDerivedMessageEdit,
+} from './message-edits.js';
+import {
   checkPrivatePath,
   ensurePrivateDirectory,
   isMissing,
@@ -252,6 +260,7 @@ export class Store {
       });
       this.recoverLegacy();
       this.initializeQueries();
+      this.recoverMessageEdits();
     } catch (error) {
       opened?.close();
       this.lock.close();
@@ -1041,6 +1050,13 @@ export class Store {
       this.event('incomplete-chat-key', {});
       return;
     }
+    for (const { message } of chat.messages ?? [])
+      if (
+        message?.key &&
+        message.key.remoteJid === jid &&
+        isMessageEdit(message)
+      )
+        this.observeMessage({ ...message, key: message.key }, false);
     const previous = this.chat(jid);
     const merged = { ...previous, ...chat };
     const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
@@ -1178,6 +1194,7 @@ export class Store {
         key.participant ||
         !key.id ||
         message.messageStubType ||
+        isMessageEdit(message) ||
         timestamp === null
       )
         return [];
@@ -1490,6 +1507,7 @@ export class Store {
       this.observeActivity(chat.id, chat[field], `chat.${field}`);
     }
     for (const message of messages) {
+      if (isMessageEdit(message)) continue;
       if (message.key?.remoteJid === chat.id && !this.isFailedReplay(message))
         this.observeActivity(
           chat.id,
@@ -1555,6 +1573,7 @@ export class Store {
       fromMe !== false ||
       participant ||
       isReaction(message) ||
+      isMessageEdit(message) ||
       this.isFailedReplay(message)
     )
       return;
@@ -1640,6 +1659,11 @@ export class Store {
     source?: BaileysEventMap['messages.upsert']['type'],
   ): void {
     this.transaction(() => {
+      if (isMessageEdit(message)) {
+        this.writeObservedMessage(message, false);
+        this.observeMessageEdit(message);
+        return;
+      }
       if (this.isFailedReplay(message)) {
         // A later decryption failure cannot replace already decoded content,
         // its original time, or the coverage established for that exact key.
@@ -1677,6 +1701,7 @@ export class Store {
         }
       }
       this.writeObservedMessage(message, chatObserved);
+      this.retryMessageEdits(message.key);
       if (
         reaction ||
         (!chatObserved && source === undefined) ||
@@ -1729,6 +1754,7 @@ export class Store {
   private writeObservedMessage(
     message: WAMessage,
     chatObserved: boolean,
+    applyingEdit = false,
   ): void {
     const { remoteJid: jid, id, fromMe, participant } = message.key;
     if (!jid || !id || typeof fromMe !== 'boolean') {
@@ -1747,6 +1773,16 @@ export class Store {
     };
     if (previous?.message && !message.message)
       merged.message = previous.message;
+    if (
+      !applyingEdit &&
+      previous?.message &&
+      this.get('message-edit-version', encode(this.deletionKey(message.key)))
+    ) {
+      // An old history snapshot cannot undo an observed edit. It may supply a
+      // previously missing secret without restoring its old visible body.
+      merged.message = retainMessageSecret(previous.message, message.message);
+      merged.messageTimestamp = previous.messageTimestamp ?? null;
+    }
     if (
       message.message &&
       message.messageStubType === undefined &&
@@ -2095,9 +2131,20 @@ export class Store {
       typeof message.key.fromMe !== 'boolean'
     )
       return undefined;
-    const target = protocol.key;
+    return this.senderRelativeTarget(message, protocol.key);
+  }
+
+  private senderRelativeTarget(
+    message: WAMessage,
+    target: WAMessageKey,
+  ): WAMessageKey | undefined {
     const id = target.id;
-    if (!id) return undefined;
+    if (
+      !id ||
+      !message.key.remoteJid ||
+      typeof message.key.fromMe !== 'boolean'
+    )
+      return undefined;
     const jid = message.key.remoteJid;
     const direct = isPn(jid) || isLid(jid);
     const me = this.get<Pick<AuthenticationCreds, 'me'>>('auth', 'creds')?.me;
@@ -2150,6 +2197,136 @@ export class Store {
     };
   }
 
+  private recoverMessageEdits(): void {
+    if (this.get<boolean>('migration', 'message-edits-v1')) return;
+    this.transaction(() => {
+      const rows = this.db
+        .prepare(
+          `SELECT json FROM messages WHERE instr(json,'"secretEncryptedMessage"')>0
+          OR instr(json,'"protocolMessage"')>0 ORDER BY timestamp,rowid`,
+        )
+        .all();
+      for (const row of rows) {
+        const message = decodeMessage(String(row.json));
+        if (isMessageEdit(message) && !this.deletion(message.key))
+          this.observeMessageEdit(message);
+      }
+      this.set('migration', 'message-edits-v1', true);
+    });
+  }
+
+  private retryMessageEdits(key: WAMessageKey): void {
+    const target = this.deletionKey(key);
+    if (!target) return;
+    const identity = encode(target);
+    const pending = this.get<WAMessageKey[]>('message-edit-pending', identity);
+    if (!pending?.length) return;
+    this.set('message-edit-pending', identity, null);
+    for (const envelopeKey of pending) {
+      const envelope = this.message(envelopeKey);
+      if (envelope?.message) this.observeMessageEdit(envelope);
+    }
+  }
+
+  private observeMessageEdit(envelope: WAMessage): void {
+    if (!envelope.key.id) return;
+    const rawTarget = messageEditTarget(envelope);
+    // Authors may edit only their own messages. Embedded fromMe is sender-relative;
+    // retain the authenticated envelope's exact local chat/direction/participant.
+    const target =
+      rawTarget?.fromMe === true
+        ? this.senderRelativeTarget(envelope, rawTarget)
+        : undefined;
+    if (!target?.id || target.id === envelope.key.id) {
+      this.event('message-edit-unavailable', { reason: 'inconsistent-target' });
+      return;
+    }
+    if (this.deletion(target) || this.deletion(envelope.key)) return;
+    const original = this.message(target);
+    const secret =
+      original?.message?.messageContextInfo?.messageSecret ??
+      normalizeMessageContent(original?.message)?.messageContextInfo
+        ?.messageSecret;
+    const encrypted = !!normalizeMessageContent(envelope.message)
+      ?.secretEncryptedMessage;
+    if (!original?.message || (encrypted && !secret)) {
+      const identity = encode(this.deletionKey(target));
+      const pending =
+        this.get<WAMessageKey[]>('message-edit-pending', identity) ?? [];
+      if (!pending.some((key) => encode(key) === encode(envelope.key)))
+        this.set('message-edit-pending', identity, [...pending, envelope.key]);
+      this.event('message-edit-unavailable', {
+        jid: target.remoteJid,
+        id: target.id,
+        reason: original?.message ? 'missing-secret' : 'missing-original',
+      });
+      return;
+    }
+    const me = this.get<Pick<AuthenticationCreds, 'me'>>('auth', 'creds')?.me;
+    const jids = envelope.key.fromMe
+      ? [me?.id, me?.lid]
+      : isPn(envelope.key.remoteJid ?? '') ||
+          isLid(envelope.key.remoteJid ?? '')
+        ? [envelope.key.remoteJid, envelope.key.remoteJidAlt]
+        : [envelope.key.participant, envelope.key.participantAlt];
+    const authors = new Set<string>();
+    for (const jid of jids) {
+      if (!jid) continue;
+      const normalized = jidNormalizedUser(jid);
+      if (!isPn(normalized) && !isLid(normalized)) continue;
+      authors.add(normalized);
+      const { mapping } = this.contactView(normalized);
+      if (mapping.status === 'known') {
+        if (mapping.pn) authors.add(mapping.pn);
+        if (mapping.lid) authors.add(mapping.lid);
+      }
+    }
+    const protocol = decodeMessageEdit(envelope, original, [...authors]);
+    if (!protocol?.editedMessage) {
+      this.event('message-edit-unavailable', {
+        jid: target.remoteJid,
+        id: target.id,
+        reason: 'invalid-or-undecryptable-content',
+      });
+      return;
+    }
+    this.applyMessageEdit(
+      target,
+      protocol.editedMessage,
+      messageEditTimestamp(protocol, envelope),
+    );
+  }
+
+  private applyMessageEdit(
+    key: WAMessageKey,
+    content: proto.IMessage,
+    timestamp: number | null,
+  ): void {
+    const original = this.message(key);
+    if (!original?.message || this.deletion(key)) return;
+    const identity = encode(this.deletionKey(key));
+    const previous = this.get<{ timestamp: number | null }>(
+      'message-edit-version',
+      identity,
+    );
+    if (
+      previous &&
+      (timestamp === null ||
+        (previous.timestamp !== null && timestamp <= previous.timestamp))
+    )
+      return;
+    this.writeObservedMessage(
+      {
+        ...original,
+        message: retainMessageSecret(content, original.message),
+      },
+      false,
+      true,
+    );
+    this.set('message-edit-version', identity, { timestamp });
+    this.event('message-edited', { jid: key.remoteJid, id: key.id });
+  }
+
   private observeRevocation(message: WAMessage): void {
     const protocol = normalizeMessageContent(message.message)?.protocolMessage;
     if (protocol?.type !== proto.Message.ProtocolMessage.Type.REVOKE) {
@@ -2168,7 +2345,9 @@ export class Store {
   }
 
   updateMessage(change: WAMessageUpdate): void {
-    this.transaction(() => this.writeMessageUpdate(change));
+    this.transaction(() =>
+      this.writeMessageUpdate(withoutDerivedMessageEdit(change)),
+    );
   }
 
   private writeMessageUpdate({ key, update }: WAMessageUpdate): void {
