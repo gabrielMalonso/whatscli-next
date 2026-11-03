@@ -19,6 +19,22 @@ After a mutation, the affected public field becomes `null` with a `pending` inte
 
 Unrelated, missing, and neutral/null fields do not confirm the mutation or make an old counter current.
 
+## Incoming messages and the archive preference
+
+The CLI follows the account's synced archive preference. Turning off "Keep chats
+archived" in WhatsApp enables the SDK's `unarchiveChats` setting. Once that setting
+has synced, incoming conversation messages establish `archived: false`, including
+the first message from a new contact and pending messages received after a
+reconnection. This applies to exact PN and LID conversations alike.
+
+With `unarchiveChats: false`, incoming messages alone do not establish archive
+state: an archived conversation stays archived, and a new conversation can have
+`archived: null`. Such unread chats appear with `--unread true`, but are excluded
+by an additional `--archived false` filter; use `--archived unknown` to inspect
+them. The CLI does not override the account preference or retroactively fill
+unknown states when the preference changes. Later explicit archive observations
+still take precedence over earlier incoming messages.
+
 ## Server response and command feedback
 
 Read/archive results expose two independent signals:
