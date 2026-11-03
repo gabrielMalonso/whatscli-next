@@ -4,10 +4,35 @@ import {
   checkInstalledPackage,
   checkLockfile,
   pinLockfileIntegrity,
+  newestSdkCommit,
   sdkRelease,
   sdkRepository,
   validateUpdate,
 } from '../scripts/baileys.js';
+
+test('release selection follows main history when builds finish out of order', () => {
+  const oldest = '1'.repeat(40);
+  const middle = '2'.repeat(40);
+  const newest = '3'.repeat(40);
+  const history = [newest, middle, oldest];
+  assert.equal(newestSdkCommit([middle, newest, oldest], history), newest);
+  assert.equal(newestSdkCommit([oldest, middle, newest], history), newest);
+  assert.equal(newestSdkCommit([oldest, middle], history, newest), newest);
+});
+
+test('release selection excludes unrelated histories and waits for a validated main commit', () => {
+  const pending = '1'.repeat(40);
+  const validated = '2'.repeat(40);
+  const unrelated = '3'.repeat(40);
+  assert.equal(
+    newestSdkCommit([unrelated, validated], [pending, validated]),
+    validated,
+  );
+  assert.throws(
+    () => newestSdkCommit([unrelated], [pending, validated]),
+    /recent main history/,
+  );
+});
 
 const sourceCommit = 'a'.repeat(40);
 const manifest = {
