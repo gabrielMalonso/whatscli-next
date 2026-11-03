@@ -104,7 +104,7 @@ Archive observations cannot confirm read state. Read observations cannot confirm
 
 An observed state may differ from the requested state. Clearing `pending` does not prove the request caused the change.
 
-The legacy chat callback provides neither request correlation nor remote action time. The pinned SDK has an install-time patch from the fork; see [dependency provenance](../../patches/README.md).
+The legacy chat callback provides neither request correlation nor remote action time. The pinned SDK is a compiled release from our Baileys repository; see [dependency provenance](../internals/baileys.md).
 
 See [read/unread implementation constraints](../internals/read-unread.md).
 

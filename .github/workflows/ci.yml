@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   sdk:
-    name: Baileys source, tests and package
+    name: Owned Baileys package
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Rebuild and verify the SDK source, tests, patch and installed package
+      - name: Verify the pinned compiled SDK provenance and integrity
         run: pnpm sdk:verify
 
   verify:

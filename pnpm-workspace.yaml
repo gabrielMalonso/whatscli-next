@@ -4,6 +4,3 @@ packages:
 ignoredBuiltDependencies:
   - baileys
   - protobufjs
-
-patchedDependencies:
-  baileys@7.0.0-rc14: patches/baileys@7.0.0-rc14.patch
