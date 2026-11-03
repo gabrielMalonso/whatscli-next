@@ -203,31 +203,63 @@ async function download(url: string): Promise<Response> {
   return response;
 }
 
-async function latestRelease(): Promise<SdkRelease> {
+export function newestSdkCommit(
+  commits: string[],
+  mainHistory: string[],
+  pinnedCommit?: string,
+): string {
+  const candidates = new Set([
+    ...commits,
+    ...(pinnedCommit ? [pinnedCommit] : []),
+  ]);
+  const newest = mainHistory.find((commit) => candidates.has(commit));
+  if (!newest)
+    throw new Error('No validated SDK release found in recent main history');
+  return newest;
+}
+
+async function latestRelease(current?: SdkRelease): Promise<SdkRelease> {
   const values: unknown = await (
     await download(
-      `https://api.github.com/repos/${sdkRepository}/releases?per_page=20`,
+      `https://api.github.com/repos/${sdkRepository}/releases?per_page=100`,
     )
   ).json();
   if (!Array.isArray(values)) throw new Error('Expected owned SDK releases');
-  const release = values
+  const releases = values
     .map(record)
-    .find(
+    .filter(
       (r) =>
         r.draft === false &&
         r.prerelease === false &&
         typeof r.tag_name === 'string' &&
         /^sdk-[a-f0-9]{40}$/.test(r.tag_name),
     );
-  if (!release) throw new Error('The owned SDK has no validated release yet');
+  const history: unknown = await (
+    await download(
+      `https://api.github.com/repos/${sdkRepository}/commits?sha=main&per_page=100`,
+    )
+  ).json();
+  if (!Array.isArray(history)) throw new Error('Expected SDK main history');
+  const mainCommits = history.map((value) => {
+    const sha = record(value).sha;
+    if (typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha))
+      throw new Error('Invalid SDK history commit');
+    return sha;
+  });
+  // Publication completion order can differ from source order when CI runs overlap.
+  const commit = newestSdkCommit(
+    releases.map((release) => String(release.tag_name).slice(4)),
+    mainCommits,
+    current?.sourceCommit,
+  );
   const data = sdkRelease(
     await (
       await download(
-        `https://github.com/${sdkRepository}/releases/download/${release.tag_name}/sdk-release.json`,
+        `https://github.com/${sdkRepository}/releases/download/sdk-${commit}/sdk-release.json`,
       )
     ).json(),
   );
-  if (data.tag !== release.tag_name)
+  if (data.tag !== `sdk-${commit}`)
     throw new Error('Release manifest tag mismatch');
   return data;
 }
@@ -238,9 +270,11 @@ function output(changed: boolean): void {
 }
 
 async function update(root: string): Promise<void> {
-  const next = await latestRelease();
-  if (existsSync(join(root, manifestPath))) {
-    const current = sdkRelease(json(join(root, manifestPath)));
+  const current = existsSync(join(root, manifestPath))
+    ? sdkRelease(json(join(root, manifestPath)))
+    : undefined;
+  const next = await latestRelease(current);
+  if (current) {
     if (current.sourceCommit === next.sourceCommit) {
       if (!isDeepStrictEqual(current, next))
         throw new Error(

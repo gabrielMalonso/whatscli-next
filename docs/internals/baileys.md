@@ -24,6 +24,8 @@ The SDK's daily `owned-upstream.yml` opens upstream integration PRs in **gabriel
 
 The CLI's `update-baileys.yml` only checks those owned releases. It verifies downloaded package integrity, prepares the dependency and lockfile in isolation, and opens a PR in **gabrielMalonso/whatscli-next**. It does not fetch upstream source, maintain SDK patches, publish SDK packages or create upstream PRs. The package and the CLI checks are both required before a manual squash merge; runtime deployment remains separate.
 
+Release selection follows the recent SDK `main` history rather than release creation time, so overlapping builds cannot promote an older source commit. The pinned commit remains a candidate to prevent a downgrade if its release is outside the returned release page. Pending main commits without a compiled release are skipped; if no candidate appears in the latest 100 main commits, the update stops for review.
+
 To propose the latest validated owned release manually:
 
 ```sh
