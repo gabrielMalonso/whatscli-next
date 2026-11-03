@@ -1,14 +1,9 @@
-name: Update Baileys
+name: Update owned SDK dependency
 
 on:
   schedule:
-    - cron: '17 6 * * *'
+    - cron: '47 6 * * *'
   workflow_dispatch:
-    inputs:
-      version:
-        description: Published Baileys version, or latest
-        default: latest
-        type: string
 
 permissions:
   contents: read
@@ -19,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    name: Prepare SDK update
+    name: Prepare owned SDK dependency update
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
@@ -45,11 +40,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Apply source patches and validate the SDK candidate
+      - name: Verify and pin the latest compiled release from our SDK repository
         id: update
         env:
-          SDK_VERSION: ${{ inputs.version || 'latest' }}
-        run: pnpm sdk:update "$SDK_VERSION"
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm sdk:update
 
       - name: Upload the proposed dependency changes
         if: steps.update.outputs.changed == 'true'

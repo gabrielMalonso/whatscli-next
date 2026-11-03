@@ -1,255 +1,113 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { test } from 'node:test';
 import {
-  comparePackageMetadata,
-  compareSdkFiles,
-  publishUpdate,
-  sameSdkBytes,
-  sdkManifest,
-  sdkVersion,
-  validateSdkUpdate,
+  checkInstalledPackage,
+  checkLockfile,
+  pinLockfileIntegrity,
+  sdkRelease,
+  sdkRepository,
+  validateUpdate,
 } from '../scripts/baileys.js';
 
+const sourceCommit = 'a'.repeat(40);
 const manifest = {
-  version: '7.0.0-rc14',
-  commit: '7'.repeat(40),
+  repository: sdkRepository,
+  sourceCommit,
+  upstreamVersion: '7.0.0-rc14',
+  upstreamCommit: 'b'.repeat(40),
+  version: '7.0.0-rc14-gabriel.aaaaaaaaaaaa',
+  tag: `sdk-${sourceCommit}`,
   integrity: `sha512-${Buffer.alloc(64, 7).toString('base64')}`,
-  patches: ['baileys-source/02-app-state.patch'],
+  tarball: `https://github.com/${sdkRepository}/releases/download/sdk-${sourceCommit}/baileys.tgz`,
 };
 
-test('SDK provenance requires an exact release, commit, integrity and confined unique patches', () => {
-  assert.deepEqual(sdkManifest(manifest), manifest);
-  assert.deepEqual(sdkManifest({ ...manifest, patches: [] }).patches, []);
-  for (const version of ['latest', '^7.0.0', '../7.0.0', '7.0.0;echo secret'])
-    assert.throws(() => sdkVersion(version));
-  for (const changes of [
-    { commit: 'master' },
-    { integrity: 'sha512-missing' },
-    { patches: ['../outside.patch'] },
-    { patches: ['baileys-source/../../outside.patch'] },
-    { patches: [...manifest.patches, ...manifest.patches] },
+test('SDK dependency provenance must identify a commit-specific release in our repository', () => {
+  assert.deepEqual(sdkRelease(manifest), manifest);
+  for (const change of [
+    { repository: 'WhiskeySockets/Baileys' },
+    { sourceCommit: 'main' },
+    { tarball: 'https://example.invalid/baileys.tgz' },
+    { tag: 'latest' },
+    { version: '7.0.0-rc14' },
+    { integrity: 'sha512-incomplete' },
   ])
-    assert.throws(() => sdkManifest({ ...manifest, ...changes }));
+    assert.throws(() => sdkRelease({ ...manifest, ...change }));
 });
 
-test('source-map newline handling cannot conceal changes to mappings or executable files', () => {
-  const map = Buffer.from('{"mappings":"AAAA"}');
-  assert.equal(
-    sameSdkBytes('a.js.map', map, Buffer.concat([map, Buffer.from('\n')])),
-    true,
-  );
-  assert.equal(
-    sameSdkBytes('a.js.map', map, Buffer.from('{"mappings":"AAAB"}\n')),
-    false,
-  );
-  assert.equal(
-    sameSdkBytes('a.js', Buffer.from('code'), Buffer.from('code\n')),
-    false,
-  );
-  assert.equal(
-    sameSdkBytes('a.d.ts', Buffer.from('type A'), Buffer.from('type B')),
-    false,
-  );
-});
-
-test('installed SDK comparison rejects stale files and missing or changed build output', () => {
-  const temporary = join(process.cwd(), '.tmp');
-  mkdirSync(temporary, { recursive: true });
-  const directory = mkdtempSync(join(temporary, 'sdk-comparison-'));
-  const source = join(directory, 'source');
-  const installed = join(directory, 'installed');
-  mkdirSync(source);
-  mkdirSync(installed);
-  writeFileSync(join(source, 'index.js'), 'export const value = 1;');
-  assert.throws(() => compareSdkFiles(source, installed), /inventory/);
-  writeFileSync(join(installed, 'index.js'), 'export const value = 2;');
-  assert.throws(
-    () => compareSdkFiles(source, installed),
-    /differs from source/,
-  );
-  writeFileSync(join(installed, 'index.js'), 'export const value = 1;');
-  compareSdkFiles(source, installed);
-  writeFileSync(join(installed, 'stale.js'), 'stale');
-  assert.throws(() => compareSdkFiles(source, installed), /inventory/);
-});
-
-test('package validation includes dependencies, exports and published inventory', () => {
-  const source = {
+test('the installed compiled SDK must identify the pinned fork source and upstream commit', () => {
+  const pkg = {
     name: 'baileys',
     version: manifest.version,
-    dependencies: { fictional: '1.0.0' },
-    files: ['lib/**/*', 'WAProto/**/*'],
-    exports: { '.': './lib/index.js' },
+    baileysFork: {
+      repository: sdkRepository,
+      sourceCommit,
+      upstreamVersion: manifest.upstreamVersion,
+      upstreamCommit: manifest.upstreamCommit,
+    },
   };
-  comparePackageMetadata(source, structuredClone(source));
-  for (const changes of [
-    { dependencies: { fictional: '2.0.0' } },
-    { files: ['lib/**/*'] },
-    { exports: { '.': './other.js' } },
-  ])
-    assert.throws(() =>
-      comparePackageMetadata(source, { ...source, ...changes }),
+  checkInstalledPackage(pkg, manifest);
+  assert.throws(() =>
+    checkInstalledPackage({ ...pkg, version: '7.0.0-rc14' }, manifest),
+  );
+  assert.throws(() =>
+    checkInstalledPackage(
+      {
+        ...pkg,
+        baileysFork: { ...pkg.baileysFork, sourceCommit: 'c'.repeat(40) },
+      },
+      manifest,
+    ),
+  );
+});
+
+test('lockfile validation checks the actual SDK resolution rather than an unrelated matching digest', async () => {
+  for (const key of [manifest.tarball, `baileys@${manifest.tarball}`]) {
+    const lock = `packages:\n  '${key}':\n    resolution: {integrity: '${manifest.integrity}'}\n`;
+    await checkLockfile(lock, manifest);
+    await assert.rejects(
+      checkLockfile(lock.replace(manifest.integrity, 'sha512-wrong'), manifest),
     );
+  }
+  await assert.rejects(
+    checkLockfile(
+      `packages:\n  unrelated:\n    resolution: {integrity: '${manifest.integrity}'}\n`,
+      manifest,
+    ),
+  );
 });
 
-test('automated updates preserve source patches and every unrelated package setting', () => {
+test('dependency proposals cannot change CLI scripts or other dependencies', () => {
   const current = {
-    scripts: { test: 'offline-tests' },
-    dependencies: { baileys: manifest.version, pino: '9.14.0' },
+    scripts: { test: 'offline' },
+    dependencies: { baileys: 'old', pino: '9.14.0' },
   };
-  const next = { ...manifest, version: '7.0.0-rc15', commit: '8'.repeat(40) };
-  const candidate = {
+  const next = {
     ...current,
-    dependencies: { ...current.dependencies, baileys: next.version },
+    dependencies: { ...current.dependencies, baileys: manifest.tarball },
   };
-  validateSdkUpdate(manifest, next, current, candidate);
-  assert.throws(
-    () =>
-      validateSdkUpdate(manifest, { ...next, patches: [] }, current, candidate),
-    /canonical source patches/,
+  validateUpdate(current, next, manifest);
+  assert.throws(() =>
+    validateUpdate(current, { ...next, scripts: { test: 'skip' } }, manifest),
   );
-  assert.throws(
-    () =>
-      validateSdkUpdate(manifest, next, current, {
-        ...candidate,
-        scripts: { test: 'skip' },
-      }),
-    /only change the Baileys dependency/,
-  );
-  assert.throws(
-    () =>
-      validateSdkUpdate(manifest, next, current, {
-        ...candidate,
-        dependencies: { ...candidate.dependencies, pino: '10.0.0' },
-      }),
-    /only change the Baileys dependency/,
-  );
-  assert.throws(
-    () =>
-      validateSdkUpdate(
-        manifest,
-        { ...manifest, commit: next.commit },
-        current,
-        current,
-      ),
-    /provenance/,
+  assert.throws(() =>
+    validateUpdate(
+      current,
+      { ...next, dependencies: { ...next.dependencies, pino: 'changed' } },
+      manifest,
+    ),
   );
 });
 
-for (const state of ['new', 'existing', 'human-edited', 'human-pr'] as const) {
-  test(`update publication preserves branch ownership and dispatches CI (${state})`, () => {
-    const temporary = join(process.cwd(), '.tmp');
-    mkdirSync(temporary, { recursive: true });
-    const directory = mkdtempSync(join(temporary, 'sdk-publication-'));
-    const root = join(directory, 'repo');
-    const input = join(directory, 'artifact');
-    const next = { ...manifest, version: '7.0.0-rc15', commit: '8'.repeat(40) };
-    const workspace = (version: string) =>
-      `patchedDependencies:\n  baileys@${version}: patches/baileys@${version}.patch\n`;
-    for (const [path, data] of [
-      [root, manifest],
-      [input, next],
-    ] as const) {
-      mkdirSync(join(path, 'patches'), { recursive: true });
-      writeFileSync(
-        join(path, 'patches/baileys-source.json'),
-        JSON.stringify(data),
-      );
-      writeFileSync(
-        join(path, 'package.json'),
-        JSON.stringify({ dependencies: { baileys: data.version } }),
-      );
-      writeFileSync(join(path, 'pnpm-lock.yaml'), 'fictional lockfile');
-      writeFileSync(join(path, 'pnpm-workspace.yaml'), workspace(data.version));
-      writeFileSync(
-        join(path, `patches/baileys@${data.version}.patch`),
-        'fictional package patch',
-      );
-    }
-    const calls: string[][] = [];
-    const run = (_cwd: string, name: string, args: string[]) => {
-      calls.push([name, ...args]);
-      if (name === 'pnpm')
-        writeFileSync(
-          join(root, 'pnpm-workspace.yaml'),
-          workspace(next.version),
-        );
-      if (name === 'git' && args[0] === 'ls-files')
-        return `patches/baileys@${manifest.version}.patch\n`;
-      if (name === 'git' && args[0] === 'diff') return 'package.json\n';
-      if (name === 'git' && args[0] === 'ls-remote')
-        return state === 'new'
-          ? ''
-          : `${next.commit}\trefs/heads/automation/baileys-update\n`;
-      if (name === 'gh' && args[0] === 'api') {
-        if (args[1]?.includes('/commits/'))
-          return JSON.stringify({
-            author: {
-              login:
-                state === 'human-edited'
-                  ? 'fictional-maintainer'
-                  : 'github-actions[bot]',
-            },
-          });
-        return JSON.stringify(
-          state === 'existing' || state === 'human-pr'
-            ? [
-                {
-                  number: 1,
-                  user: {
-                    login:
-                      state === 'human-pr'
-                        ? 'fictional-maintainer'
-                        : 'github-actions[bot]',
-                  },
-                },
-              ]
-            : [],
-        );
-      }
-      return '';
-    };
-    if (state === 'human-edited' || state === 'human-pr') {
-      assert.throws(
-        () => publishUpdate(root, input, 'fictional/project', run),
-        /edited by someone else|bot-owned update PR/,
-      );
-      assert.equal(
-        calls.some((call) => call[0] === 'git' && call[1] === 'push'),
-        false,
-      );
-      assert.equal(
-        calls.some((call) => call[0] === 'gh' && call[1] === 'workflow'),
-        false,
-      );
-    } else {
-      publishUpdate(root, input, 'fictional/project', run);
-      assert.ok(
-        calls.some(
-          (call) =>
-            call[0] === 'gh' &&
-            call[1] === 'pr' &&
-            call[2] === (state === 'new' ? 'create' : 'edit'),
-        ),
-      );
-      assert.deepEqual(calls.at(-1), [
-        'gh',
-        'workflow',
-        'run',
-        'ci.yml',
-        '--ref',
-        'automation/baileys-update',
-      ]);
-      assert.ok(
-        calls.some(
-          (call) =>
-            call[0] === 'git' &&
-            call[1] === 'push' &&
-            call[2]?.startsWith('--force-with-lease='),
-        ),
-      );
-    }
-  });
-}
+test('URL resolution pinning adds the verified digest without accepting a conflicting digest', async () => {
+  const lock = `packages:\n  'baileys@${manifest.tarball}':\n    resolution: {tarball: ${manifest.tarball}}\n`;
+  const pinned = await pinLockfileIntegrity(lock, manifest);
+  await checkLockfile(pinned, manifest);
+  assert.equal(await pinLockfileIntegrity(pinned, manifest), pinned);
+  await assert.rejects(
+    pinLockfileIntegrity(
+      pinned.replace(manifest.integrity, 'sha512-wrong'),
+      manifest,
+    ),
+  );
+  assert.equal(pinned.replace(`integrity: ${manifest.integrity}, `, ''), lock);
+});
