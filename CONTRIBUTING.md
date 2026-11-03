@@ -26,7 +26,7 @@ pnpm verify:build
 
 `pnpm test` builds the project before running the offline suite. Run `verify:build` after the final build/test to detect missing, stale, or unexpected output. Use `pnpm format` for mechanical formatting, and review those changes separately from behavior changes.
 
-The [CI workflow](.github/workflows/ci.yml) runs these checks without an account or secrets. A separate SDK job runs `pnpm sdk:verify` to reconstruct and test the pinned Baileys source and verify the generated patch and installed package. For SDK updates or patch changes, follow the [Baileys maintenance guide](patches/README.md).
+The [CI workflow](.github/workflows/ci.yml) runs these checks without an account or secrets. A separate package check runs `pnpm sdk:verify` against our pinned compiled SDK release. SDK source maintenance, tests and releases belong to [gabrielMalonso/Baileys](https://github.com/gabrielMalonso/Baileys); see the [dependency guide](docs/internals/baileys.md).
 
 ## Making a change
 
