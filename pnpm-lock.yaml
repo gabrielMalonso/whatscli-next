@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       baileys:
-        specifier: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz
-        version: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz(sharp@0.35.5(@types/node@24.19.2))
+        specifier: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz
+        version: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz(sharp@0.35.5(@types/node@24.19.2))
       pino:
         specifier: 9.14.0
         version: 9.14.0
@@ -423,9 +423,9 @@ packages:
     resolution: {integrity: sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==}
     engines: {node: '>=8.0.0'}
 
-  baileys@https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz:
-    resolution: {integrity: sha512-5SAcg6uIyTSKthYr82X6HNL1OZu2P1J3R88FT6VCblOpB/5XAgo7y8/I2vg+RfjM+p1/nyYkzYOM26gHqEM4gw==, tarball: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz}
-    version: 7.0.0-rc14-gabriel.9f2483d69c7e
+  baileys@https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz:
+    resolution: {integrity: sha512-04M/LtXA5YOK9grGmV50CEcKSy4Om44dSXSBoDTfl1+IOLVKwzjkqyG9BdEdrQow/ELHo150S7SgWtqalcYXSg==, tarball: https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz}
+    version: 7.0.0-rc14-gabriel.0bab27afec22
     engines: {node: '>=20.0.0'}
     peerDependencies:
       audio-decode: ^2.1.3
@@ -1304,7 +1304,7 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  baileys@https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz(sharp@0.35.5(@types/node@24.19.2)):
+  baileys@https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz(sharp@0.35.5(@types/node@24.19.2)):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4

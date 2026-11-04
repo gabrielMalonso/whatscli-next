@@ -1,10 +1,10 @@
 {
   "repository": "gabrielMalonso/Baileys",
-  "sourceCommit": "9f2483d69c7e4dcf616ccf79d08e045b32cc3402",
+  "sourceCommit": "0bab27afec2245ae53380297f2ae20e287dcda60",
   "upstreamVersion": "7.0.0-rc14",
   "upstreamCommit": "7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a",
-  "version": "7.0.0-rc14-gabriel.9f2483d69c7e",
-  "tag": "sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402",
-  "integrity": "sha512-5SAcg6uIyTSKthYr82X6HNL1OZu2P1J3R88FT6VCblOpB/5XAgo7y8/I2vg+RfjM+p1/nyYkzYOM26gHqEM4gw==",
-  "tarball": "https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz"
+  "version": "7.0.0-rc14-gabriel.0bab27afec22",
+  "tag": "sdk-0bab27afec2245ae53380297f2ae20e287dcda60",
+  "integrity": "sha512-04M/LtXA5YOK9grGmV50CEcKSy4Om44dSXSBoDTfl1+IOLVKwzjkqyG9BdEdrQow/ELHo150S7SgWtqalcYXSg==",
+  "tarball": "https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz"
 }
