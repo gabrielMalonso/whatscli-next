@@ -41,7 +41,7 @@
     "sdk:update": "node scripts/baileys.ts update"
   },
   "dependencies": {
-    "baileys": "https://github.com/gabrielMalonso/Baileys/releases/download/sdk-9f2483d69c7e4dcf616ccf79d08e045b32cc3402/baileys.tgz",
+    "baileys": "https://github.com/gabrielMalonso/Baileys/releases/download/sdk-0bab27afec2245ae53380297f2ae20e287dcda60/baileys.tgz",
     "pino": "9.14.0",
     "qrcode": "1.5.4"
   },
