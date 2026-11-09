@@ -17,7 +17,7 @@ History is partial. An empty local result does not prove that WhatsApp has no co
 
 `messages` and `search` return the latest successfully observed edit of a stored message, retaining its original ID and send timestamp. Both legacy protocol edits and `secretEncryptedMessage` edits are supported. Encrypted edits require the original message's private message secret; missing originals/secrets or invalid authentication leave the stored text unchanged and journal `message-edit-unavailable`. The response's partial coverage still applies: unchanged text does not prove that no edit exists.
 
-On upgrade, the runtime recovers previously stored edit envelopes when the required original and secret are available. An edit received before its original is retried when that original arrives. Older edits and original-history replays cannot replace a newer applied edit; deleted content stays hidden. Encrypted envelopes remain separate history rows with no readable text. Reading history never fetches a current revision from the server.
+On upgrade, the runtime recovers previously stored edit envelopes when the required original and secret are available. An edit received before its original is retried when that original arrives. Older edits and original-history replays cannot replace a newer applied edit; deleted content stays hidden. Successfully resolved edit envelopes stay private and do not consume `messages` or `search` pagination slots; only the original message with its current text is listed. Unresolved envelopes remain visible as unavailable content. The same filtering applies to existing history after upgrading. Reading history never fetches a current revision from the server.
 
 ## Group metadata
 

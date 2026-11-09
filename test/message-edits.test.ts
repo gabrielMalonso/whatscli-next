@@ -138,6 +138,94 @@ function text(store: Store, key: WAMessageKey) {
   return messageOutput(message).text;
 }
 
+test('resolved edits do not consume history/search pages and remain privately available', () => {
+  const { store } = fixture();
+  const message = original();
+  const legacy = edit(message, 14, 'Legacy correction', true);
+  const latest = edit(message, 25, 'Fictional latest');
+  try {
+    store.observeMessage(message);
+    store.observeMessage({
+      key: { ...message.key, id: 'fictional-next-message' },
+      messageTimestamp: base + 2,
+      message: { conversation: 'Fictional next message' },
+    });
+    store.observeMessage(latest);
+    store.observeMessage(legacy);
+    store.observeMessage(latest);
+    assert.deepEqual(
+      [0, 1, 2].map((offset) =>
+        store.messages(peer, 1, offset).map((row) => row.key.id),
+      ),
+      [['fictional-next-message'], [message.key.id], []],
+    );
+    assert.deepEqual(
+      [0, 1, 2].map((offset) =>
+        store.search('', 1, offset, peer).map((row) => row.key.id),
+      ),
+      [['fictional-next-message'], [message.key.id], []],
+    );
+    assert.equal(text(store, message.key), 'Fictional latest');
+    assert.ok(store.message(latest.key)?.message?.secretEncryptedMessage);
+    assert.ok(store.message(legacy.key)?.message?.protocolMessage);
+    // The same envelope ID in a different direction is independent evidence.
+    const other = { ...latest, key: { ...latest.key, fromMe: true } };
+    store.observeMessage(other);
+    assert.equal(store.messages(peer, 1)[0]?.key.fromMe, true);
+    store.deleteMessages({ jid: peer, all: true });
+    assert.equal(store.message(latest.key)?.message, null);
+    assert.equal(store.message(legacy.key)?.message, null);
+  } finally {
+    store.close();
+  }
+});
+
+test('upgrade hides previously applied envelopes without reapplying edits or losing private rows', () => {
+  const f = fixture();
+  let store = f.store;
+  const message = original();
+  const envelope = edit(message);
+  try {
+    store.observeMessage(message);
+    store.observeMessage(envelope);
+    store.db
+      .prepare(
+        "DELETE FROM values_store WHERE category='resolved-message-edit'",
+      )
+      .run();
+    store.set('migration', 'resolved-message-edits-v1', false);
+    store.db
+      .prepare(
+        `INSERT INTO message_text SELECT rowid,jid,timestamp,'' FROM messages WHERE id=?`,
+      )
+      .run(envelope.key.id!);
+    const events = store.events(0);
+    assert.equal(store.messages(peer).length, 2);
+    store.close();
+    store = new Store(f.directory);
+    assert.deepEqual(
+      store.messages(peer).map((row) => row.key.id),
+      [message.key.id],
+    );
+    assert.deepEqual(
+      store.search('', 10, 0).map((row) => row.key.id),
+      [message.key.id],
+    );
+    assert.equal(text(store, message.key), 'Fictional correction');
+    assert.ok(store.message(envelope.key)?.message?.secretEncryptedMessage);
+    assert.deepEqual(store.events(0), events);
+    store.close();
+    store = new Store(f.directory);
+    assert.deepEqual(
+      store.messages(peer).map((row) => row.key.id),
+      [message.key.id],
+    );
+    assert.deepEqual(store.events(0), events);
+  } finally {
+    store.close();
+  }
+});
+
 test('encrypted edits replace current text/search, preserve send time and secrets, and survive stale events and restart', () => {
   const f = fixture();
   let store = f.store;
@@ -197,11 +285,21 @@ test('edits arriving before the original or its secret are recovered without a n
         });
       store.observeMessage(edit(message, 25, 'Fictional latest'));
       store.observeMessage(edit(message));
+      assert.equal(
+        store
+          .messages(peer)
+          .filter((row) => row.message?.secretEncryptedMessage).length,
+        2,
+      );
       store.close();
       store = new Store(f.directory);
       store.observeMessage(message);
       assert.equal(text(store, message.key), 'Fictional latest');
       assert.equal(store.search('latest', 10, 0).length, 1);
+      assert.deepEqual(
+        store.messages(peer).map((row) => row.key.id),
+        [message.key.id],
+      );
     } finally {
       store.close();
     }
@@ -285,6 +383,9 @@ test('invalid authentication, foreign targets, direction and participant collisi
       }
       store.observeMessage(envelope);
       assert.equal(text(store, message.key), 'Fictional typo', change);
+      assert.ok(
+        store.messages(peer).some((row) => row.key.id === envelope.key.id),
+      );
       assert.doesNotMatch(
         JSON.stringify(store.events(0)),
         /messageSecret|encPayload|encIv|Fictional typo/,
@@ -414,6 +515,15 @@ test('runtime projects buffered encrypted upserts and keeps automatic resend con
       (result as { text: string }[])[0]?.text,
       'Fictional correction',
     );
+    const history = (await runtime.execute({
+      command: 'messages',
+      jid: peer,
+      limit: 1,
+      offset: 0,
+    })) as { id: string; text: string }[];
+    assert.equal(history.length, 1);
+    assert.equal(history[0]?.id, message.key.id);
+    assert.equal(history[0]?.text, 'Fictional correction');
     assert.ok(lookup);
     assert.equal(await lookup({ ...message.key, fromMe: true }), undefined);
     ev.emit('chats.update', [

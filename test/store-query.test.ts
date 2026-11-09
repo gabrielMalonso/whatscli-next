@@ -205,7 +205,7 @@ test('edits, status/null updates and own participant enrichment replace search t
     );
     assert.deepEqual(
       identities(store.messages(group)),
-      identities(legacySearch(store, '', 100, 0, group)),
+      identities(store.search('', 100, 0, group)),
     );
   } finally {
     store.close();
