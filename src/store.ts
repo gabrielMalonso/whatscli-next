@@ -399,7 +399,12 @@ export class Store {
     if (
       !message.key.remoteJid ||
       message.message == null ||
-      this.deletion(message.key)
+      this.deletion(message.key) ||
+      (isMessageEdit(message) &&
+        this.get<boolean>(
+          'resolved-message-edit',
+          encode(this.deletionKey(message.key)),
+        ))
     )
       return;
     const text = (messageText(normalizeMessageContent(message.message)) ?? '')
@@ -1875,7 +1880,11 @@ export class Store {
   messages(jid: string, limit = 20, offset = 0): WAMessage[] {
     return this.db
       .prepare(
-        'SELECT json FROM messages WHERE jid=? ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?',
+        `SELECT m.json FROM messages m WHERE m.jid=? AND NOT EXISTS (
+          SELECT 1 FROM values_store v WHERE v.category='resolved-message-edit'
+          AND v.id=json_array(m.jid,m.id,m.from_me,CASE WHEN m.from_me=1 THEN '' ELSE m.participant END)
+          AND v.json='true'
+        ) ORDER BY m.timestamp DESC,m.rowid DESC LIMIT ? OFFSET ?`,
       )
       .all(jid, limit, offset)
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
@@ -2114,7 +2123,11 @@ export class Store {
       event.jid,
       Math.max(this.get<number>('chat-delete-boundary', event.jid) ?? 0, at),
     );
-    for (const message of this.messages(event.jid, -1)) {
+    // Deletion also covers private control envelopes omitted from public history.
+    for (const row of this.db
+      .prepare('SELECT json FROM messages WHERE jid=?')
+      .all(event.jid)) {
+      const message = decodeMessage(String(row.json));
       if (!recovering)
         this.markDeleted(message.key, 'messages.delete', at, true);
       else if (toNumber(message.messageTimestamp ?? 0) * 1000 <= at)
@@ -2198,7 +2211,11 @@ export class Store {
   }
 
   private recoverMessageEdits(): void {
-    if (this.get<boolean>('migration', 'message-edits-v1')) return;
+    if (
+      this.get<boolean>('migration', 'message-edits-v1') &&
+      this.get<boolean>('migration', 'resolved-message-edits-v1')
+    )
+      return;
     this.transaction(() => {
       const rows = this.db
         .prepare(
@@ -2212,6 +2229,7 @@ export class Store {
           this.observeMessageEdit(message);
       }
       this.set('migration', 'message-edits-v1', true);
+      this.set('migration', 'resolved-message-edits-v1', true);
     });
   }
 
@@ -2290,31 +2308,46 @@ export class Store {
       });
       return;
     }
-    this.applyMessageEdit(
-      target,
-      protocol.editedMessage,
-      messageEditTimestamp(protocol, envelope),
-    );
+    if (
+      this.applyMessageEdit(
+        target,
+        protocol.editedMessage,
+        messageEditTimestamp(protocol, envelope),
+      )
+    ) {
+      this.set(
+        'resolved-message-edit',
+        encode(this.deletionKey(envelope.key)),
+        true,
+      );
+      const row = this.messageRow(envelope.key);
+      if (row)
+        this.db
+          .prepare('DELETE FROM message_text WHERE message_rowid=?')
+          .run(Number(row.rowid));
+    }
   }
 
   private applyMessageEdit(
     key: WAMessageKey,
     content: proto.IMessage,
     timestamp: number | null,
-  ): void {
+  ): boolean {
     const original = this.message(key);
-    if (!original?.message || this.deletion(key)) return;
+    if (!original?.message || this.deletion(key)) return false;
     const identity = encode(this.deletionKey(key));
     const previous = this.get<{ timestamp: number | null }>(
       'message-edit-version',
       identity,
     );
+    if (previous && timestamp === null) return false;
     if (
-      previous &&
-      (timestamp === null ||
-        (previous.timestamp !== null && timestamp <= previous.timestamp))
+      previous?.timestamp != null &&
+      timestamp !== null &&
+      timestamp <= previous.timestamp
     )
-      return;
+      // A validated older envelope is already represented by the newer projection.
+      return true;
     this.writeObservedMessage(
       {
         ...original,
@@ -2325,6 +2358,7 @@ export class Store {
     );
     this.set('message-edit-version', identity, { timestamp });
     this.event('message-edited', { jid: key.remoteJid, id: key.id });
+    return true;
   }
 
   private observeRevocation(message: WAMessage): void {
