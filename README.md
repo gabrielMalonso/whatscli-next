@@ -31,10 +31,13 @@ Linux has been tested; macOS has not been verified. No npm package is published.
 - Resolve international phone numbers and inspect contact identity evidence.
 - Send text, quoted replies, documents, and individual contact cards.
 - Download media and request changes to archive and read state.
+- Follow conversations in an optional read-only terminal monitor over SSH.
 - Record send intents before sending, using durable keys to prevent repeated attempts.
 - Check local status, diagnose recovery issues, and back up private SQLite data.
 
-Each command writes one JSON response to stdout. Diagnostics go to stderr. Use Node directly when another program needs to consume the output.
+The `whatscli` commands write one JSON response to stdout. Diagnostics go to stderr. Use Node directly when another program needs to consume the output.
+
+For a human view of an already running account, use `node dist/src/tui-cli.js --account example` (or `pnpm tui --account example`). The separate [terminal monitor](docs/user/tui.md) follows messages without sending or marking them as read; the JSON CLI stays unchanged.
 
 Message history is partial. A successful command does not confirm delivery, and uncertain sends are never retried automatically. Credentials and messages are **not encrypted at rest**. Keep the data directory and backups private.
 
