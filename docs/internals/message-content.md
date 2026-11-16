@@ -4,7 +4,9 @@ These notes describe encoding and normalization for contributors. User-facing li
 
 ## Contact-card encoding
 
-[contact-card.ts](../../src/contact-card.ts) builds deterministic vCard 3.0 content, escaping backslashes, commas, and semicolons. It uses CRLF framing and folds lines at 75 UTF-8 bytes without splitting code points. Input validation preserves accepted names without normalization.
+[contact-card.ts](../../src/contact-card.ts) builds deterministic vCard 3.0 content in the layout WhatsApp clients generate: LF-separated unfolded lines without a trailing newline, `N:;NAME;;;`, `FN:NAME`, and `TEL;type=CELL;waid=DIGITS:PHONE`. Names escape backslashes, commas, and semicolons. Recipient clients offer a chat action only for a card whose `TEL` has a `waid`; it repeats the digits of the explicit international phone and is never derived from a LID or lookup. Input validation preserves accepted names without normalization.
+
+Changing these bytes changes the persisted intent. A key created by an earlier card layout reports `KEY_CONFLICT` if repeated; inspect it with `request --key`.
 
 The pinned SDK receives `{contacts: {contacts: [card]}}` for one `contactMessage`. Before invocation, the immutable intent stores the recipient, explicit name and phone, generated card, and message ID. Card content never contributes to identity mappings or verification.
 

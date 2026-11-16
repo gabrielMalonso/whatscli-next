@@ -15,23 +15,11 @@ export function contactName(name: string): string {
   return name;
 }
 
-/** Fold vCard 3.0 lines at 75 UTF-8 bytes without splitting a Unicode code point. */
-function fold(line: string): string {
-  let result = '';
-  let bytes = 0;
-  for (const character of line) {
-    const size = Buffer.byteLength(character);
-    if (bytes + size > 75) {
-      result += '\r\n ';
-      bytes = 1;
-    }
-    result += character;
-    bytes += size;
-  }
-  return result;
-}
-
-/** Explicit shared content only: no identity lookup or assertion of WhatsApp membership. */
+/**
+ * Explicit shared content in the layout WhatsApp clients generate: unfolded LF lines and
+ * `TEL;type=CELL;waid=DIGITS:PHONE`. Recipients offer a chat action only for a `waid`.
+ * The `waid` repeats the explicit phone's digits; no lookup verifies WhatsApp membership.
+ */
 export function contactCard(
   name: string,
   phone: string,
@@ -41,16 +29,13 @@ export function contactCard(
   const escaped = name.replace(/[\\,;]/g, (character) => `\\${character}`);
   return {
     displayName: name,
-    vcard:
-      [
-        'BEGIN:VCARD',
-        'VERSION:3.0',
-        `N:${escaped};;;;`,
-        `FN:${escaped}`,
-        `TEL;TYPE=CELL:${phone}`,
-        'END:VCARD',
-      ]
-        .map(fold)
-        .join('\r\n') + '\r\n',
+    vcard: [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `N:;${escaped};;;`,
+      `FN:${escaped}`,
+      `TEL;type=CELL;waid=${phone.slice(1)}:${phone}`,
+      'END:VCARD',
+    ].join('\n'),
   };
 }
