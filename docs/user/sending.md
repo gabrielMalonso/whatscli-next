@@ -41,7 +41,7 @@ The runtime sends one byte snapshot, persisting its size, SHA-256, arguments, an
 
 Only one explicit card is supported. Raw vCards, multiple cards, and implicit lookups are unsupported. The immutable request retains the exact recipient, name, phone, generated card, and message ID in both output formats. Deleting current message bodies does not erase this intent evidence.
 
-A card does not verify WhatsApp membership, phone ownership, recipient identity, or permission to share or send. It never contributes to identity mappings or recipient verification. Recipient checks follow the same exact observed-chat or persisted positive exact-PN requirements as other sends; aliases and `--allow-jid` remain exact. The caller is responsible for sharing permissions.
+The card carries the phone's digits as its WhatsApp ID (`waid`), as WhatsApp clients do, so recipients can open a chat from it. This does not verify WhatsApp membership, phone ownership, recipient identity, or permission to share or send. It never contributes to identity mappings or recipient verification. Recipient checks follow the same exact observed-chat or persisted positive exact-PN requirements as other sends; aliases and `--allow-jid` remain exact. The caller is responsible for sharing permissions.
 
 ## Direct PN routes and receipts
 

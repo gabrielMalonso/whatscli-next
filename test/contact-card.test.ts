@@ -159,21 +159,32 @@ test('contact protocol validates exact recipients, Unicode, international phone 
   );
 });
 
-test('builder escapes vCard properties, folds UTF-8 safely and generates a real rc14 contactMessage offline', async () => {
+test('builder matches the WhatsApp client card layout with waid from the explicit phone', () => {
+  assert.equal(
+    contactCard(command.name, command.phone).vcard,
+    [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'N:;Fictional Contact;;;',
+      'FN:Fictional Contact',
+      'TEL;type=CELL;waid=12025550103:+12025550103',
+      'END:VCARD',
+    ].join('\n'),
+  );
+});
+
+test('builder escapes vCard properties, keeps long UTF-8 lines unfolded and generates a real rc14 contactMessage offline', async () => {
   const name = '名; Fictional, \\name: 👩🏽‍💻 ' + 'é'.repeat(60);
   const card = contactCard(name, command.phone);
   assert.equal(card.displayName, name);
   assert.equal(card.vcard, contactCard(name, command.phone).vcard);
-  const lines = card.vcard.split('\r\n');
-  assert.ok(lines.every((line) => Buffer.byteLength(line) <= 75));
-  const unfolded = card.vcard.replace(/\r\n /g, '');
-  assert.match(unfolded, /FN:名\\; Fictional\\, \\\\name:/);
+  assert.doesNotMatch(card.vcard, /\r|\n[ \t]|\n$/);
+  const lines = card.vcard.split('\n');
+  assert.ok(lines.some((line) => Buffer.byteLength(line) > 75));
+  assert.match(card.vcard, /\nFN:名\\; Fictional\\, \\\\name: 👩🏽‍💻 é{60}\n/);
   assert.deepEqual(
-    unfolded
-      .trim()
-      .split('\r\n')
-      .map((line) => line.split(':')[0]),
-    ['BEGIN', 'VERSION', 'N', 'FN', 'TEL;TYPE=CELL', 'END'],
+    lines.map((line) => line.split(':')[0]),
+    ['BEGIN', 'VERSION', 'N', 'FN', 'TEL;type=CELL;waid=12025550103', 'END'],
   );
   const message = await generateWAMessage(
     pn,
