@@ -268,6 +268,23 @@ function isIncomingUserMessage(message: WAMessage): boolean {
   return keys.length > 0 && !(keys.length === 1 && keys[0] === 'call');
 }
 
+/** Undecrypted, or missing without a stub; the content could still arrive. */
+function contentMissing(message: WAMessage): boolean {
+  return (
+    message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
+    (!hasStubType(message) && !normalizeMessageContent(message.message))
+  );
+}
+
+/**
+ * Guard visibility of an incoming row: 0 does not count, 1 counts without
+ * readable content yet, 2 counts with content (or deleted, which is final).
+ */
+function incomingLevel(message: WAMessage, deleted: boolean): 0 | 1 | 2 {
+  if (!isIncomingUserMessage(message)) return 0;
+  return !deleted && contentMissing(message) ? 1 : 2;
+}
+
 type ContactMetadata = Partial<
   Record<
     'name' | 'notify' | 'username' | 'verifiedName' | 'status',
@@ -1919,8 +1936,9 @@ export class Store {
       this.markDeleted(message.key, 'chat-delete-boundary', barrier);
     }
     // Classify before a deletion clears the body.
-    const excluded = !fromMe && !isIncomingUserMessage(merged);
-    if (this.deletion(message.key)) {
+    const deleted = !!this.deletion(message.key);
+    const level = fromMe ? 0 : incomingLevel(merged, deleted);
+    if (deleted) {
       this.retainAudit(message.key, merged);
       merged.message = null;
       delete merged.messageStubParameters;
@@ -1929,16 +1947,7 @@ export class Store {
     const inserted = this.db
       .prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)')
       .run(jid, id, Number(fromMe), participantSlot, timestamp, encode(merged));
-    // First storage only: rewrites keep the original arrival position. The
-    // exclusion hint follows the current content on every write.
-    if (!fromMe) {
-      this.statement(
-        'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
-      ).run(jid, id, participantSlot);
-      this.statement(
-        'UPDATE message_arrivals SET excluded=? WHERE jid=? AND id=? AND participant=? AND excluded<>?',
-      ).run(Number(excluded), jid, id, participantSlot, Number(excluded));
-    }
+    if (!fromMe) this.recordArrival(jid, id, participantSlot, level);
     if (previousRow)
       this.db
         .prepare('DELETE FROM message_text WHERE message_rowid=?')
@@ -2004,6 +2013,48 @@ export class Store {
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
+  /**
+   * Arrival positions are kept across rewrites (receipts, re-deliveries), but
+   * a row whose visibility rises (content arrives for a placeholder, or an
+   * excluded key now counts) moves to a fresh position, so it reads as newer
+   * than everything an agent could have seen before it had content.
+   */
+  private recordArrival(
+    jid: string,
+    id: string,
+    participant: string,
+    level: 0 | 1 | 2,
+  ): void {
+    const arrival = this.statement(
+      'SELECT sequence,excluded,unavailable FROM message_arrivals WHERE jid=? AND id=? AND participant=?',
+    ).get(jid, id, participant);
+    const previous = !arrival
+      ? undefined
+      : Number(arrival.excluded)
+        ? 0
+        : Number(arrival.unavailable)
+          ? 1
+          : 2;
+    if (previous === level) return;
+    if (previous !== undefined && level < previous) {
+      this.statement(
+        'UPDATE message_arrivals SET excluded=?,unavailable=? WHERE sequence=?',
+      ).run(
+        Number(level === 0),
+        Number(level === 1),
+        Number(arrival!.sequence),
+      );
+      return;
+    }
+    if (arrival)
+      this.statement('DELETE FROM message_arrivals WHERE sequence=?').run(
+        Number(arrival.sequence),
+      );
+    this.statement(
+      'INSERT INTO message_arrivals(jid,id,participant,excluded,unavailable) VALUES (?,?,?,?,?)',
+    ).run(jid, id, participant, Number(level === 0), Number(level === 1));
+  }
+
   private statement(sql: string): StatementSync {
     let statement = this.statements.get(sql);
     if (!statement) {
@@ -2025,6 +2076,7 @@ export class Store {
     jid: string,
     order: 'newest-first' | 'oldest-first' = 'newest-first',
     after = 0,
+    onlyUnavailable = false,
   ): Generator<IncomingRow> {
     // Deleted bodies are cleared; classify them by the retained private audit copy.
     // The exclusion flag is an index hint; every candidate is classified here.
@@ -2035,19 +2087,18 @@ export class Store {
       AND m.from_me=0 AND m.participant=a.participant
       LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
       AND d.from_me=0 AND d.participant=m.participant
-      WHERE a.jid=? AND a.excluded=0 AND a.sequence>?
+      WHERE a.jid=? AND a.excluded=0 AND a.sequence>?${onlyUnavailable ? ' AND a.unavailable=1' : ''}
       ORDER BY a.sequence ${order === 'newest-first' ? 'DESC' : 'ASC'}`,
     ).iterate(jid, after);
     for (const row of rows) {
       const original = decodeMessage(String(row.original));
       if (!isIncomingUserMessage(original)) continue;
-      const missing =
-        original.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
-        (!hasStubType(original) && !normalizeMessageContent(original.message));
+      const available = Number(row.deleted) === 1 || !contentMissing(original);
+      if (onlyUnavailable && available) continue;
       yield {
         id: String(row.id),
         timestamp: Number(row.timestamp) || null,
-        available: Number(row.deleted) === 1 || !missing,
+        available,
         json: String(row.json),
       };
     }
@@ -2110,6 +2161,24 @@ export class Store {
     };
   }
 
+  /** Counted incoming messages that have no readable content yet, oldest first. */
+  unavailableIncoming(
+    jid: string,
+    limit = 20,
+  ): { messages: LatestIncoming[]; truncated: boolean } {
+    const messages: LatestIncoming[] = [];
+    for (const { json: _json, ...message } of this.incomingByArrival(
+      jid,
+      'oldest-first',
+      0,
+      true,
+    )) {
+      if (messages.length === limit) return { messages, truncated: true };
+      messages.push(message);
+    }
+    return { messages, truncated: false };
+  }
+
   /** Read-only public listing for the guard's follow-up: full message projections. */
   incomingView(jid: string, after: string | null, limit: number) {
     const { rows, truncated, afterStored } = this.incomingAfterRows(
@@ -2153,12 +2222,14 @@ export class Store {
           SELECT m.jid,m.id,m.participant FROM messages m WHERE m.from_me=0
           AND NOT EXISTS (SELECT 1 FROM message_arrivals a
             WHERE a.jid=m.jid AND a.id=m.id AND a.participant=m.participant)
-          ORDER BY m.timestamp,m.rowid`,
+          ORDER BY m.timestamp=0,m.timestamp,m.rowid`,
         )
         .run();
-      // Classify the new arrivals in bounded batches.
+      // Classify the new arrivals in bounded batches. Undated rows were placed
+      // last above, so an unknown time never sorts as the oldest arrival.
       const batch = this.db.prepare(
-        `SELECT a.sequence,COALESCE(d.audit_json,m.json) AS json
+        `SELECT a.sequence,COALESCE(d.audit_json,m.json) AS json,
+        d.id IS NOT NULL AS deleted
         FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
         AND m.from_me=0 AND m.participant=a.participant
         LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
@@ -2166,14 +2237,23 @@ export class Store {
         WHERE a.sequence>? ORDER BY a.sequence LIMIT 500`,
       );
       const mark = this.db.prepare(
-        'UPDATE message_arrivals SET excluded=1 WHERE sequence=?',
+        'UPDATE message_arrivals SET excluded=?,unavailable=? WHERE sequence=?',
       );
       for (;;) {
         const rows = batch.all(after);
         if (rows.length === 0) break;
-        for (const row of rows)
-          if (!isIncomingUserMessage(decodeMessage(String(row.json))))
-            mark.run(Number(row.sequence));
+        for (const row of rows) {
+          const level = incomingLevel(
+            decodeMessage(String(row.json)),
+            Number(row.deleted) === 1,
+          );
+          if (level !== 2)
+            mark.run(
+              Number(level === 0),
+              Number(level === 1),
+              Number(row.sequence),
+            );
+        }
         after = Number(rows.at(-1)!.sequence);
       }
     });

@@ -59,9 +59,9 @@ node dist/src/cli.js --output compact read \
   --if-latest-incoming 'FICTIONAL-IN-001'
 ```
 
-The daemon checks the guard immediately before it builds the patch, so no script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls, unrecognized content, and late or same-second arrivals block it. Never name a message whose `latestIncoming.available` is `false`.
+The daemon checks the guard immediately before it builds the patch, so no script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls, unrecognized content, and late or same-second arrivals block it. While any counted message in the chat has `available: false` (undecryptable so far), the guard refuses with `unavailable-incoming`; read those messages once they are available.
 
-- **`PRECONDITION_FAILED`:** nothing changed. Run `incoming --jid JID --after ID` with the ID you named, read every listed message, and repeat with `--after` set to the last listed ID while `truncated` is `true`. Then decide and retry with the last listed ID, which is the current `latestIncoming.id`. Never retry with `details.latestIncoming.id` alone: it can be an old history message that hides a newer reply.
+- **`PRECONDITION_FAILED`:** nothing changed. Run `incoming --jid JID --after ID` with the ID you named, read every listed message, and repeat with `--after` set to the last listed ID while `truncated` is `true`. Do not proceed while any listed message is unavailable. Then decide and retry with the last listed ID, which is the current `latestIncoming.id`. Never retry with `details.latestIncoming.id` alone: it can be an old history message that hides a newer reply.
 - **`feedback.latestIncomingChanged: true` on success:** a message arrived during or after the mutation, which the patch did not cover. Follow the same `incoming --after` procedure from the guarded ID and decide whether the chat needs attention. Do not repeat the command.
 - **`PROTOCOL` on a guarded command:** the daemon did not confirm the guard. Inspect `request --key` and restart the daemon with the current build.
 

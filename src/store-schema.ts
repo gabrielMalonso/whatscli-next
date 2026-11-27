@@ -31,9 +31,11 @@ export function createSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS identity_mapping_lid ON identity_mappings(lid);
     CREATE TABLE IF NOT EXISTS message_arrivals (
       sequence INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL, id TEXT NOT NULL, participant TEXT NOT NULL,
-      excluded INTEGER NOT NULL DEFAULT 0, UNIQUE(jid,id,participant)
+      excluded INTEGER NOT NULL DEFAULT 0, unavailable INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(jid,id,participant)
     );
     CREATE INDEX IF NOT EXISTS message_arrival_order ON message_arrivals(jid,excluded,sequence);
+    CREATE INDEX IF NOT EXISTS message_arrival_unavailable ON message_arrivals(jid,sequence) WHERE unavailable=1;
     CREATE TABLE IF NOT EXISTS message_text (
       message_rowid INTEGER PRIMARY KEY, jid TEXT NOT NULL, timestamp INTEGER NOT NULL, text TEXT NOT NULL
     );

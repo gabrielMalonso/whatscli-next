@@ -1231,22 +1231,27 @@ export function createRuntime(
             if (guard !== undefined) {
               const latestIncoming = store.latestIncoming(command.jid);
               const newer = (latestIncoming?.id ?? null) !== guard;
-              if (newer || latestIncoming?.available === false) {
+              // Content still pending anywhere in the chat could be a reply the
+              // caller has not read, even before the one it names.
+              const unavailable = store.unavailableIncoming(command.jid);
+              if (newer || unavailable.messages.length > 0) {
                 const listed = store.newerIncoming(command.jid, guard);
                 throw new CommandError(
                   'PRECONDITION_FAILED',
                   newer
                     ? 'Incoming messages were stored after the one this command names; nothing was changed. Read them with incoming --after before deciding again'
-                    : 'The named incoming message has no readable content yet; nothing was changed. Decide once it is available',
+                    : 'An incoming message in this chat has no readable content yet; nothing was changed. Decide once it is available',
                   {
                     details: {
                       precondition: 'if-latest-incoming',
-                      reason: newer ? 'newer-incoming' : 'latest-unavailable',
+                      reason: newer ? 'newer-incoming' : 'unavailable-incoming',
                       expected: guard,
                       expectedStored: listed.expectedStored,
                       latestIncoming,
                       newerIncoming: listed.messages,
                       truncated: listed.truncated,
+                      unavailableIncoming: unavailable.messages,
+                      unavailableTruncated: unavailable.truncated,
                       coverage: 'local',
                     },
                   },
