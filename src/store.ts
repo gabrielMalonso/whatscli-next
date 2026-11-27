@@ -258,22 +258,24 @@ function isIncomingUserMessage(message: WAMessage): boolean {
       message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
       missedCalls.has(message.messageStubType!)
     );
-  const content = normalizeMessageContent(message.message);
-  if (!content) return true;
-  const keys = Object.entries(content)
-    .filter(([key, value]) => value != null && !envelopeKeys.has(key))
-    .map(([key]) => key);
   if (!message.key.remoteJid?.endsWith('@g.us')) return true;
+  const keys = contentKeys(message);
   // The SDK emits {call} for group call offers.
   return keys.length > 0 && !(keys.length === 1 && keys[0] === 'call');
 }
 
 /** Undecrypted, or missing without a stub; the content could still arrive. */
 function contentMissing(message: WAMessage): boolean {
-  return (
-    message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
-    (!hasStubType(message) && !normalizeMessageContent(message.message))
-  );
+  if (message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT)
+    return true;
+  return !hasStubType(message) && contentKeys(message).length === 0;
+}
+
+/** Content fields of a message, without envelope-only fields. */
+function contentKeys(message: WAMessage): string[] {
+  return Object.entries(normalizeMessageContent(message.message) ?? {})
+    .filter(([key, value]) => value != null && !envelopeKeys.has(key))
+    .map(([key]) => key);
 }
 
 /**
@@ -2026,7 +2028,7 @@ export class Store {
     level: 0 | 1 | 2,
   ): void {
     const arrival = this.statement(
-      'SELECT sequence,excluded,unavailable FROM message_arrivals WHERE jid=? AND id=? AND participant=?',
+      'SELECT sequence,first_sequence,excluded,unavailable FROM message_arrivals WHERE jid=? AND id=? AND participant=?',
     ).get(jid, id, participant);
     const previous = !arrival
       ? undefined
@@ -2050,9 +2052,21 @@ export class Store {
       this.statement('DELETE FROM message_arrivals WHERE sequence=?').run(
         Number(arrival.sequence),
       );
-    this.statement(
-      'INSERT INTO message_arrivals(jid,id,participant,excluded,unavailable) VALUES (?,?,?,?,?)',
-    ).run(jid, id, participant, Number(level === 0), Number(level === 1));
+    // A moved row keeps its first position, where listings anchor on its ID.
+    const inserted = this.statement(
+      'INSERT INTO message_arrivals(jid,id,participant,excluded,unavailable,first_sequence) VALUES (?,?,?,?,?,?)',
+    ).run(
+      jid,
+      id,
+      participant,
+      Number(level === 0),
+      Number(level === 1),
+      arrival ? Number(arrival.first_sequence ?? arrival.sequence) : null,
+    );
+    if (!arrival)
+      this.statement(
+        'UPDATE message_arrivals SET first_sequence=sequence WHERE sequence=?',
+      ).run(Number(inserted.lastInsertRowid));
   }
 
   private statement(sql: string): StatementSync {
@@ -2111,10 +2125,11 @@ export class Store {
   }
 
   /**
-   * Incoming user messages first-stored after the named one, oldest first,
+   * Incoming user messages positioned after the named one, oldest first,
    * bounded; from the first stored one when it is null or not stored. The
-   * anchor is the earliest arrival with that ID, so paging by the last listed
-   * ID never skips a message.
+   * anchor is the earliest first position with that ID, so a row that moved
+   * when it gained content still anchors where it was first stored: paging by
+   * the last listed ID never skips a message, and lists the moved one again.
    */
   private incomingAfterRows(
     jid: string,
@@ -2125,7 +2140,7 @@ export class Store {
       after === null
         ? null
         : this.statement(
-            'SELECT MIN(sequence) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
+            'SELECT MIN(COALESCE(first_sequence,sequence)) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
           ).get(jid, after)?.sequence;
     const afterStored = anchor != null;
     const rows: IncomingRow[] = [];
@@ -2225,6 +2240,9 @@ export class Store {
           ORDER BY m.timestamp=0,m.timestamp,m.rowid`,
         )
         .run();
+      this.db.exec(
+        'UPDATE message_arrivals SET first_sequence=sequence WHERE first_sequence IS NULL',
+      );
       // Classify the new arrivals in bounded batches. Undated rows were placed
       // last above, so an unknown time never sorts as the oldest arrival.
       const batch = this.db.prepare(
@@ -2780,7 +2798,19 @@ export class Store {
     }
     const previous = this.message(key);
     // Status/content edits do not establish a newly active conversation.
-    if (previous) this.observeMessage({ ...previous, ...update, key }, false);
+    if (previous) {
+      const merged = { ...previous, ...update, key };
+      // Content delivered to an undecrypted placeholder replaces it, as an upsert would.
+      if (
+        update.message &&
+        update.messageStubType === undefined &&
+        previous.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT
+      ) {
+        delete merged.messageStubType;
+        delete merged.messageStubParameters;
+      }
+      this.observeMessage(merged, false);
+    }
     if (update.status != null) this.receipt(key, update.status);
   }
 

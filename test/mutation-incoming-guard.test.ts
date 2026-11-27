@@ -705,6 +705,146 @@ test('a guard naming a message without readable content is refused while it is u
   }
 });
 
+const cipher = (id: string, at: number): WAMessage => ({
+  key: { remoteJid: jid, id, fromMe: false },
+  messageTimestamp: at,
+  messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+});
+
+async function listIds(
+  f: ReturnType<typeof fixture>,
+  afterId: string | null,
+  limit = 20,
+) {
+  const listing = object(
+    await f.runtime.execute({ command: 'incoming', jid, afterId, limit }),
+  );
+  return {
+    ids: (listing.messages as Record<string, unknown>[]).map(({ id }) => id),
+    truncated: listing.truncated,
+  };
+}
+
+test('listing after a message that later moved still covers what was stored in between', async () => {
+  const f = fixture([incoming('in-0', 1700000100)]);
+  try {
+    f.receive(cipher('x', 1700000110));
+    // Named while unavailable (against the docs): refused, nothing changes.
+    assert.equal(
+      object(
+        (await failure(f.runtime.execute(guarded('mark-read', 'p11', 'x'))))
+          .details,
+      ).reason,
+      'unavailable-incoming',
+    );
+    f.receive(incoming('b', 1700000120, 'Fictional reply B'));
+    f.receive(incoming('x', 1700000110, 'Fictional decrypted X'));
+    // X moved after B, but the listing anchors where X was first stored.
+    assert.deepEqual(await listIds(f, 'x'), {
+      ids: ['b', 'x'],
+      truncated: false,
+    });
+    assert.deepEqual(await listIds(f, 'in-0'), {
+      ids: ['b', 'x'],
+      truncated: false,
+    });
+    const details = object(
+      (await failure(f.runtime.execute(guarded('mark-read', 'p11', 'in-0'))))
+        .details,
+    );
+    assert.deepEqual(
+      (details.newerIncoming as { id: string }[]).map(({ id }) => id),
+      ['b', 'x'],
+    );
+    await assertUnchanged(f, 'p11');
+    await f.runtime.execute(guarded('mark-read', 'p11', 'x'));
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('paging through a message that moves mid-listing reaches every later reply', async () => {
+  const f = fixture([incoming('in-0', 1700000100)]);
+  try {
+    f.receive(incoming('a', 1700000110));
+    f.receive(cipher('p', 1700000120));
+    f.receive(incoming('b', 1700000130));
+    f.receive(incoming('c', 1700000140));
+    const pages: unknown[] = [await listIds(f, 'in-0', 2)];
+    assert.deepEqual(pages[0], { ids: ['a', 'p'], truncated: true });
+    f.receive(incoming('p', 1700000120, 'Fictional decrypted P'));
+    let after = 'p';
+    for (;;) {
+      const page = await listIds(f, after, 2);
+      pages.push(page);
+      if (!page.truncated) break;
+      after = String(page.ids.at(-1));
+    }
+    assert.deepEqual(pages, [
+      { ids: ['a', 'p'], truncated: true },
+      { ids: ['b', 'c'], truncated: true },
+      { ids: ['p'], truncated: false },
+    ]);
+    await f.runtime.execute(guarded('archive', 'p12', 'p'));
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('content delivered by message update replaces a placeholder and moves it', async () => {
+  const f = fixture([cipher('u', 1700000110), incoming('in-1', 1700000120)]);
+  try {
+    f.ev.emit('messages.update', [
+      {
+        key: { remoteJid: jid, id: 'u', fromMe: false },
+        update: { message: { conversation: 'Fictional updated content' } },
+      },
+    ]);
+    assert.deepEqual(
+      object(await f.runtime.execute({ command: 'chat', jid })).latestIncoming,
+      { id: 'u', timestamp: 1700000110, available: true },
+    );
+    assert.deepEqual(await listIds(f, 'in-1'), {
+      ids: ['u'],
+      truncated: false,
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test('a direct message without content keys is unavailable until content arrives', async () => {
+  const f = fixture([incoming('in-0', 1700000100)]);
+  try {
+    f.receive({
+      key: { remoteJid: jid, id: 'empty', fromMe: false },
+      messageTimestamp: 1700000110,
+      message: { messageContextInfo: {} },
+    });
+    f.receive(incoming('in-2', 1700000120));
+    assert.equal(
+      object(
+        (await failure(f.runtime.execute(guarded('mark-read', 'e', 'in-2'))))
+          .details,
+      ).reason,
+      'unavailable-incoming',
+    );
+    f.receive(incoming('empty', 1700000110, 'Fictional late body'));
+    assert.equal(
+      object(
+        object(await f.runtime.execute({ command: 'chat', jid }))
+          .latestIncoming,
+      ).id,
+      'empty',
+    );
+    assert.equal(f.patches.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test('an earlier undecryptable reply blocks the guard and surfaces as newest once it decrypts', async () => {
   const f = fixture([incoming('in-0', 1700000100)]);
   try {

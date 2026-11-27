@@ -49,7 +49,7 @@ See [sending and media](sending.md) for files, cards, routes, and downloads, and
 
 ## Mark read or archive without missing a reply
 
-Before `read` or `archive`, take `latestIncoming.id` from the same `chat` or `chats` row you triaged (or `none` when it was `null`) and pass it as the guard:
+Before `read` or `archive`, pass as the guard the ID of the last incoming message whose content you actually read, usually `latestIncoming.id` once you have read that message. Pass `none` only when the chat had no incoming message. Never name a message with `available: false`, or one you only saw in a `chat`/`chats` row:
 
 ```sh
 node dist/src/cli.js --output compact chat --jid '12025550101@s.whatsapp.net'
