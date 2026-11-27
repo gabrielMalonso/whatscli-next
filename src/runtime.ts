@@ -20,10 +20,22 @@ import type {
 } from 'baileys';
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
-import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
+import {
+  diagnosticIssue,
+  disconnectReason,
+  HANDSHAKE_TIMEOUT_MS,
+  reconnectDelay,
+  retryDelay,
+} from './health.js';
 import { sdkDiagnostic, writeDiagnostic } from './diagnostics.js';
 import type { LogValue } from './diagnostics.js';
-import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
+import type {
+  ReceiveInterruption,
+  Recovery,
+  RecoveryClock,
+  RecoveryState,
+  RetryReason,
+} from './health.js';
 import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform as performOperation } from './operations.js';
@@ -115,6 +127,8 @@ export function createRuntime(
   let owner: object | undefined;
   let cancelTimer: (() => void) | undefined;
   let retryToken: object | undefined;
+  let cancelWatchdogTimer: (() => void) | undefined;
+  let watchdogToken: object | undefined;
   let replacing: Promise<void> | undefined;
   let ending: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -125,6 +139,11 @@ export function createRuntime(
     code: null,
     attempt: 0,
     nextRetryAt: null,
+    since: clock.now(),
+  };
+  /** Every recovery transition goes through here so `since` always matches the current state. */
+  const enterRecovery = (next: RecoveryState): void => {
+    recovery = { ...next, since: clock.now() };
   };
   let lastInterruption =
     store.get<ReceiveInterruption>('runtime', 'receive-interruption') ?? null;
@@ -300,19 +319,110 @@ export function createRuntime(
     cancelTimer?.();
     cancelTimer = undefined;
   }
+  function cancelWatchdog(): void {
+    watchdogToken = undefined;
+    cancelWatchdogTimer?.();
+    cancelWatchdogTimer = undefined;
+  }
+  function cancelRecoveryTimers(): void {
+    cancelRetry();
+    cancelWatchdog();
+  }
+  /** Count the attempt, publish its deadline and reconnect through the shared replacement path. */
+  function scheduleRetry(
+    reason: RetryReason,
+    code: number | null,
+    delay: number,
+  ): void {
+    attempts++;
+    enterRecovery({
+      state: 'waiting-retry',
+      reason,
+      code,
+      attempt: attempts,
+      nextRetryAt: clock.now() + delay,
+    });
+    const pending = {};
+    retryToken = pending;
+    cancelTimer = clock.schedule(() => {
+      if (stopped || retryToken !== pending) return;
+      cancelRetry();
+      enterRecovery({
+        state: 'connecting',
+        reason,
+        code,
+        attempt: attempts,
+        nextRetryAt: null,
+      });
+      void reconnect(false).catch(() => {
+        writeDiagnostic({
+          error: 'Socket cleanup failed; recovery requires intervention',
+        });
+      });
+    }, delay);
+  }
+  /**
+   * Bound the connecting phase of one socket. The SDK may never report open or close
+   * (observed after a 503 retry), which would otherwise leave recovery connecting forever.
+   */
+  function armWatchdog(current: WASocket, token: object): void {
+    cancelWatchdog();
+    const pending = {};
+    watchdogToken = pending;
+    cancelWatchdogTimer = clock.schedule(() => {
+      if (watchdogToken !== pending) return;
+      cancelWatchdog();
+      // Only the socket that armed this watchdog, still owning recovery, can time out.
+      if (stopped || socket !== current || owner !== token) return;
+      if (connection === 'open') return;
+      handshakeTimedOut(current);
+    }, HANDSHAKE_TIMEOUT_MS);
+  }
+  function handshakeTimedOut(current: WASocket): void {
+    // Same transitions as an observed close. Invalidating ownership first keeps the
+    // close event that end() emits (and any late open) from owning recovery again.
+    owner = undefined;
+    qr = undefined;
+    receivedPendingNotifications = false;
+    connection = 'close';
+    try {
+      store.event('connection', {
+        connection,
+        receivedPendingNotifications,
+        disconnectCode: null,
+        reason: 'handshake-timeout',
+      });
+    } catch {
+      fatal();
+    }
+    interrupt('connection-closed');
+    scheduleRetry('handshake-timeout', null, retryDelay(attempts));
+    logConnection(null);
+    observability.record('diagnostic', {
+      label: 'connection',
+      connection,
+      recovery: recovery.state,
+    });
+    // The handle stays in `socket`; the retry's replacement awaits SDK and transport closure.
+    try {
+      void current.end(new Error('Handshake timed out')).catch(() => undefined);
+    } catch {
+      /* The retry's replacement repeats end() and reports cleanup failure. */
+    }
+  }
   function intervention(
     reason: Extract<Recovery, { state: 'intervention-required' }>['reason'],
     code: number | null,
   ): void {
-    cancelRetry();
+    cancelRecoveryTimers();
     connection = 'close';
-    recovery = {
+    enterRecovery({
       state: 'intervention-required',
       reason,
       code,
       attempt: attempts,
       nextRetryAt: null,
-    };
+    });
     issue('connection-stopped-review-required');
   }
   function connected(): WASocket {
@@ -402,6 +512,7 @@ export function createRuntime(
       return;
     }
     socket = current;
+    armWatchdog(current, token);
     let closed!: () => void;
     socketClosed = new Promise<void>((resolve) => {
       closed = resolve;
@@ -542,6 +653,13 @@ export function createRuntime(
       const admitted = socket === current && owner === token && !stopped;
       if (update.connection === 'close') closed();
       persist(() => {
+        // Open, close or a pairing QR all end the handshake phase this watchdog bounds.
+        if (
+          update.connection === 'open' ||
+          update.connection === 'close' ||
+          typeof update.qr === 'string'
+        )
+          cancelWatchdog();
         if ('qr' in update) qr = update.qr;
         if (update.receivedPendingNotifications !== undefined)
           receivedPendingNotifications = update.receivedPendingNotifications;
@@ -554,13 +672,13 @@ export function createRuntime(
         if (update.connection === 'open') {
           qr = undefined;
           attempts = 0;
-          recovery = {
+          enterRecovery({
             state: 'open',
             reason: null,
             code: null,
             attempt: 0,
             nextRetryAt: null,
-          };
+          });
         }
         if (update.connection === 'close') {
           qr = undefined;
@@ -574,35 +692,7 @@ export function createRuntime(
           const delay = reconnectDelay(code, attempts);
           if (delay === undefined || code === undefined)
             intervention(reason, code ?? null);
-          else {
-            attempts++;
-            recovery = {
-              state: 'waiting-retry',
-              reason,
-              code,
-              attempt: attempts,
-              nextRetryAt: clock.now() + delay,
-            };
-            const pending = {};
-            retryToken = pending;
-            cancelTimer = clock.schedule(() => {
-              if (stopped || retryToken !== pending) return;
-              cancelRetry();
-              recovery = {
-                state: 'connecting',
-                reason,
-                code,
-                attempt: attempts,
-                nextRetryAt: null,
-              };
-              void reconnect(false).catch(() => {
-                writeDiagnostic({
-                  error:
-                    'Socket cleanup failed; recovery requires intervention',
-                });
-              });
-            }, delay);
-          }
+          else scheduleRetry(reason, code, delay);
         }
       });
       if (admitted && update.connection)
@@ -1187,7 +1277,7 @@ export function createRuntime(
   }
   function reconnect(manual = true): Promise<void> {
     if (replacing) return replacing;
-    cancelRetry();
+    cancelRecoveryTimers();
     const previous = socket;
     const previousClosed = socketClosed;
     socket = undefined;
@@ -1199,13 +1289,13 @@ export function createRuntime(
     settleAckWaits();
     if (manual) {
       attempts = 0;
-      recovery = {
+      enterRecovery({
         state: 'connecting',
         reason: 'manual-reconnect',
         code: null,
         attempt: 0,
         nextRetryAt: null,
-      };
+      });
       interrupt('manual-reconnect');
     }
     replacing = (async () => {
@@ -1235,14 +1325,14 @@ export function createRuntime(
     if (ending) return ending;
     stopped = true;
     processObservation.stop();
-    cancelRetry();
-    recovery = {
+    cancelRecoveryTimers();
+    enterRecovery({
       state: 'stopping',
       reason: null,
       code: null,
       attempt: 0,
       nextRetryAt: null,
-    };
+    });
     qr = undefined;
     receivedPendingNotifications = false;
     if (started && options.connect) interrupt('runtime-stop');
@@ -1322,13 +1412,13 @@ export function createRuntime(
       });
       if (options.connect) {
         interrupt('runtime-start');
-        recovery = {
+        enterRecovery({
           state: 'connecting',
           reason: 'startup',
           code: null,
           attempt: 0,
           nextRetryAt: null,
-        };
+        });
         open();
       }
     },
