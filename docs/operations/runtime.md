@@ -12,11 +12,19 @@ To inspect events or request recovery:
 
 ```sh
 node dist/src/cli.js events --after 0
+node dist/src/cli.js events --tail 20
+node dist/src/cli.js events --tail 5 --kind connection
 node dist/src/cli.js reconnect
 node dist/src/cli.js resync
 ```
 
-Events are paginated by sequence, with 100 events per request.
+Events are paginated by sequence, with up to 100 events per request, and are always returned in ascending `sequence` order:
+
+- `--after SEQUENCE` (default `0`) returns the first 100 events after that sequence. Continue from the last returned `sequence`.
+- `--tail N` (1 to 100) returns the latest N events instead of the first page. They are still emitted oldest first, so the last entry is the newest. Combined with `--after`, it returns the latest N events after that sequence.
+- `--kind KIND` keeps only events of one kind, such as `connection`, `history-status`, `messages.upsert` or `app-state.chat-action`. It combines with `--after` and `--tail`.
+
+Invalid values fail with `INVALID_ARGUMENT` before contacting the daemon. Use these options instead of opening the SQLite database directly; only the runtime reads and writes it.
 
 The diagnostic `drop-connection` command closes only this daemon's WebSocket and lets its normal reconnect handler recover.
 
@@ -146,6 +154,29 @@ During outages:
 - Local queries and existing request keys remain usable.
 - New sends fail the connection precondition.
 - Uncertain send intents are never resent automatically.
+
+## Daemon log
+
+A background `start` appends the daemon's stderr to the private `daemon.log` in the data directory. Each line is one JSON object whose first field, `at`, is an ISO-8601 UTC timestamp. Lifecycle lines carry `level: "lifecycle"` and one `event`:
+
+| `event`             | Fields                                                     | Meaning                                                               |
+| ------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
+| `startup`           | `pid`, `build` (fingerprint or null), `network`            | The process holds the writer lock for this data directory.            |
+| `ready`             | `pid`                                                      | The control socket is listening and the runtime has started.          |
+| `connection`        | `state`, `recovery`, `reason`, `disconnectCode`, `attempt` | The SDK reported a connection state change, with the recovery result. |
+| `signal`            | `signal` (`SIGINT` or `SIGTERM`)                           | A termination signal was received; shutdown follows.                  |
+| `shutdown-started`  | `reason` (`stop-command`, a signal, or `startup-failed`)   | Cleanup began.                                                        |
+| `shutdown-complete` | `reason`                                                   | SDK cleanup, database closure and socket removal finished.            |
+| `shutdown-failed`   | `code`                                                     | Cleanup failed; the process exits with code 1.                        |
+| `exit`              | `pid`, `code`                                              | The process is exiting with that code.                                |
+
+Lines without `level: "lifecycle"` are the existing diagnostics and errors described in [Privacy](privacy.md#diagnostics). A log that ends without an `exit` line means the process was killed without running its exit handlers, for example by `SIGKILL` or an out-of-memory or cgroup kill. A `signal` line followed by `shutdown-complete` and `exit` shows an orderly signal-driven stop rather than a crash.
+
+```sh
+tail -n 20 "$DATA_DIR/daemon.log"
+```
+
+`daemon.log` has no rotation or size cap. Lifecycle lines contain no message content, SDK objects, credentials or JIDs.
 
 ## Shutdown and upgrades
 

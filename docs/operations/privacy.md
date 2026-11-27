@@ -32,7 +32,7 @@ Deletion hides current public message bodies but does not erase immutable outgoi
 
 ## Diagnostics
 
-JSON responses use stdout; diagnostics use stderr, captured in private `daemon.log` for background starts.
+JSON responses use stdout; diagnostics use stderr, captured in private `daemon.log` for background starts. Every line the daemon itself writes is JSON with an ISO-8601 `at` timestamp; lifecycle lines record only process IDs, the build fingerprint, signals, connection states, recovery labels, numeric disconnect codes and attempt counts. See [Daemon log](runtime.md#daemon-log).
 
 Diagnostics exclude arbitrary SDK objects, interpolated strings, exception causes and stacks, and parser excerpts. Only allowlisted static labels, numeric levels, and bounded sync/decryption issue categories are retained.
 

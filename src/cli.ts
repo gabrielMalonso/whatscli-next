@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { rpc, RpcError } from './rpc.js';
-import { object } from './protocol.js';
+import { eventKind, object } from './protocol.js';
 import type { Command } from './protocol.js';
 import { formatResponse } from './response.js';
 import { CommandError, errorResponse } from './errors.js';
@@ -67,47 +67,51 @@ const call = (directory: string, command: Command, timeout?: number) =>
     observer && !suppress ? { observer, root } : undefined,
   );
 
+const optionSpec = {
+  'data-dir': { type: 'string' },
+  account: { type: 'string' },
+  offline: { type: 'boolean' },
+  'allow-jid': { type: 'string' },
+  jid: { type: 'string' },
+  key: { type: 'string' },
+  text: { type: 'string' },
+  file: { type: 'string' },
+  mime: { type: 'string' },
+  caption: { type: 'string' },
+  out: { type: 'string' },
+  id: { type: 'string' },
+  participant: { type: 'string' },
+  'from-me': { type: 'string' },
+  query: { type: 'string' },
+  'quote-id': { type: 'string' },
+  'quote-from-me': { type: 'string' },
+  'quote-participant': { type: 'string' },
+  limit: { type: 'string' },
+  offset: { type: 'string' },
+  after: { type: 'string' },
+  tail: { type: 'string' },
+  kind: { type: 'string' },
+  phone: { type: 'string' },
+  from: { type: 'string' },
+  to: { type: 'string' },
+  origin: { type: 'string' },
+  code: { type: 'string' },
+  command: { type: 'string' },
+  correlation: { type: 'string' },
+  cursor: { type: 'string' },
+  unread: { type: 'string' },
+  archived: { type: 'string' },
+  'observed-only': { type: 'boolean' },
+  output: { type: 'string' },
+  name: { type: 'string' },
+} as const;
+
 function options() {
   try {
     const parsed = parseArgs({
       allowPositionals: true,
       tokens: true,
-      options: {
-        'data-dir': { type: 'string' },
-        account: { type: 'string' },
-        offline: { type: 'boolean' },
-        'allow-jid': { type: 'string' },
-        jid: { type: 'string' },
-        key: { type: 'string' },
-        text: { type: 'string' },
-        file: { type: 'string' },
-        mime: { type: 'string' },
-        caption: { type: 'string' },
-        out: { type: 'string' },
-        id: { type: 'string' },
-        participant: { type: 'string' },
-        'from-me': { type: 'string' },
-        query: { type: 'string' },
-        'quote-id': { type: 'string' },
-        'quote-from-me': { type: 'string' },
-        'quote-participant': { type: 'string' },
-        limit: { type: 'string' },
-        offset: { type: 'string' },
-        after: { type: 'string' },
-        phone: { type: 'string' },
-        from: { type: 'string' },
-        to: { type: 'string' },
-        origin: { type: 'string' },
-        code: { type: 'string' },
-        command: { type: 'string' },
-        correlation: { type: 'string' },
-        cursor: { type: 'string' },
-        unread: { type: 'string' },
-        archived: { type: 'string' },
-        'observed-only': { type: 'boolean' },
-        output: { type: 'string' },
-        name: { type: 'string' },
-      },
+      options: optionSpec,
     });
     if (
       parsed.tokens.filter(
@@ -130,7 +134,79 @@ function options() {
   }
 }
 
+// A string option written without `=` consumes the next argument as its value,
+// so `--text -h` sends the text "-h" rather than requesting help.
+const helpRequested = (() => {
+  for (let index = 0; index < argumentsBeforeTerminator.length; index++) {
+    const arg = argumentsBeforeTerminator[index]!;
+    if (arg === '--help' || arg === '-h') return true;
+    const name = arg.startsWith('--') && !arg.includes('=') ? arg.slice(2) : '';
+    if (
+      Object.hasOwn(optionSpec, name) &&
+      optionSpec[name as keyof typeof optionSpec].type === 'string'
+    )
+      index++;
+  }
+  return false;
+})();
+
+/** The JSON command reference, also returned for --help and -h anywhere before --. */
+function help(): Record<string, unknown> {
+  return {
+    ok: true,
+    data: {
+      name: 'whatscli-next',
+      output: 'JSON',
+      commands: {
+        start: '[--offline] [--allow-jid JID]',
+        status: '',
+        stop: '',
+        backup: '--out NEW_PRIVATE_DIRECTORY (sensitive SQLite only)',
+        'pair qr': '',
+        'pair code': '--phone INTERNATIONAL_DIGITS',
+        chats:
+          '[--unread true|false|unknown|not-true] [--archived true|false|unknown|not-true] [--observed-only] [--limit 100] [--offset 0]',
+        chat: '--jid JID',
+        resolve: '--phone +INTERNATIONAL_DIGITS',
+        contact: '--jid PN_OR_LID_JID',
+        messages: '--jid JID [--limit 20] [--offset 0]',
+        search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
+        send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]]',
+        'send-file':
+          '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
+        'send-contact':
+          '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS',
+        download:
+          '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
+        archive: '--jid JID --key KEY',
+        unarchive: '--jid JID --key KEY',
+        read: '--jid JID --key KEY',
+        unread: '--jid JID --key KEY',
+        request: '--key KEY',
+        events:
+          '[--after SEQUENCE] [--tail 1-100] [--kind KIND] (ascending; --tail returns the latest N)',
+        group: '--jid GROUP_JID',
+        reconnect: '',
+        resync: '',
+        'observability enable': '',
+        'observability disable': '',
+        'observability status': '',
+        'observability query':
+          '[--from UTC_ISO] [--to UTC_ISO] [--command ACTION] [--origin ORIGIN] [--code CODE] [--correlation ID] [--limit 100] [--cursor CURSOR]',
+      },
+      globalOption: '--account NAME | --data-dir PATH',
+      outputOption: '--output compact|full (default: full)',
+      helpOption: '--help | -h (anywhere before --; same reference as help)',
+    },
+  };
+}
+
 async function main(): Promise<Record<string, unknown>> {
+  if (helpRequested) {
+    // Answer before option parsing, so a help flag never becomes INVALID_ARGUMENT.
+    fields.action = 'help';
+    return formatResponse('help', help(), 'full', undefined);
+  }
   const { values, positionals } = options();
   const directory = dataDirectory({
     path: values['data-dir'],
@@ -181,52 +257,7 @@ async function execute(
       'INVALID_ARGUMENT',
       'Unexpected positional arguments; use named options',
     );
-  if (action === 'help')
-    return {
-      ok: true,
-      data: {
-        name: 'whatscli-next',
-        output: 'JSON',
-        commands: {
-          start: '[--offline] [--allow-jid JID]',
-          status: '',
-          stop: '',
-          backup: '--out NEW_PRIVATE_DIRECTORY (sensitive SQLite only)',
-          'pair qr': '',
-          'pair code': '--phone INTERNATIONAL_DIGITS',
-          chats:
-            '[--unread true|false|unknown|not-true] [--archived true|false|unknown|not-true] [--observed-only] [--limit 100] [--offset 0]',
-          chat: '--jid JID',
-          resolve: '--phone +INTERNATIONAL_DIGITS',
-          contact: '--jid PN_OR_LID_JID',
-          messages: '--jid JID [--limit 20] [--offset 0]',
-          search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
-          send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]]',
-          'send-file':
-            '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
-          'send-contact':
-            '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS',
-          download:
-            '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
-          archive: '--jid JID --key KEY',
-          unarchive: '--jid JID --key KEY',
-          read: '--jid JID --key KEY',
-          unread: '--jid JID --key KEY',
-          request: '--key KEY',
-          events: '[--after SEQUENCE]',
-          group: '--jid GROUP_JID',
-          reconnect: '',
-          resync: '',
-          'observability enable': '',
-          'observability disable': '',
-          'observability status': '',
-          'observability query':
-            '[--from UTC_ISO] [--to UTC_ISO] [--command ACTION] [--origin ORIGIN] [--code CODE] [--correlation ID] [--limit 100] [--cursor CURSOR]',
-        },
-        globalOption: '--account NAME | --data-dir PATH',
-        outputOption: '--output compact|full (default: full)',
-      },
-    };
+  if (action === 'help') return help();
   if (action === 'observability') {
     const subcommand = positionals[1] ?? 'status';
     if (subcommand === 'query') {
@@ -589,10 +620,37 @@ async function execute(
       only('key');
       command = { command: action, key: key() };
       break;
-    case 'events':
-      only('after');
-      command = { command: action, after: Number(values.after ?? 0) };
+    case 'events': {
+      only('after', 'tail', 'kind');
+      if (
+        values.tail !== undefined &&
+        !(/^\d+$/.test(values.tail) && +values.tail >= 1 && +values.tail <= 100)
+      )
+        throw new CommandError(
+          'INVALID_ARGUMENT',
+          '--tail must be an integer from 1 to 100',
+        );
+      if (
+        values.after !== undefined &&
+        !(/^\d+$/.test(values.after) && Number.isSafeInteger(+values.after))
+      )
+        throw new CommandError(
+          'INVALID_ARGUMENT',
+          '--after must be a non-negative integer event sequence',
+        );
+      if (values.kind !== undefined && !eventKind.test(values.kind))
+        throw new CommandError(
+          'INVALID_ARGUMENT',
+          '--kind must be an event kind such as connection or messages.upsert',
+        );
+      command = {
+        command: action,
+        after: Number(values.after ?? 0),
+        ...(values.tail === undefined ? {} : { tail: Number(values.tail) }),
+        ...(values.kind === undefined ? {} : { kind: values.kind }),
+      };
       break;
+    }
     default:
       throw new CommandError(
         'INVALID_ARGUMENT',

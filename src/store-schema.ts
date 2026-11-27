@@ -22,6 +22,7 @@ export function createSchema(db: DatabaseSync): void {
       PRIMARY KEY(jid,id,from_me,participant)
     );
     CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, json TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS events_kind ON events(kind,sequence);
     CREATE TABLE IF NOT EXISTS requests (key TEXT PRIMARY KEY, json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_mappings (
       pn TEXT NOT NULL, lid TEXT NOT NULL, source TEXT NOT NULL, observed_at INTEGER,

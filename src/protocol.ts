@@ -40,7 +40,7 @@ export type Command =
       offset: number;
     }
   | { command: 'group'; jid: string }
-  | { command: 'events'; after: number }
+  | { command: 'events'; after: number; tail?: number; kind?: string }
   | { command: 'request'; key: string }
   | { command: 'backup'; path: string }
   | { command: 'pair-code'; phone: string }
@@ -95,6 +95,9 @@ function string(value: unknown, label: string): string {
     );
   return value;
 }
+
+/** Journal kinds are fixed internal labels and SDK event names, e.g. messages.upsert. */
+export const eventKind = /^[A-Za-z0-9._-]{1,64}$/;
 
 function integer(value: unknown, min: number, max: number): number {
   if (
@@ -195,11 +198,33 @@ export function parseCommand(value: Record<string, unknown>): Command {
         );
       return { command: value.command, jid };
     }
-    case 'events':
+    case 'events': {
+      let tail: number | undefined;
+      if (value.tail !== undefined)
+        try {
+          tail = integer(value.tail, 1, 100);
+        } catch {
+          throw new CommandError(
+            'INVALID_ARGUMENT',
+            'tail must be an integer from 1 to 100',
+          );
+        }
+      let kind: string | undefined;
+      if (value.kind !== undefined) {
+        if (typeof value.kind !== 'string' || !eventKind.test(value.kind))
+          throw new CommandError(
+            'INVALID_ARGUMENT',
+            'kind must be an event kind such as connection or messages.upsert',
+          );
+        kind = value.kind;
+      }
       return {
         command: value.command,
         after: integer(value.after ?? 0, 0, Number.MAX_SAFE_INTEGER),
+        ...(tail === undefined ? {} : { tail }),
+        ...(kind === undefined ? {} : { kind }),
       };
+    }
     case 'request':
       return { command: value.command, key: string(value.key, 'key') };
     case 'backup':
