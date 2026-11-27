@@ -22,7 +22,7 @@ node dist/src/cli.js archive --jid '12025550101@s.whatsapp.net' --key 'example-a
   --if-latest-incoming none
 ```
 
-The daemon compares the value with the latest locally stored incoming user message in that exact chat JID. It checks immediately before it persists the intent and builds the patch from stored messages, and nothing can be stored between those steps. `none` requires that no such message is stored. The option works the same way on `unarchive` and `unread`.
+The daemon compares the value with the latest locally stored incoming user message in that exact chat JID. It checks immediately before it persists the intent and builds the patch from stored messages, and nothing can be stored between those steps. `none` requires that no such message is stored, so a message whose ID is literally `none` cannot be named. The option works the same way on `unarchive` and `unread`.
 
 When another message is the latest, the command returns `PRECONDITION_FAILED`, persists no intent and invokes nothing. The key stays unused:
 
@@ -37,8 +37,8 @@ When another message is the latest, the command returns `PRECONDITION_FAILED`, p
     "expectedStored": true,
     "latestIncoming": { "id": "FICTIONAL-IN-004", "timestamp": 1700000010 },
     "newerIncoming": [
-      { "id": "FICTIONAL-IN-004", "timestamp": 1700000010 },
-      { "id": "FICTIONAL-IN-003", "timestamp": 1700000040 }
+      { "id": "FICTIONAL-IN-003", "timestamp": 1700000040 },
+      { "id": "FICTIONAL-IN-004", "timestamp": 1700000010 }
     ],
     "truncated": false,
     "coverage": "local"
@@ -46,7 +46,13 @@ When another message is the latest, the command returns `PRECONDITION_FAILED`, p
 }
 ```
 
-`newerIncoming` lists every incoming user message stored after the expected one, most recently stored first, up to 20. `truncated: true` means more exist. `expectedStored: false` means the expected ID is not a stored incoming user message in this chat, so the list starts from the most recent. Read `messages --jid` and find every listed ID before deciding again, then retry with the `latestIncoming.id` that is current after you have read them. `latestIncoming` alone can name an old message that history sync stored after a live reply (`FICTIONAL-IN-004` above), so never retry with it without checking the whole list.
+`newerIncoming` lists the incoming user messages stored after the expected one, in the order they were stored (oldest first), up to 20. The message stored right after the one you saw always comes first, even when history sync stored older messages later. That is why `latestIncoming` (`FICTIONAL-IN-004` above) can be an old history message while the live reply (`FICTIONAL-IN-003`) is listed first. `expectedStored: false` means the expected ID has no stored arrival in this chat, as with `none`, so the list starts from the first stored message.
+
+To decide again, follow this procedure. It reaches every message stored after the expected one:
+
+1. Read `messages --jid` and find every listed ID.
+2. While `truncated` is `true`, repeat the command with `--if-latest-incoming` set to the last listed ID. The refusal returns the next page, starting right after it, and still changes nothing.
+3. When `truncated` is `false`, the last listed ID is the current `latestIncoming.id`. After reading everything, retry with that ID.
 
 An incoming user message is a message with `fromMe: false` stored under that exact JID. These do not count:
 

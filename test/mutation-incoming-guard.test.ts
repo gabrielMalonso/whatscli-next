@@ -491,8 +491,8 @@ test('a refusal lists every reply stored after the named one, even behind later 
       timestamp: 1700000050,
     });
     assert.deepEqual(details.newerIncoming, [
-      { id: 'in-history', timestamp: 1700000050 },
       { id: 'in-live', timestamp: 1700000200 },
+      { id: 'in-history', timestamp: 1700000050 },
     ]);
     assert.equal(details.expectedStored, true);
     assert.equal(details.truncated, false);
@@ -513,15 +513,80 @@ test('the refusal list is bounded and reports an expected ID that is not stored'
       f.runtime.execute(guarded('archive', 'bounded', 'never-stored')),
     );
     const details = object(response.details);
+    // Without a stored anchor, listing starts from the first stored message.
     assert.equal((details.newerIncoming as unknown[]).length, 20);
     assert.deepEqual((details.newerIncoming as unknown[])[0], {
-      id: 'in-21',
-      timestamp: 1700000021,
+      id: 'in-0',
+      timestamp: 1700000000,
     });
     assert.equal(details.truncated, true);
     assert.equal(details.expectedStored, false);
   } finally {
     await f.close();
+  }
+});
+
+test('paging refusals from the named message reaches a live reply hidden behind history', async () => {
+  const f = fixture([incoming('in-w', 1700000100)]);
+  try {
+    f.receive(incoming('in-r', 1700000200, 'Fictional live reply'));
+    f.ev.emit('messages.upsert', {
+      messages: Array.from({ length: 25 }, (_, index) =>
+        incoming(`in-h${index}`, 1700000000 + index),
+      ),
+      type: 'append',
+    });
+    const seen: string[] = [];
+    let expected = 'in-w';
+    for (;;) {
+      const details = object(
+        (
+          await failure(
+            f.runtime.execute(guarded('mark-read', 'paged', expected)),
+          )
+        ).details,
+      );
+      assert.equal(details.expectedStored, true);
+      assert.deepEqual(details.latestIncoming, {
+        id: 'in-h24',
+        timestamp: 1700000024,
+      });
+      const page = (details.newerIncoming as { id: string }[]).map(
+        ({ id }) => id,
+      );
+      assert.ok(page.length > 0 && page.length <= 20);
+      seen.push(...page);
+      expected = page.at(-1)!;
+      if (details.truncated === false) break;
+    }
+    // The live reply comes first, and every page continues where the last ended.
+    assert.deepEqual(seen, [
+      'in-r',
+      ...Array.from({ length: 25 }, (_, index) => `in-h${index}`),
+    ]);
+    await assertUnchanged(f, 'paged');
+    await f.runtime.execute(guarded('mark-read', 'paged', expected));
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a key first stored as a protocol stub counts once it carries real content', () => {
+  const store = new Store(mkdtempSync(join(tmpdir(), 'incoming-guard-noise-')));
+  try {
+    store.observeChat({ id: jid });
+    store.observeMessage(incoming('in-a', 1700000100));
+    store.observeMessage({
+      key: { remoteJid: jid, id: 'in-x', fromMe: false },
+      messageTimestamp: 1700000200,
+      message: { protocolMessage: {} },
+    });
+    assert.equal(store.latestIncoming(jid)?.id, 'in-a');
+    store.observeMessage(incoming('in-x', 1700000200, 'Fictional real text'));
+    assert.equal(store.latestIncoming(jid)?.id, 'in-x');
+  } finally {
+    store.close();
   }
 });
 

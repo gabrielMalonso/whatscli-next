@@ -221,8 +221,7 @@ function hasStubType(message: WAMessage): boolean {
 
 /**
  * Incoming protocol envelopes (edits, revokes, ephemeral settings, key
- * shares and the stubs a server emits after own sends) and reactions. A key
- * that is noise once stays noise: these types never become a person's message.
+ * shares and the stubs a server emits after own sends) and reactions.
  */
 function isIncomingNoise(message: WAMessage): boolean {
   if (message.key.fromMe !== false || hasStubType(message)) return false;
@@ -1929,12 +1928,12 @@ export class Store {
           'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
         )
         .run(jid, id, participantSlot);
-      if (noise)
-        this.db
-          .prepare(
-            'UPDATE message_arrivals SET noise=1 WHERE jid=? AND id=? AND participant=?',
-          )
-          .run(jid, id, participantSlot);
+      // Follow the current content on every write; a cleared flag costs only a decode.
+      this.db
+        .prepare(
+          'UPDATE message_arrivals SET noise=? WHERE jid=? AND id=? AND participant=? AND noise<>?',
+        )
+        .run(Number(noise), jid, id, participantSlot, Number(noise));
     }
     if (previousRow)
       this.db
@@ -2009,8 +2008,13 @@ export class Store {
    * stored message, or be missing. Other JIDs of the same person and
    * unsynchronized history are not consulted.
    */
-  private *incomingByArrival(jid: string): Generator<LatestIncoming> {
+  private *incomingByArrival(
+    jid: string,
+    order: 'newest-first' | 'oldest-first' = 'newest-first',
+    after = 0,
+  ): Generator<LatestIncoming> {
     // Deleted bodies are cleared; classify them by the retained private audit copy.
+    // The noise flag is only an index hint; every candidate is classified here.
     for (const row of this.db
       .prepare(
         `SELECT m.id,m.timestamp,COALESCE(d.audit_json,m.json) AS json
@@ -2018,9 +2022,10 @@ export class Store {
         AND m.from_me=0 AND m.participant=a.participant
         LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
         AND d.from_me=0 AND d.participant=m.participant
-        WHERE a.jid=? AND a.noise=0 ORDER BY a.sequence DESC`,
+        WHERE a.jid=? AND a.noise=0 AND a.sequence>?
+        ORDER BY a.sequence ${order === 'newest-first' ? 'DESC' : 'ASC'}`,
       )
-      .iterate(jid)) {
+      .iterate(jid, after)) {
       if (isIncomingUserMessage(decodeMessage(String(row.json))))
         yield { id: String(row.id), timestamp: Number(row.timestamp) || null };
     }
@@ -2032,8 +2037,9 @@ export class Store {
   }
 
   /**
-   * Incoming user messages first-stored after the expected one (all of them
-   * when it is null or not stored as one), most recent first, bounded.
+   * Incoming user messages first-stored after the expected one, oldest first,
+   * bounded; from the first stored one when it is null or not stored. Naming
+   * the last listed ID returns the next page, so no message can be skipped.
    */
   newerIncoming(
     jid: string,
@@ -2044,15 +2050,25 @@ export class Store {
     truncated: boolean;
     expectedStored: boolean;
   } {
+    const anchor =
+      expected === null
+        ? null
+        : this.db
+            .prepare(
+              'SELECT MIN(sequence) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
+            )
+            .get(jid, expected)?.sequence;
     const messages: LatestIncoming[] = [];
-    for (const message of this.incomingByArrival(jid)) {
-      if (message.id === expected)
-        return { messages, truncated: false, expectedStored: true };
+    for (const message of this.incomingByArrival(
+      jid,
+      'oldest-first',
+      anchor == null ? 0 : Number(anchor),
+    )) {
       if (messages.length === limit)
-        return { messages, truncated: true, expectedStored: false };
+        return { messages, truncated: true, expectedStored: anchor != null };
       messages.push(message);
     }
-    return { messages, truncated: false, expectedStored: false };
+    return { messages, truncated: false, expectedStored: anchor != null };
   }
 
   /**

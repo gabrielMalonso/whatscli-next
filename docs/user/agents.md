@@ -61,7 +61,7 @@ node dist/src/cli.js --output compact read \
 
 The daemon checks the guard immediately before it builds the patch, so no script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls, unrecognized content, and late or same-second arrivals block it.
 
-- **`PRECONDITION_FAILED`:** nothing changed. `details.newerIncoming` lists every message stored after the one you named (up to 20; check `truncated`). Read `messages --jid`, find every listed ID, decide again, and only then retry with the `latestIncoming.id` that is current after reading. `latestIncoming` alone can be an old history message that hides a newer reply.
+- **`PRECONDITION_FAILED`:** nothing changed. `details.newerIncoming` lists the messages stored after the one you named, oldest first, up to 20. Read `messages --jid` and find every listed ID. While `truncated` is `true`, repeat the command with the last listed ID to get the next page; the refusal changes nothing. When `truncated` is `false`, decide again and retry with the last listed ID, which is then `latestIncoming.id`. Never retry with `latestIncoming.id` from a truncated page: it can be an old history message that hides a newer reply.
 - **`feedback.latestIncomingChanged: true` on success:** a message arrived during or after the mutation, which the patch did not cover. Read it and decide whether the chat needs attention; do not repeat the command.
 
 Pass only an ID you have actually read; copying the current value to make the check pass defeats the guard. Coverage is local; see [the incoming-message guard](chat-state.md#guard-against-new-incoming-messages).
