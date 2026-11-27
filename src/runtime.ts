@@ -385,6 +385,7 @@ export function createRuntime(
     qr = undefined;
     receivedPendingNotifications = false;
     connection = 'close';
+    settleAckWaits();
     try {
       store.event('connection', {
         connection,

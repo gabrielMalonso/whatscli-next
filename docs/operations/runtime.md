@@ -81,9 +81,9 @@ Retry delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds without a
 
 ### Handshake timeout
 
-Every new socket (startup, automatic retry, or manual reconnect) must report open, close, or a pairing QR within 45 seconds. Otherwise the runtime ends that socket and handles it like an observed close with reason `handshake-timeout` and code null: `attempt` increases and the next retry uses the same backoff. This prevents a socket that never reports an outcome from leaving recovery in `connecting` indefinitely.
+Every new socket (startup, automatic retry, or manual reconnect) must report open, close, or a pairing QR within 4 minutes. The bound sits above the SDK's own worst case before open (connect timeout plus post-login queries that still end in open), so a slow login is never cut short. Otherwise the runtime ends that socket and handles it like an observed close with reason `handshake-timeout` and code null: `attempt` increases and the next retry uses the same backoff. This prevents a socket that never reports an outcome from leaving recovery in `connecting` indefinitely.
 
-Open, close, a pairing QR, stop, and manual reconnect cancel the timeout. It applies only to the socket that started it; it never ends a replacement. Waiting for a QR scan or pairing code is not bounded by this timeout. Cleanup of a previous socket during replacement is also not bounded.
+Open, close, a pairing QR, stop, manual reconnect, and a disconnect requiring intervention cancel the timeout. It applies only to the socket that started it; it never ends a replacement. Waiting for a QR scan or pairing code is not bounded by this timeout. Cleanup of a previous socket during replacement is also not bounded.
 
 Code 515 can complete the SDK's pairing restart. It also waits at least one second to prevent repeated-restart spin.
 
