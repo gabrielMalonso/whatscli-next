@@ -1526,13 +1526,21 @@ export class Store {
     const clauses: string[] = [];
     const states: (number | null)[] = [];
     for (const field of ['unread', 'archived'] as const) {
-      if (filters[field] === undefined) continue;
+      const filter = filters[field];
+      if (filter === undefined) continue;
       const column =
-        filters[field] === 'unknown' || filters.observedOnly
+        filter === 'unknown' || filters.observedOnly
           ? field
           : `${field}_requested`;
-      clauses.push(`${column} IS ?`);
-      states.push(filters[field] === 'unknown' ? null : Number(filters[field]));
+      // 'not-true' keeps unknown (NULL) state, unlike an explicit false filter.
+      clauses.push(`${column} ${filter === 'not-true' ? 'IS NOT' : 'IS'} ?`);
+      states.push(
+        filter === 'unknown'
+          ? null
+          : filter === 'not-true'
+            ? 1
+            : Number(filter),
+      );
     }
     return this.db
       .prepare(
@@ -1557,13 +1565,16 @@ export class Store {
         const matchedBy: Partial<
           Record<'unread' | 'archived', 'pending-intent'>
         > = {};
-        for (const field of ['unread', 'archived'] as const)
+        for (const field of ['unread', 'archived'] as const) {
+          const filter = filters[field];
+          const pending = chat.pending[field]?.value;
           if (
             !filters.observedOnly &&
-            typeof filters[field] === 'boolean' &&
-            chat.pending[field]?.value === filters[field]
+            typeof pending === 'boolean' &&
+            (filter === 'not-true' ? !pending : pending === filter)
           )
             matchedBy[field] = 'pending-intent';
+        }
         return Object.keys(matchedBy).length ? { ...chat, matchedBy } : chat;
       });
   }

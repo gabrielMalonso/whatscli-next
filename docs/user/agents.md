@@ -15,7 +15,7 @@ Confirm the account JID with its owner. Network operations require linked creden
 ## Select the exact conversation
 
 ```sh
-node dist/src/cli.js --output compact chats --unread true --archived false --limit 50 --offset 0
+node dist/src/cli.js --output compact chats --unread true --archived not-true --limit 50 --offset 0
 node dist/src/cli.js --output compact messages --jid '12025550101@s.whatsapp.net' --limit 20
 node dist/src/cli.js --output compact resolve --phone '+12025550101'
 node dist/src/cli.js --output compact contact --jid '123450001@lid'
@@ -23,7 +23,7 @@ node dist/src/cli.js --output compact contact --jid '123450001@lid'
 
 Use an exact observed JID or the exact PN JID returned by `resolve` with `data.status: confirmed` and a non-null `data.jid`. Names, LID digits, aliases, and shared contact cards cannot identify or authorize a recipient. Investigate conflicts before sending; see [recipient identity](identity.md).
 
-History is partial. Inspect unread and archived `unknown` states separately from `false`, keep pagination filters fixed, and deduplicate by exact JID as pages change. See [history and search](history.md).
+History is partial. Build triage queues with `--archived not-true`, which keeps chats whose archive state is unknown; `--archived false` matches only explicit false and can hide unread conversations. Rows keep `archived: null` for unknown state. Inspect unread and archived `unknown` states separately from `false`, keep pagination filters fixed, and deduplicate by exact JID as pages change. See [history and search](history.md).
 
 Queue filters also include matching pending intents. A row with `matchedBy.unread: "pending-intent"` is requested unread state, with `unread: null` until observed. Use `--observed-only` for strict observations. Mutation `feedback.serverResponse` distinguishes a matching server version, an unmatched response and no recorded response; `feedback.stateObservation` tracks the separate observation. Inspect the original key and `request.appStateResponse`; pending is not a failed command or a reason to issue another key.
 

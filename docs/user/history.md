@@ -3,6 +3,7 @@
 These commands query locally stored chats and messages and work offline:
 
 ```sh
+node dist/src/cli.js chats --unread true --archived not-true --limit 50 --offset 0
 node dist/src/cli.js chats --unread true --archived false --limit 50 --offset 0
 node dist/src/cli.js chats --unread unknown --limit 50 --offset 0
 node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
@@ -31,7 +32,7 @@ node dist/src/cli.js group --jid '120363000000000001@g.us'
 
 Search matches literal substrings of current message text and captions using Unicode case normalization. `%` and `_` are literal characters. Omit `--jid` to search all stored conversations. Quoted text, contact cards, deleted bodies, SDK keys, and private audit data are excluded.
 
-`chats` accepts independent `--unread true|false|unknown` and `--archived true|false|unknown` filters, combined with AND. Omit a filter to include all its states. By default boolean filters consider the latest pending intent for each field; matching rows identify those fields in `matchedBy` as `pending-intent`, while their observed values remain null. Add `--observed-only` to restrict boolean filters to known observed state. `unknown` always matches null observed state, including pending mutations, and is distinct from `false`. A pending-intent match can therefore also appear in an unknown query. Inspect both unknown filters separately; a chat may match both.
+`chats` accepts independent `--unread true|false|unknown|not-true` and `--archived true|false|unknown|not-true` filters, combined with AND. Omit a filter to include all its states. `false` matches only explicit false state; `not-true` matches false or unknown state, so it is the recommended `--archived` value for triage queues: `--archived false` omits unread chats whose archive state was never reported. Each row still distinguishes them: `archived: false` is explicit, while `archived: null` without `matchedBy` is unknown. By default boolean filters consider the latest pending intent for each field; matching rows identify those fields in `matchedBy` as `pending-intent`, while their observed values remain null. Add `--observed-only` to restrict boolean filters to known observed state; with it, `not-true` matches observed false or null observed state, including any pending mutation. `unknown` always matches null observed state, including pending mutations, and is distinct from `false`. A pending-intent match can therefore also appear in an unknown query. Inspect both unknown filters separately; a chat may match both.
 
 Verification and SDK send returns alone do not create listed conversations. PN and LID histories remain separate.
 
