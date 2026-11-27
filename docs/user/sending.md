@@ -24,6 +24,33 @@ node dist/src/cli.js send-contact \
   --phone '+12025550103'
 ```
 
+## Waiting for server acceptance
+
+By default, a send responds as soon as the SDK returns (`attempt: sdk-returned`), usually before the server acknowledgment arrives. Add `--wait-ack-ms MS` (0–30000) to `send`, `send-file`, or `send-contact`, including quoted replies, to let the runtime wait up to that long for matching acceptance evidence before responding. Agents should use `--wait-ack-ms 5000` instead of sleeping and polling `request`:
+
+```sh
+node dist/src/cli.js --output compact send \
+  --jid '12025550101@s.whatsapp.net' \
+  --key 'example-message-001' \
+  --text 'A fictional example message.' \
+  --wait-ack-ms 5000
+```
+
+The intent and message ID are still persisted before invocation, and the wait never resends or calls the SDK again. It ends when the locally recorded request for that message ID reaches `acceptance: server-ack` (or later receipts) or `errorObserved: true`. `data` is then the same request projection `request --key` returns at that moment, plus a response-only field:
+
+```text
+wait: {requestedMs, waitedMs, outcome}
+```
+
+| `outcome`     | Meaning                                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `accepted`    | Matching server acceptance was observed; delivery and read may still be `unknown`.                                                   |
+| `error`       | An SDK failure or error receipt was observed. The attempt may remain uncertain; do not resend with a new key.                        |
+| `timeout`     | No acceptance evidence within the window. Not an error and not a state change: acceptance remains unknown and may still be observed. |
+| `interrupted` | The connection was not open or the runtime stopped during the wait; the response carries what was known.                             |
+
+The option is not part of the intent: replaying an existing key with any wait value applies the wait to the original message without sending again, and changing only the wait never causes `KEY_CONFLICT`. Omitting the option or passing `0` keeps the immediate response with no `wait` field. A daemon that predates the option ignores it, so a response without `wait` did not wait. `request --key` remains the source of truth for acceptance, delivery, and read evidence observed later.
+
 ## Files
 
 Files are sent as WhatsApp documents with their filenames preserved. The default MIME type is `application/octet-stream`, and the initial size limit is 64 MiB.

@@ -15,7 +15,7 @@ Responses describe local observations: `source: local`, `coverage: partial`, and
 | `delivery: delivered`    | Matching SDK delivery evidence was observed.                 |
 | `read: read`             | Matching SDK read evidence was observed.                     |
 
-Missing receipts remain `unknown`. A successful response can still contain `attempt: uncertain` and `errorObserved: true`. Group participant receipts are separate events; one participant's receipt does not establish everyone's outcome. Phone confirmation remains independent evidence.
+Missing receipts remain `unknown`. A send with `--wait-ack-ms` adds a response-only `wait` field; its `timeout` or `interrupted` outcome leaves acceptance unknown and changes no state. See [waiting for acceptance](sending.md#waiting-for-server-acceptance). A successful response can still contain `attempt: uncertain` and `errorObserved: true`. Group participant receipts are separate events; one participant's receipt does not establish everyone's outcome. Phone confirmation remains independent evidence.
 
 ## Durable keys and replay
 

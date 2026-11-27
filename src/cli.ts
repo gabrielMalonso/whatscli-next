@@ -18,7 +18,8 @@ import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { rpc, RpcError } from './rpc.js';
 import { eventKind, object } from './protocol.js';
-import type { Command } from './protocol.js';
+import { MAX_WAIT_ACK_MS } from './protocol.js';
+import type { AckWaitOption, Command } from './protocol.js';
 import { formatResponse } from './response.js';
 import { CommandError, errorResponse } from './errors.js';
 import {
@@ -104,6 +105,7 @@ const optionSpec = {
   'observed-only': { type: 'boolean' },
   output: { type: 'string' },
   name: { type: 'string' },
+  'wait-ack-ms': { type: 'string' },
 } as const;
 
 function options() {
@@ -171,11 +173,11 @@ function help(): Record<string, unknown> {
         contact: '--jid PN_OR_LID_JID',
         messages: '--jid JID [--limit 20] [--offset 0]',
         search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
-        send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]]',
+        send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]] [--wait-ack-ms MS]',
         'send-file':
-          '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT]',
+          '--jid JID --key KEY --file PATH [--mime MIME] [--caption TEXT] [--wait-ack-ms MS]',
         'send-contact':
-          '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS',
+          '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS [--wait-ack-ms MS]',
         download:
           '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
         archive: '--jid JID --key KEY',
@@ -196,6 +198,7 @@ function help(): Record<string, unknown> {
       },
       globalOption: '--account NAME | --data-dir PATH',
       outputOption: '--output compact|full (default: full)',
+      waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };
@@ -436,6 +439,18 @@ async function execute(
   let command: Command;
   const jid = (): string => required(values.jid, 'jid');
   const key = (): string => required(values.key, 'key');
+  // Response option only. Zero or absence sends the unchanged command.
+  const waitAck = (): AckWaitOption => {
+    const value = values['wait-ack-ms'];
+    if (value === undefined) return {};
+    if (!/^\d{1,5}$/.test(value) || Number(value) > MAX_WAIT_ACK_MS)
+      throw new CommandError(
+        'INVALID_ARGUMENT',
+        `--wait-ack-ms must be an integer from 0 to ${MAX_WAIT_ACK_MS}`,
+      );
+    const waitAckMs = Number(value);
+    return waitAckMs === 0 ? {} : { waitAckMs };
+  };
   switch (action) {
     case 'backup':
       only('out');
@@ -527,6 +542,7 @@ async function execute(
         'quote-id',
         'quote-from-me',
         'quote-participant',
+        'wait-ack-ms',
       );
       const quoted = ['quote-id', 'quote-from-me', 'quote-participant'].some(
         (field) => field in values,
@@ -557,21 +573,23 @@ async function execute(
               },
             }
           : {}),
+        ...waitAck(),
       };
       break;
     }
     case 'send-contact':
-      only('jid', 'key', 'name', 'phone');
+      only('jid', 'key', 'name', 'phone', 'wait-ack-ms');
       command = {
         command: action,
         jid: jid(),
         key: key(),
         name: required(values.name, 'name'),
         phone: required(values.phone, 'phone'),
+        ...waitAck(),
       };
       break;
     case 'send-file':
-      only('jid', 'key', 'file', 'mime', 'caption');
+      only('jid', 'key', 'file', 'mime', 'caption', 'wait-ack-ms');
       command = {
         command: action,
         jid: jid(),
@@ -579,6 +597,7 @@ async function execute(
         path: resolve(required(values.file, 'file')),
         mime: values.mime ?? 'application/octet-stream',
         caption: values.caption ?? '',
+        ...waitAck(),
       };
       break;
     case 'download':
