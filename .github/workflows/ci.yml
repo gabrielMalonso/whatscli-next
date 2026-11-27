@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run. Other events get a
+# unique group, so every main push and manual run is verified to the end.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   sdk:
     name: Owned Baileys package
