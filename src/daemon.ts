@@ -2,7 +2,7 @@ import { chmodSync, lstatSync, unlinkSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { parseArgs } from 'node:util';
-import { installConsoleDiagnostics } from './diagnostics.js';
+import { installConsoleDiagnostics, writeDiagnostic } from './diagnostics.js';
 import { parseRequest, RequestError } from './protocol.js';
 import { dataDirectory, socketPath } from './paths.js';
 import { createRuntime } from './runtime.js';
@@ -13,6 +13,15 @@ import type { ObsFields } from './observability.js';
 
 process.umask(0o077);
 installConsoleDiagnostics();
+// A missing exit line after the last entry means the process was killed (for example SIGKILL).
+process.once('exit', (code) => {
+  writeDiagnostic({
+    level: 'lifecycle',
+    event: 'exit',
+    pid: process.pid,
+    code,
+  });
+});
 
 async function main(): Promise<void> {
   if (!['linux', 'darwin'].includes(process.platform))
@@ -33,6 +42,15 @@ async function main(): Promise<void> {
     ...(values['allow-jid'] === undefined
       ? {}
       : { allowedJid: values['allow-jid'] }),
+    lifecycle: writeDiagnostic,
+  });
+  // The writer lock is held: record which process and build own this data directory.
+  writeDiagnostic({
+    level: 'lifecycle',
+    event: 'startup',
+    pid: process.pid,
+    build: runtime.build,
+    network: !values.offline,
   });
   installConsoleDiagnostics(() =>
     runtime.observability.record('diagnostic', { label: 'dependency' }),
@@ -112,7 +130,7 @@ async function main(): Promise<void> {
             pid: process.pid,
             ...runtime.snapshot(),
           });
-          if (request.command.command === 'stop') void shutdown();
+          if (request.command.command === 'stop') void shutdown('stop-command');
         } catch (error) {
           if (error instanceof RequestError)
             fields = {
@@ -129,8 +147,11 @@ async function main(): Promise<void> {
       void work.finally(() => active.delete(work));
     });
   });
-  function shutdown(): Promise<void> {
+  function shutdown(
+    reason: 'stop-command' | 'SIGINT' | 'SIGTERM' | 'startup-failed',
+  ): Promise<void> {
     if (stopping) return stopping;
+    writeDiagnostic({ level: 'lifecycle', event: 'shutdown-started', reason });
     stopping = (async () => {
       // Cancel network waits first; their uncertain results are persisted before closing SQLite.
       await runtime.stop();
@@ -155,9 +176,14 @@ async function main(): Promise<void> {
         ))
           throw error;
       }
+      writeDiagnostic({
+        level: 'lifecycle',
+        event: 'shutdown-complete',
+        reason,
+      });
     })();
     stopping.catch((error) => {
-      process.stderr.write(JSON.stringify(errorResponse(error)) + '\n');
+      writeDiagnostic({ ...errorResponse(error), event: 'shutdown-failed' });
       process.exitCode = 1;
     });
     return stopping;
@@ -206,20 +232,20 @@ async function main(): Promise<void> {
     });
     chmodSync(path, 0o600);
     socketInode = lstatSync(path).ino;
-    process.once('SIGINT', () => {
-      void shutdown();
-    });
-    process.once('SIGTERM', () => {
-      void shutdown();
-    });
+    for (const signal of ['SIGINT', 'SIGTERM'] as const)
+      process.once(signal, () => {
+        writeDiagnostic({ level: 'lifecycle', event: 'signal', signal });
+        void shutdown(signal);
+      });
     runtime.start();
+    writeDiagnostic({ level: 'lifecycle', event: 'ready', pid: process.pid });
   } catch (error) {
-    await shutdown();
+    await shutdown('startup-failed');
     throw error;
   }
 }
 
 main().catch((error) => {
-  process.stderr.write(JSON.stringify(errorResponse(error)) + '\n');
+  writeDiagnostic(errorResponse(error));
   process.exitCode = 1;
 });

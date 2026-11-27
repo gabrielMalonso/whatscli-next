@@ -21,7 +21,8 @@ import type {
 import { pino } from 'pino';
 import { hasLinkedCredentials, sqliteAuth } from './auth.js';
 import { diagnosticIssue, disconnectReason, reconnectDelay } from './health.js';
-import { sdkDiagnostic } from './diagnostics.js';
+import { sdkDiagnostic, writeDiagnostic } from './diagnostics.js';
+import type { LogValue } from './diagnostics.js';
 import type { ReceiveInterruption, Recovery, RecoveryClock } from './health.js';
 import { internationalPhone, isLid, recipientJid } from './identity.js';
 import type { RecipientCheck } from './identity.js';
@@ -56,6 +57,8 @@ export type RuntimeOptions = {
   connect: boolean;
   allowedJid?: string;
   requireAllowedJid?: boolean;
+  /** Daemon lifecycle log sink; safe scalar fields only. Embedders and tests default to silence. */
+  lifecycle?: (record: Record<string, LogValue>) => void;
 };
 
 /** The one Baileys connection and the one database writer shared by both transports. */
@@ -118,6 +121,22 @@ export function createRuntime(
   };
   let lastInterruption =
     store.get<ReceiveInterruption>('runtime', 'receive-interruption') ?? null;
+  /** State, fixed reason label, numeric code and attempt only; never SDK errors or JIDs. */
+  const logConnection = (disconnect: number | null): void => {
+    try {
+      options.lifecycle?.({
+        level: 'lifecycle',
+        event: 'connection',
+        state: connection,
+        recovery: recovery.state,
+        reason: recovery.reason,
+        disconnectCode: disconnect,
+        attempt: recovery.attempt,
+      });
+    } catch {
+      /* Logging never changes connection handling. */
+    }
+  };
   let qr: string | undefined;
   const issues = new Set(store.get<string[]>('probe', 'issues') ?? []);
   const issue = (name: string): void => {
@@ -144,9 +163,7 @@ export function createRuntime(
           label: 'sdk',
           ...(problem ? { issue: problem } : {}),
         });
-        process.stderr.write(
-          encode({ level, message: sdkDiagnostic(message, problem) }) + '\n',
-        );
+        writeDiagnostic({ level, message: sdkDiagnostic(message, problem) });
         next();
       } catch (error) {
         next(
@@ -306,6 +323,7 @@ export function createRuntime(
       // Do not retry it or classify configuration/authentication/persistence failures as outages.
       owner = undefined;
       intervention('socket-creation-failed', disconnectCode(error) ?? null);
+      logConnection(recovery.code);
       return;
     }
     socket = current;
@@ -502,17 +520,17 @@ export function createRuntime(
                 nextRetryAt: null,
               };
               void reconnect(false).catch(() => {
-                process.stderr.write(
-                  encode({
-                    error:
-                      'Socket cleanup failed; recovery requires intervention',
-                  }) + '\n',
-                );
+                writeDiagnostic({
+                  error:
+                    'Socket cleanup failed; recovery requires intervention',
+                });
               });
             }, delay);
           }
         }
       });
+      if (admitted && update.connection)
+        logConnection(disconnectCode(update.lastDisconnect?.error) ?? null);
       if (admitted)
         observability.record('diagnostic', {
           label: 'connection',
@@ -778,7 +796,10 @@ export function createRuntime(
         };
       }
       case 'events':
-        return store.events(command.after);
+        return store.events(command.after, {
+          ...(command.tail === undefined ? {} : { tail: command.tail }),
+          ...(command.kind === undefined ? {} : { kind: command.kind }),
+        });
       case 'request':
         return store.request(command.key) ?? null;
       case 'pair-qr': {
@@ -1084,7 +1105,7 @@ export function createRuntime(
       code: 'LOCAL_STATE',
       build: buildFingerprint,
     });
-    process.stderr.write(encode({ error: 'Fatal persistence failure' }) + '\n');
+    writeDiagnostic({ error: 'Fatal persistence failure' });
     // Do not keep operating with failed credential/event persistence.
     process.exit(1);
   }
@@ -1166,6 +1187,7 @@ export function createRuntime(
   }
   return {
     directory: store.directory,
+    build: buildFingerprint,
     observability,
     execute(command: Command, context: ObsFields = {}) {
       processObservation.reconcile();

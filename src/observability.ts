@@ -17,6 +17,7 @@ import {
 import { join, resolve } from 'node:path';
 import { CommandError } from './errors.js';
 import type { ChatStateFilter } from './protocol.js';
+import { writeDiagnostic } from './diagnostics.js';
 import {
   checkAncestors,
   checkPrivatePath,
@@ -1005,9 +1006,11 @@ export class Observability {
     if (!this.warned) {
       this.warned = true;
       try {
-        process.stderr.write(
-          '{"level":"diagnostic","code":"OBSERVABILITY_DEGRADED","message":"Optional telemetry degraded; inspect observability status"}\n',
-        );
+        writeDiagnostic({
+          level: 'diagnostic',
+          code: 'OBSERVABILITY_DEGRADED',
+          message: 'Optional telemetry degraded; inspect observability status',
+        });
       } catch {
         /* No fallback. */
       }

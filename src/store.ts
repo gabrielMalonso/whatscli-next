@@ -489,12 +489,25 @@ export class Store {
     );
   }
 
-  events(after: number): unknown[] {
+  /**
+   * Journal entries after a sequence, always in ascending order. Without tail this is the
+   * first page of up to 100; with tail it is the latest N, optionally of one kind.
+   */
+  events(
+    after: number,
+    filter: { tail?: number; kind?: string } = {},
+  ): unknown[] {
+    const where = `sequence>?${filter.kind === undefined ? '' : ' AND kind=?'}`;
+    const parameters: (number | string)[] = [after];
+    if (filter.kind !== undefined) parameters.push(filter.kind);
+    const sql =
+      filter.tail === undefined
+        ? `SELECT * FROM events WHERE ${where} ORDER BY sequence LIMIT 100`
+        : `SELECT * FROM (SELECT * FROM events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence`;
+    if (filter.tail !== undefined) parameters.push(filter.tail);
     return this.db
-      .prepare(
-        'SELECT * FROM events WHERE sequence>? ORDER BY sequence LIMIT 100',
-      )
-      .all(after)
+      .prepare(sql)
+      .all(...parameters)
       .map((row) => ({
         sequence: row.sequence,
         at: row.at,

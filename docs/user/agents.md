@@ -46,7 +46,7 @@ See [sending and media](sending.md) for files, cards, routes, and downloads, and
 
 ## Inspect unresolved chat state
 
-For archive/read changes, inspect the original request, the exact `chat`, and one bounded `events --after SEQUENCE` page. Report unresolved state rather than repeating mutations or resyncs to obtain a preferred verdict. See [Chat state](chat-state.md) for pending fields and observation rules.
+For archive/read changes, inspect the original request, the exact `chat`, and one bounded `events --after SEQUENCE` page (or `events --tail N [--kind KIND]` for the latest entries, still in ascending order). Report unresolved state rather than repeating mutations or resyncs to obtain a preferred verdict. See [Chat state](chat-state.md) for pending fields and observation rules.
 
 ## Protect the session
 

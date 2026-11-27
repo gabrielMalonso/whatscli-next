@@ -11,6 +11,21 @@ const consoleMessages = new Set([
   'Decrypted message with closed session.',
 ]);
 
+/** A diagnostic value that is safe to log: fixed labels, codes, counters and booleans. */
+export type LogValue = string | number | boolean | null;
+
+/**
+ * Write one JSON diagnostic line to stderr with an ISO-8601 `at` timestamp first.
+ * Callers pass only fixed labels and safe scalars, never SDK objects or message content.
+ */
+export function writeDiagnostic(
+  record: Record<string, LogValue | undefined>,
+  now: () => Date = () => new Date(),
+  write: (line: string) => unknown = (line) => process.stderr.write(line),
+): void {
+  write(JSON.stringify({ at: now().toISOString(), ...record }) + '\n');
+}
+
 /** Project dependency console calls to known labels, never arbitrary strings/objects. */
 export function installConsoleDiagnostics(observe?: () => void): void {
   const diagnostic = (first: unknown): void => {
@@ -25,9 +40,7 @@ export function installConsoleDiagnostics(observe?: () => void): void {
     } catch {
       /* Optional telemetry never changes diagnostics. */
     }
-    process.stderr.write(
-      JSON.stringify({ level: 'diagnostic', message }) + '\n',
-    );
+    writeDiagnostic({ level: 'diagnostic', message });
   };
   console.log =
     console.info =

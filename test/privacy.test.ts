@@ -419,7 +419,16 @@ test('CLI full/compact start/status/stop and offline daemon/probe refuse unsafe 
     );
     assert.equal(child.status, 1);
     assert.equal(child.stdout, '');
-    assert.equal(JSON.parse(child.stderr).code, 'PRECONDITION_FAILED');
+    const lines = child.stderr
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(lines[0]?.code, 'PRECONDITION_FAILED');
+    if (entry === 'daemon')
+      assert.deepEqual(
+        lines.slice(1).map(({ event, code }) => ({ event, code })),
+        [{ event: 'exit', code: 1 }],
+      );
     assert.equal(existsSync(join(root, 'new')), false);
   }
 });

@@ -19,7 +19,7 @@ node dist/src/cli.js help
 
 Baileys is pinned to `7.0.0-rc14`, including its bundled protocol version. Keep the lockfile unchanged and leave installation scripts disabled. The package is not published to npm.
 
-`help` returns the JSON command reference. You can also run `pnpm -s whatscli ...`, but use `node dist/src/cli.js ...` when another program consumes stdout.
+`help` returns the JSON command reference. `--help` and `-h` return the same reference with exit code 0 wherever they appear before `--`, including after a command name such as `send --help`. You can also run `pnpm -s whatscli ...`, but use `node dist/src/cli.js ...` when another program consumes stdout.
 
 See [builds and upgrades](../operations/release.md) for build verification and installation updates. `pnpm verify:build` checks emitted files against the current source and compiler, not Git provenance or dependency authenticity.
 

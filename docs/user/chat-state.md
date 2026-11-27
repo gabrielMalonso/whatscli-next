@@ -151,7 +151,7 @@ Use `events` with a sequence from a previous response, or `0` for the first page
 node dist/src/cli.js --account example events --after 0
 ```
 
-The response's `data` array contains `kind: app-state.chat-action` entries. Their nested `data` includes `source`, `action` and `messageRange.messages` (minimal IDs, direction and original message timestamps). Match a `local-echo` entry's `requestId` to the command key. It is decoded SDK output, not proof of application on another device. Synced entries identify `source: sync` with their sync/MAC qualifiers. Continue from the last returned `sequence` when a page has 100 events; no history scan or forced resync is needed.
+The response's `data` array contains `kind: app-state.chat-action` entries. Their nested `data` includes `source`, `action` and `messageRange.messages` (minimal IDs, direction and original message timestamps). Match a `local-echo` entry's `requestId` to the command key. It is decoded SDK output, not proof of application on another device. Synced entries identify `source: sync` with their sync/MAC qualifiers. Continue from the last returned `sequence` when a page has 100 events; no history scan or forced resync is needed. To see only the most recent entries, use `events --tail 20 --kind app-state.chat-action`; results stay in ascending order.
 
 A manual unread marker followed by a new incoming message can still remain unread locally after that message is read in another device when the qualified baseline, ordering or coverage above is unavailable. That receipt alone does not prove that the prior manual marker was cleared.
 
