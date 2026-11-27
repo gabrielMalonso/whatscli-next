@@ -2,7 +2,9 @@ import { contactJid, internationalPhone, recipientJid } from './identity.js';
 import { contactName } from './contact-card.js';
 import { CommandError } from './errors.js';
 
-export type ChatStateFilter = boolean | 'unknown';
+// 'not-true' matches false or unknown state: a triage queue must not drop
+// conversations whose state the SDK never reported explicitly.
+export type ChatStateFilter = boolean | 'unknown' | 'not-true';
 export type ChatFilters = {
   unread?: ChatStateFilter;
   archived?: ChatStateFilter;
@@ -121,10 +123,14 @@ function chatFilters(value: Record<string, unknown>): ChatFilters {
   for (const field of ['unread', 'archived'] as const) {
     const state = value[field];
     if (state === undefined) continue;
-    if (typeof state !== 'boolean' && state !== 'unknown')
+    if (
+      typeof state !== 'boolean' &&
+      state !== 'unknown' &&
+      state !== 'not-true'
+    )
       throw new CommandError(
         'INVALID_ARGUMENT',
-        `${field} must be true, false or unknown`,
+        `${field} must be true, false, unknown or not-true`,
       );
     filters[field] = state;
   }

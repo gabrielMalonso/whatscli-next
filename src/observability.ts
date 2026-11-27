@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { CommandError } from './errors.js';
+import type { ChatStateFilter } from './protocol.js';
 import {
   checkAncestors,
   checkPrivatePath,
@@ -144,8 +145,8 @@ export type ObsFields = {
   limit?: number;
   offset?: number;
   after?: number;
-  unread?: boolean | 'unknown';
-  archived?: boolean | 'unknown';
+  unread?: ChatStateFilter;
+  archived?: ChatStateFilter;
   resource?: string;
   query?: string;
   key?: string;
@@ -705,7 +706,11 @@ export function safeObsFields(input: ObsFields): ObsFields {
   ] as const)
     if (typeof input[name] === 'boolean') output[name] = input[name];
   for (const name of ['unread', 'archived'] as const)
-    if (typeof input[name] === 'boolean' || input[name] === 'unknown')
+    if (
+      typeof input[name] === 'boolean' ||
+      input[name] === 'unknown' ||
+      input[name] === 'not-true'
+    )
       output[name] = input[name];
   if (input.output === 'full' || input.output === 'compact')
     output.output = input.output;

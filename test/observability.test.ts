@@ -340,6 +340,7 @@ test('CLI lifecycle, live preference reconciliation, correlation, all command fa
       ['pair', 'qr'],
       ['pair', 'code', '--phone', '12025550101'],
       ['chats', '--unread', 'unknown'],
+      ['chats', '--archived', 'not-true'],
       ['chat', '--jid', lid],
       ['messages', '--jid', lid, '--output', 'compact'],
       ['search', '--query', canary],

@@ -30,8 +30,9 @@ reconnection. This applies to exact PN and LID conversations alike.
 With `unarchiveChats: false`, incoming messages alone do not establish archive
 state: an archived conversation stays archived, and a new conversation can have
 `archived: null`. Such unread chats appear with `--unread true`, but are excluded
-by an additional `--archived false` filter; use `--archived unknown` to inspect
-them. The CLI does not override the account preference or retroactively fill
+by an additional `--archived false` filter. Use `--archived not-true` to include
+them with explicitly unarchived chats, or `--archived unknown` to inspect them
+alone. The CLI does not override the account preference or retroactively fill
 unknown states when the preference changes. Later explicit archive observations
 still take precedence over earlier incoming messages.
 
@@ -83,7 +84,7 @@ This provides the SDK's decoded local echo without treating it as independent co
 
 The ordinary `archived`/`unread` fields retain independent-observation semantics. They may remain null with `pending` even if `sdkReported` is known, the server replied, and the action worked in WhatsApp. A sufficient outside observation clears the affected pending intent and SDK report, even if the observed value differs from the request. A new intent clears the previous SDK report for that field. Reports survive restart; exact-key replay does not invoke the SDK again or recreate a superseded report. Legacy requests are not backfilled.
 
-Boolean list filters also consider the latest pending intent by default, so `chats --unread true --archived false` can include a conversation just marked unread or unarchived through the CLI. Such rows retain null observed fields and include `matchedBy`, for example `{"unread":"pending-intent"}`. This describes requested state, even if no server response exists; it is not confirmed state. `--observed-only` excludes these matches. `unknown` always matches missing observed state, so a pending conversation can also appear in an unknown query. Inspect pending keys and response evidence before acting; queue membership is not permission to repeat an uncertain operation.
+Boolean and `not-true` list filters also consider the latest pending intent by default, so `chats --unread true --archived not-true` can include a conversation just marked unread or unarchived through the CLI. Such rows retain null observed fields and include `matchedBy`, for example `{"unread":"pending-intent"}`. This describes requested state, even if no server response exists; it is not confirmed state. `--observed-only` excludes these matches from boolean filters; with it, `not-true` includes every chat without observed true state. `unknown` always matches missing observed state, so a pending conversation can also appear in an unknown query. Inspect pending keys and response evidence before acting; queue membership is not permission to repeat an uncertain operation.
 
 Full and compact output both preserve `sdkReported`. Pending indicates missing sufficient observation, not a failed action or a promise that confirmation will arrive. Waiting, querying the original key, or resynchronizing cannot guarantee an observation. Phone or browser confirmation remains separate evidence.
 

@@ -9,6 +9,7 @@ import { proto } from 'baileys';
 import type { BaileysEventMap, ChatUpdate, WASocket } from 'baileys';
 import { perform } from '../src/operations.js';
 import { parseCommand } from '../src/protocol.js';
+import type { ChatStateFilter } from '../src/protocol.js';
 import { createRuntime } from '../src/runtime.js';
 import { encode, Store } from '../src/store.js';
 
@@ -18,13 +19,15 @@ const pn = '12025550101@s.whatsapp.net';
 const lid = '123450001@lid';
 const ids = (
   store: Store,
-  unread?: boolean | 'unknown',
-  archived?: boolean | 'unknown',
+  unread?: ChatStateFilter,
+  archived?: ChatStateFilter,
+  observedOnly?: boolean,
 ) =>
   store
     .chats(100, 0, {
       ...(unread === undefined ? {} : { unread }),
       ...(archived === undefined ? {} : { archived }),
+      ...(observedOnly === undefined ? {} : { observedOnly }),
     })
     .map((chat) => chat.jid);
 
@@ -34,8 +37,8 @@ test('chat filters validate tri-state values and preserve existing command defau
     limit: 100,
     offset: 0,
   });
-  for (const unread of [true, false, 'unknown'])
-    for (const archived of [true, false, 'unknown']) {
+  for (const unread of [true, false, 'unknown', 'not-true'])
+    for (const archived of [true, false, 'unknown', 'not-true']) {
       assert.deepEqual(
         parseCommand({
           command: 'chats',
@@ -48,10 +51,21 @@ test('chat filters validate tri-state values and preserve existing command defau
       );
     }
   for (const field of ['unread', 'archived'])
-    for (const value of [null, 0, 1, '', 'true', 'false', 'pending', []]) {
+    for (const value of [
+      null,
+      0,
+      1,
+      '',
+      'true',
+      'false',
+      'pending',
+      'not_true',
+      'NOT-TRUE',
+      [],
+    ]) {
       assert.throws(
         () => parseCommand({ command: 'chats', [field]: value }),
-        /true, false or unknown/,
+        /true, false, unknown or not-true/,
       );
     }
   for (const pagination of [
@@ -95,6 +109,114 @@ test('all filter combinations include exactly the effective observed states, inc
         .filter((chat) => chat.unread === true)
         .every((chat) => chat.unreadCount === null),
       true,
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('not-true filters keep unknown state beside explicit false and report pending matches', async () => {
+  const store = new Store(temporary());
+  const explicitFalse = '12025550201@s.whatsapp.net';
+  const explicitTrue = '12025550202@s.whatsapp.net';
+  const unknownArchive = '12025550203@s.whatsapp.net';
+  const pendingArchive = '12025550204@s.whatsapp.net';
+  const pendingUnarchive = '12025550205@s.whatsapp.net';
+  const readFalse = '12025550206@s.whatsapp.net';
+  const unknownUnread = '12025550207@s.whatsapp.net';
+  const sorted = (values: (string | null)[]) => [...values].sort();
+  const select = (
+    unread?: ChatStateFilter,
+    archived?: ChatStateFilter,
+    observedOnly?: boolean,
+  ) => sorted(ids(store, unread, archived, observedOnly));
+  try {
+    store.observeChat({ id: explicitFalse, archived: false, unreadCount: 2 });
+    store.observeChat({ id: explicitTrue, archived: true, unreadCount: 2 });
+    store.observeChat({ id: unknownArchive, unreadCount: 2 });
+    store.observeChat({ id: pendingArchive, archived: false, unreadCount: 2 });
+    store.observeChat({ id: pendingUnarchive, archived: true, unreadCount: 2 });
+    store.observeChat({ id: readFalse, archived: false, unreadCount: 0 });
+    store.observeChat({ id: unknownUnread, archived: false });
+    for (const [key, target, value] of [
+      ['archive', pendingArchive, true],
+      ['unarchive', pendingUnarchive, false],
+    ] as const)
+      await perform(
+        store,
+        key,
+        { kind: 'archive', jid: target, value },
+        () => {},
+        async () => {},
+      );
+
+    // Existing values keep their meaning.
+    assert.deepEqual(
+      select(true, false),
+      sorted([explicitFalse, pendingUnarchive]),
+    );
+    assert.deepEqual(
+      select(true, true),
+      sorted([explicitTrue, pendingArchive]),
+    );
+    assert.deepEqual(
+      select(true, 'unknown'),
+      sorted([unknownArchive, pendingArchive, pendingUnarchive]),
+    );
+    assert.deepEqual(select(true, false, true), [explicitFalse]);
+
+    // not-true adds unknown state to explicit and requested false.
+    assert.deepEqual(
+      select(true, 'not-true'),
+      sorted([explicitFalse, unknownArchive, pendingUnarchive]),
+    );
+    assert.deepEqual(
+      select(undefined, 'not-true'),
+      sorted([
+        explicitFalse,
+        unknownArchive,
+        pendingUnarchive,
+        readFalse,
+        unknownUnread,
+      ]),
+    );
+    const rows = new Map(
+      store
+        .chats(100, 0, { unread: true, archived: 'not-true' })
+        .map((chat) => [chat.jid, chat]),
+    );
+    assert.equal(rows.get(explicitFalse)?.archived, false);
+    assert.equal('matchedBy' in rows.get(explicitFalse)!, false);
+    assert.equal(rows.get(unknownArchive)?.archived, null);
+    assert.deepEqual(rows.get(unknownArchive)?.pending, {});
+    assert.equal('matchedBy' in rows.get(unknownArchive)!, false);
+    assert.equal(rows.get(pendingUnarchive)?.archived, null);
+    assert.deepEqual(
+      (rows.get(pendingUnarchive) as { matchedBy?: unknown }).matchedBy,
+      { archived: 'pending-intent' },
+    );
+
+    // Observed-only compares observed state, so any pending field is unknown.
+    assert.deepEqual(
+      select(true, 'not-true', true),
+      sorted([explicitFalse, unknownArchive, pendingArchive, pendingUnarchive]),
+    );
+    assert.equal(
+      store
+        .chats(100, 0, {
+          unread: true,
+          archived: 'not-true',
+          observedOnly: true,
+        })
+        .some((chat) => 'matchedBy' in chat),
+      false,
+    );
+
+    // The same value applies to unread.
+    assert.deepEqual(select(false), [readFalse]);
+    assert.deepEqual(
+      select('not-true', 'not-true'),
+      sorted([readFalse, unknownUnread]),
     );
   } finally {
     store.close();

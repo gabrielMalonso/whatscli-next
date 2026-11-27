@@ -195,7 +195,7 @@ async function execute(
           'pair qr': '',
           'pair code': '--phone INTERNATIONAL_DIGITS',
           chats:
-            '[--unread true|false|unknown] [--archived true|false|unknown] [--observed-only] [--limit 100] [--offset 0]',
+            '[--unread true|false|unknown|not-true] [--archived true|false|unknown|not-true] [--observed-only] [--limit 100] [--offset 0]',
           chat: '--jid JID',
           resolve: '--phone +INTERNATIONAL_DIGITS',
           contact: '--jid PN_OR_LID_JID',
@@ -447,12 +447,15 @@ async function execute(
       for (const field of ['unread', 'archived'] as const) {
         const state = values[field];
         if (state === undefined) continue;
-        if (!['true', 'false', 'unknown'].includes(state))
+        if (!['true', 'false', 'unknown', 'not-true'].includes(state))
           throw new CommandError(
             'INVALID_ARGUMENT',
-            `--${field} must be true, false or unknown`,
+            `--${field} must be true, false, unknown or not-true`,
           );
-        command[field] = state === 'unknown' ? state : state === 'true';
+        command[field] =
+          state === 'unknown' || state === 'not-true'
+            ? state
+            : state === 'true';
       }
       break;
     }

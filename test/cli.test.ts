@@ -504,6 +504,33 @@ test('offline CLI chat filters preserve state, exact identity and redaction acro
     [lid],
   );
   assert.deepEqual(
+    (
+      (await cli(directory, 'chats', '--archived', 'not-true')).data as {
+        jid: string;
+        archived: boolean | null;
+      }[]
+    ).map(({ jid, archived }) => [jid, archived]),
+    [
+      [jid, false],
+      [lid, null],
+    ],
+  );
+  assert.deepEqual(
+    (
+      (
+        await cli(
+          directory,
+          'chats',
+          '--unread',
+          'not-true',
+          '--archived',
+          'not-true',
+        )
+      ).data as { jid: string }[]
+    ).map((chat) => chat.jid),
+    [lid],
+  );
+  assert.deepEqual(
     (await cli(directory, 'chats', '--unread', 'false')).data,
     [],
   );
@@ -545,6 +572,7 @@ test('offline CLI chat filters preserve state, exact identity and redaction acro
   for (const args of [
     ['--unread', 'yes'],
     ['--archived', 'null'],
+    ['--archived', 'not_true'],
     ['--unread'],
     ['--jid', jid],
   ])
