@@ -78,7 +78,7 @@ const nonReplies: WAMessage[] = [
   },
 ];
 
-function fixture(seed: WAMessage[]) {
+function fixture(seed: WAMessage[], duringModify?: () => void) {
   const directory = mkdtempSync(join(tmpdir(), 'incoming-guard-'));
   const store = new Store(directory);
   store.observeChat({ id: jid, unreadCount: 1, archived: false });
@@ -93,6 +93,8 @@ function fixture(seed: WAMessage[]) {
       chatModify: async (
         ...[mod]: Parameters<WASocket['chatModify']>
       ): Promise<void> => {
+        // The SDK can await a network resync before sending the patch.
+        duringModify?.();
         patches.push(mod);
       },
       end: () => ev.emit('connection.update', { connection: 'close' }),
@@ -173,6 +175,7 @@ for (const command of ['mark-read', 'archive'] as const) {
         value: true,
         ifLatestIncoming: 'in-1',
       });
+      assert.equal(object(result.feedback).latestIncomingChanged, false);
       assert.equal(f.patches.length, 1);
     } finally {
       await f.close();
@@ -190,7 +193,10 @@ for (const command of ['mark-read', 'archive'] as const) {
       assert.deepEqual(response.details, {
         precondition: 'if-latest-incoming',
         expected: 'in-1',
+        expectedStored: true,
         latestIncoming: { id: 'in-2', timestamp: 1700000020 },
+        newerIncoming: [{ id: 'in-2', timestamp: 1700000020 }],
+        truncated: false,
         coverage: 'local',
       });
       assert.doesNotMatch(JSON.stringify(response), /FICTIONAL_PRIVATE_BODY/);
@@ -358,6 +364,39 @@ for (const [name, late] of [
       messageStubType: proto.WebMessageInfo.StubType.CALL_MISSED_VOICE,
     } satisfies WAMessage,
   ],
+  [
+    'a call log',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      messageTimestamp: 1700000200,
+      message: { callLogMesssage: { isVideo: false } },
+    } satisfies WAMessage,
+  ],
+  [
+    'an unrecognized content type',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      messageTimestamp: 1700000200,
+      message: { messageContextInfo: {} },
+    } satisfies WAMessage,
+  ],
+  [
+    'an empty view-once wrapper',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      messageTimestamp: 1700000200,
+      message: { viewOnceMessage: { message: {} } },
+    } satisfies WAMessage,
+  ],
+  [
+    'stub type UNKNOWN (0)',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      messageTimestamp: 1700000200,
+      messageStubType: proto.WebMessageInfo.StubType.UNKNOWN,
+      message: { conversation: 'Fictional reply' },
+    } satisfies WAMessage,
+  ],
 ] as const)
   test(`a later arrival with ${name} blocks the guard`, async () => {
     const f = fixture([incoming('in-b', 1700000100)]);
@@ -401,6 +440,158 @@ test('existing rows without arrivals are backfilled by timestamp, after recorded
   try {
     // Reopening does not reorder recorded arrivals.
     assert.equal(store.latestIncoming(jid)?.id, 'new-0');
+  } finally {
+    store.close();
+  }
+});
+
+test('in groups only call offers and content-free envelopes are skipped', () => {
+  const group = '120363000000000001@g.us';
+  const member = '12025550199@s.whatsapp.net';
+  const store = new Store(mkdtempSync(join(tmpdir(), 'incoming-guard-group-')));
+  const from = (
+    id: string,
+    message: NonNullable<WAMessage['message']>,
+  ): WAMessage => ({
+    key: { remoteJid: group, id, fromMe: false, participant: member },
+    messageTimestamp: 1700000300,
+    message,
+  });
+  try {
+    store.observeChat({ id: group });
+    store.observeMessage(from('g-1', { conversation: 'Fictional member' }));
+    store.observeMessage(
+      from('g-offer', { call: { callKey: Buffer.from('x') } }),
+    );
+    store.observeMessage(from('g-empty', {}));
+    store.observeMessage(from('g-context', { messageContextInfo: {} }));
+    assert.equal(store.latestIncoming(group)?.id, 'g-1');
+    store.observeMessage(from('g-log', { callLogMesssage: { isVideo: true } }));
+    assert.equal(store.latestIncoming(group)?.id, 'g-log');
+  } finally {
+    store.close();
+  }
+});
+
+test('a refusal lists every reply stored after the named one, even behind later history', async () => {
+  const f = fixture([incoming('in-a', 1700000100)]);
+  try {
+    f.receive(incoming('in-live', 1700000200, 'Fictional live reply'));
+    // History sync stores an older message after the live reply.
+    f.ev.emit('messages.upsert', {
+      messages: [incoming('in-history', 1700000050)],
+      type: 'append',
+    });
+    const response = await failure(
+      f.runtime.execute(guarded('mark-read', 'history', 'in-a')),
+    );
+    const details = object(response.details);
+    assert.deepEqual(details.latestIncoming, {
+      id: 'in-history',
+      timestamp: 1700000050,
+    });
+    assert.deepEqual(details.newerIncoming, [
+      { id: 'in-history', timestamp: 1700000050 },
+      { id: 'in-live', timestamp: 1700000200 },
+    ]);
+    assert.equal(details.expectedStored, true);
+    assert.equal(details.truncated, false);
+    await assertUnchanged(f, 'history');
+  } finally {
+    await f.close();
+  }
+});
+
+test('the refusal list is bounded and reports an expected ID that is not stored', async () => {
+  const f = fixture(
+    Array.from({ length: 22 }, (_, index) =>
+      incoming(`in-${index}`, 1700000000 + index),
+    ),
+  );
+  try {
+    const response = await failure(
+      f.runtime.execute(guarded('archive', 'bounded', 'never-stored')),
+    );
+    const details = object(response.details);
+    assert.equal((details.newerIncoming as unknown[]).length, 20);
+    assert.deepEqual((details.newerIncoming as unknown[])[0], {
+      id: 'in-21',
+      timestamp: 1700000021,
+    });
+    assert.equal(details.truncated, true);
+    assert.equal(details.expectedStored, false);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a reply stored while the SDK sends the patch is reported, not hidden', async () => {
+  let receive = (_message: WAMessage) => {};
+  const f = fixture([incoming('in-a', 1700000100)], () =>
+    receive(incoming('in-during', 1700000150)),
+  );
+  receive = f.receive;
+  try {
+    const intent = guarded('mark-read', 'during', 'in-a');
+    const result = object(await f.runtime.execute(intent));
+    assert.equal(object(result.request).attempt, 'sdk-returned');
+    assert.equal(object(result.feedback).latestIncomingChanged, true);
+    assert.deepEqual(object(result.localChat).latestIncoming, {
+      id: 'in-during',
+      timestamp: 1700000150,
+    });
+    assert.equal(f.patches.length, 1);
+    const replay = object(await f.runtime.execute(intent));
+    assert.deepEqual(replay.request, result.request);
+    assert.equal(object(replay.feedback).latestIncomingChanged, true);
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('rows written by an older build after arrivals exist are placed after them and classified', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'incoming-guard-downgrade-'));
+  let store = new Store(directory);
+  store.observeChat({ id: jid });
+  store.observeMessage(incoming('current', 1700000010));
+  store.observeMessage(incoming('old-build', 1700000001));
+  store.observeMessage({
+    key: { remoteJid: jid, id: 'old-reaction', fromMe: false },
+    messageTimestamp: 1700000020,
+    message: {
+      reactionMessage: {
+        key: { remoteJid: jid, id: 'current', fromMe: false },
+        text: '👍',
+      },
+    },
+  });
+  // The current build flags reactions on write, so lookups skip them cheaply.
+  assert.equal(
+    store.db
+      .prepare("SELECT noise FROM message_arrivals WHERE id='old-reaction'")
+      .get()?.noise,
+    1,
+  );
+  // As if both rows were written by a build that did not record arrivals.
+  store.db.exec(
+    "DELETE FROM message_arrivals WHERE id IN ('old-build','old-reaction')",
+  );
+  store.close();
+  store = new Store(directory);
+  try {
+    assert.equal(store.latestIncoming(jid)?.id, 'old-build');
+    assert.deepEqual(
+      store.db
+        .prepare('SELECT id,noise FROM message_arrivals ORDER BY sequence')
+        .all()
+        .map((row) => [row.id, row.noise]),
+      [
+        ['current', 0],
+        ['old-build', 0],
+        ['old-reaction', 1],
+      ],
+    );
   } finally {
     store.close();
   }

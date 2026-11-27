@@ -208,31 +208,58 @@ const missedCalls = new Set<number>([
   proto.WebMessageInfo.StubType.CALL_MISSED_GROUP_VIDEO,
 ]);
 
+/** Message keys that carry no content of their own. */
+const envelopeKeys = new Set([
+  'messageContextInfo',
+  'senderKeyDistributionMessage',
+]);
+
+function hasStubType(message: WAMessage): boolean {
+  // UNKNOWN (0) is not a system stub; treat it like an absent stub type.
+  return message.messageStubType != null && message.messageStubType !== 0;
+}
+
+/**
+ * Incoming protocol envelopes (edits, revokes, ephemeral settings, key
+ * shares and the stubs a server emits after own sends) and reactions. A key
+ * that is noise once stays noise: these types never become a person's message.
+ */
+function isIncomingNoise(message: WAMessage): boolean {
+  if (message.key.fromMe !== false || hasStubType(message)) return false;
+  const content = normalizeMessageContent(message.message);
+  return (
+    !!content &&
+    (isMessageEdit(message) ||
+      !!content.protocolMessage ||
+      !!content.reactionMessage ||
+      !!content.encReactionMessage)
+  );
+}
+
 /**
  * A message the other side of the chat may expect an answer to, for the
  * mutation guard. Excluded: the account's own messages from any device,
- * protocol envelopes (edits, revokes, ephemeral settings, key shares and the
- * stubs a server emits after own sends), reactions, content-free SDK
- * envelopes (including group call offers) and system stubs. Missed calls,
- * and content the runtime could not decrypt or no longer has, still count,
- * so the guard fails closed.
+ * noise (see isIncomingNoise), system stubs, and in groups only, group call
+ * offers and content-free envelopes. Everything else counts, so the guard
+ * fails closed: any unrecognized content type (including call logs), missed
+ * calls, content the runtime could not decrypt or no longer has, and
+ * content-free envelopes outside groups.
  */
 function isIncomingUserMessage(message: WAMessage): boolean {
-  if (message.key.fromMe !== false) return false;
-  if (message.messageStubType != null)
+  if (message.key.fromMe !== false || isIncomingNoise(message)) return false;
+  if (hasStubType(message))
     return (
       message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
-      missedCalls.has(message.messageStubType)
+      missedCalls.has(message.messageStubType!)
     );
   const content = normalizeMessageContent(message.message);
   if (!content) return true;
-  return (
-    !isMessageEdit(message) &&
-    !content.protocolMessage &&
-    !content.reactionMessage &&
-    !content.encReactionMessage &&
-    getContentType(content) !== undefined
-  );
+  const keys = Object.entries(content)
+    .filter(([key, value]) => value != null && !envelopeKeys.has(key))
+    .map(([key]) => key);
+  if (!message.key.remoteJid?.endsWith('@g.us')) return true;
+  // The SDK emits {call} for group call offers.
+  return keys.length > 0 && !(keys.length === 1 && keys[0] === 'call');
 }
 
 type ContactMetadata = Partial<
@@ -1884,6 +1911,8 @@ export class Store {
       // The all:true event carries no server time/range. A late old/undated arrival is uncertain.
       this.markDeleted(message.key, 'chat-delete-boundary', barrier);
     }
+    // Classify before a deletion clears the body.
+    const noise = isIncomingNoise(merged);
     if (this.deletion(message.key)) {
       this.retainAudit(message.key, merged);
       merged.message = null;
@@ -1894,12 +1923,19 @@ export class Store {
       .prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)')
       .run(jid, id, Number(fromMe), participantSlot, timestamp, encode(merged));
     // First storage only: rewrites keep the original arrival position.
-    if (!fromMe)
+    if (!fromMe) {
       this.db
         .prepare(
           'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
         )
         .run(jid, id, participantSlot);
+      if (noise)
+        this.db
+          .prepare(
+            'UPDATE message_arrivals SET noise=1 WHERE jid=? AND id=? AND participant=?',
+          )
+          .run(jid, id, participantSlot);
+    }
     if (previousRow)
       this.db
         .prepare('DELETE FROM message_text WHERE message_rowid=?')
@@ -1966,14 +2002,14 @@ export class Store {
   }
 
   /**
-   * Local coverage only: the incoming user message in this exact chat JID
-   * that this store recorded first-stored most recently. Arrival order is
-   * stable across row rewrites (receipts, re-deliveries, decryption retries)
-   * and independent of sender timestamps, which have second resolution, can
-   * be earlier than an already stored message, or be missing. Other JIDs of
-   * the same person and unsynchronized history are not consulted.
+   * Local coverage only: incoming user messages in this exact chat JID, most
+   * recently first-stored first. Arrival order is stable across row rewrites
+   * (receipts, re-deliveries, decryption retries) and independent of sender
+   * timestamps, which have second resolution, can be earlier than an already
+   * stored message, or be missing. Other JIDs of the same person and
+   * unsynchronized history are not consulted.
    */
-  latestIncoming(jid: string): LatestIncoming | null {
+  private *incomingByArrival(jid: string): Generator<LatestIncoming> {
     // Deleted bodies are cleared; classify them by the retained private audit copy.
     for (const row of this.db
       .prepare(
@@ -1982,33 +2018,89 @@ export class Store {
         AND m.from_me=0 AND m.participant=a.participant
         LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
         AND d.from_me=0 AND d.participant=m.participant
-        WHERE a.jid=? ORDER BY a.sequence DESC`,
+        WHERE a.jid=? AND a.noise=0 ORDER BY a.sequence DESC`,
       )
       .iterate(jid)) {
       if (isIncomingUserMessage(decodeMessage(String(row.json))))
-        return {
-          id: String(row.id),
-          timestamp: Number(row.timestamp) || null,
-        };
+        yield { id: String(row.id), timestamp: Number(row.timestamp) || null };
     }
+  }
+
+  latestIncoming(jid: string): LatestIncoming | null {
+    for (const message of this.incomingByArrival(jid)) return message;
     return null;
+  }
+
+  /**
+   * Incoming user messages first-stored after the expected one (all of them
+   * when it is null or not stored as one), most recent first, bounded.
+   */
+  newerIncoming(
+    jid: string,
+    expected: string | null,
+    limit = 20,
+  ): {
+    messages: LatestIncoming[];
+    truncated: boolean;
+    expectedStored: boolean;
+  } {
+    const messages: LatestIncoming[] = [];
+    for (const message of this.incomingByArrival(jid)) {
+      if (message.id === expected)
+        return { messages, truncated: false, expectedStored: true };
+      if (messages.length === limit)
+        return { messages, truncated: true, expectedStored: false };
+      messages.push(message);
+    }
+    return { messages, truncated: false, expectedStored: false };
   }
 
   /**
    * Give rows that lack an arrival (an existing directory, or rows written by
    * an older build) one after every recorded arrival, oldest timestamp first.
-   * Writes nothing when every incoming row already has one.
+   * Equal counts mean every incoming row has one (neither table loses rows).
    */
   private recordMissingArrivals(): void {
-    this.db
-      .prepare(
-        `INSERT INTO message_arrivals(jid,id,participant)
-        SELECT m.jid,m.id,m.participant FROM messages m WHERE m.from_me=0
-        AND NOT EXISTS (SELECT 1 FROM message_arrivals a
-          WHERE a.jid=m.jid AND a.id=m.id AND a.participant=m.participant)
-        ORDER BY m.timestamp,m.rowid`,
-      )
-      .run();
+    const count = (sql: string) => Number(this.db.prepare(sql).get()?.n ?? 0);
+    if (
+      count('SELECT COUNT(*) AS n FROM messages WHERE from_me=0') ===
+      count('SELECT COUNT(*) AS n FROM message_arrivals')
+    )
+      return;
+    this.transaction(() => {
+      let after = count(
+        'SELECT COALESCE(MAX(sequence),0) AS n FROM message_arrivals',
+      );
+      this.db
+        .prepare(
+          `INSERT INTO message_arrivals(jid,id,participant)
+          SELECT m.jid,m.id,m.participant FROM messages m WHERE m.from_me=0
+          AND NOT EXISTS (SELECT 1 FROM message_arrivals a
+            WHERE a.jid=m.jid AND a.id=m.id AND a.participant=m.participant)
+          ORDER BY m.timestamp,m.rowid`,
+        )
+        .run();
+      // Classify the new arrivals in bounded batches.
+      const batch = this.db.prepare(
+        `SELECT a.sequence,COALESCE(d.audit_json,m.json) AS json
+        FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
+        AND m.from_me=0 AND m.participant=a.participant
+        LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
+        AND d.from_me=0 AND d.participant=m.participant
+        WHERE a.sequence>? ORDER BY a.sequence LIMIT 500`,
+      );
+      const mark = this.db.prepare(
+        'UPDATE message_arrivals SET noise=1 WHERE sequence=?',
+      );
+      for (;;) {
+        const rows = batch.all(after);
+        if (rows.length === 0) break;
+        for (const row of rows)
+          if (isIncomingNoise(decodeMessage(String(row.json))))
+            mark.run(Number(row.sequence));
+        after = Number(rows.at(-1)!.sequence);
+      }
+    });
   }
 
   /** Receipt updates can reorder equal-second rowids; keep the whole newest boundary. */

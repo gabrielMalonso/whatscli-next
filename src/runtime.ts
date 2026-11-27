@@ -1228,19 +1228,24 @@ export function createRuntime(
             validateTarget(command.jid);
             if (guard !== undefined) {
               const latestIncoming = store.latestIncoming(command.jid);
-              if ((latestIncoming?.id ?? null) !== guard)
+              if ((latestIncoming?.id ?? null) !== guard) {
+                const newer = store.newerIncoming(command.jid, guard);
                 throw new CommandError(
                   'PRECONDITION_FAILED',
-                  'A different incoming message is now the latest stored for this chat; nothing was changed. Read it before deciding again',
+                  'Incoming messages were stored after the one this command names; nothing was changed. Read them in messages before deciding again',
                   {
                     details: {
                       precondition: 'if-latest-incoming',
                       expected: guard,
+                      expectedStored: newer.expectedStored,
                       latestIncoming,
+                      newerIncoming: newer.messages,
+                      truncated: newer.truncated,
                       coverage: 'local',
                     },
                   },
                 );
+              }
             }
             const last = store.chatMutationMessages(command.jid)[0];
             if (!last || toNumber(last.messageTimestamp ?? 0) === 0)
@@ -1272,6 +1277,14 @@ export function createRuntime(
         return {
           request,
           feedback: {
+            // The SDK may resync over the network before sending the patch built
+            // at the check; report a reply stored since, without claiming its effect.
+            ...(guard === undefined
+              ? {}
+              : {
+                  latestIncomingChanged:
+                    (localChat?.latestIncoming?.id ?? null) !== guard,
+                }),
             serverResponse: request.appStateResponse?.status ?? 'unknown',
             stateObservation: pending
               ? pending.key === request.key
