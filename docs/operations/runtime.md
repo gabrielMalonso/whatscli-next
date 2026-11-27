@@ -167,6 +167,7 @@ A background `start` appends the daemon's stderr to the private `daemon.log` in 
 | `signal`            | `signal` (`SIGINT` or `SIGTERM`)                           | A termination signal was received; shutdown follows.                  |
 | `shutdown-started`  | `reason` (`stop-command`, a signal, or `startup-failed`)   | Cleanup began.                                                        |
 | `shutdown-complete` | `reason`                                                   | SDK cleanup, database closure and socket removal finished.            |
+| `shutdown-failed`   | `code`                                                     | Cleanup failed; the process exits with code 1.                        |
 | `exit`              | `pid`, `code`                                              | The process is exiting with that code.                                |
 
 Lines without `level: "lifecycle"` are the existing diagnostics and errors described in [Privacy](privacy.md#diagnostics). A log that ends without an `exit` line means the process was killed without running its exit handlers, for example by `SIGKILL` or an out-of-memory or cgroup kill. A `signal` line followed by `shutdown-complete` and `exit` shows an orderly signal-driven stop rather than a crash.

@@ -73,6 +73,14 @@ test('--help and -h anywhere return the help reference with exit 0, even beside 
     assert.equal(stderr, '');
     assert.deepEqual(result, reference.result, args.join(' '));
   }
+  // A string option's separate value is data, not a help request.
+  for (const args of [
+    ['send', '--jid', 'x', '--key', 'k', '--text', '-h'],
+    ['search', '--query', '--help'],
+  ]) {
+    const { result } = await invoke(directory, ...args);
+    assert.notDeepEqual(result, reference.result, args.join(' '));
+  }
   // After the terminator, -h is not a flag; the normal parser still decides.
   assert.equal(
     (await invoke(directory, 'status', '--', '-h')).result.code,
@@ -104,6 +112,9 @@ test('events --tail and --kind validate locally and reach the daemon unchanged',
     [['--tail', '101'], /--tail must be an integer from 1 to 100/],
     [['--tail', '2.5'], /--tail must be an integer from 1 to 100/],
     [['--tail', 'latest'], /--tail must be an integer from 1 to 100/],
+    [['--after', 'abc'], /--after must be a non-negative integer/],
+    [['--after=-5'], /--after must be a non-negative integer/],
+    [['--after', '1.5'], /--after must be a non-negative integer/],
     [['--kind', 'not a kind'], /--kind must be an event kind/],
     [['--kind', ''], /--kind must be an event kind/],
   ] as const) {

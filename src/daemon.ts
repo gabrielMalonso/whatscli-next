@@ -183,7 +183,11 @@ async function main(): Promise<void> {
       });
     })();
     stopping.catch((error) => {
-      writeDiagnostic({ ...errorResponse(error), event: 'shutdown-failed' });
+      writeDiagnostic({
+        ...errorResponse(error),
+        level: 'lifecycle',
+        event: 'shutdown-failed',
+      });
       process.exitCode = 1;
     });
     return stopping;
