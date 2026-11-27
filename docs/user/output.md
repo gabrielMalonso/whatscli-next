@@ -23,7 +23,7 @@ Both modes preserve the response envelope: `ok`, correlation `id` when available
 
 ### Compact message defaults
 
-Compact rows omit a field only when its full value is the documented default below. Missing fields expand back to that default (`participant` to `null`); every other value, including unfamiliar fields, stays as in full output.
+Compact rows omit a field only when its full value is the documented default below. Missing fields expand back to that default; every other value, including unfamiliar fields, stays as in full output. A missing `participant` expands to `null`, although full output may show `""` for the same no-participant key; both identify the same message.
 
 | Omitted field                            | Full value                                            | Meaning of absence                                                                                                                                                                                                                                     |
 | ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -38,9 +38,9 @@ There is no general omission of false, zero, null, or unknown values. Null chat 
 
 Quotes and cards remain snapshots or shared content, not verified identity. Check [contact identity](identity.md) separately.
 
-### Changed in this version
+### Compact message shape change (PR #53)
 
-Breaking for compact consumers: `messages` used to return `data` as `{jid, messages: [...]}` when every row matched `--jid`, and an array otherwise. It now returns an array in both modes, and every row keeps its `jid`. Compact rows also now omit the unknown `deletion` default (previously `{status: "unknown"}`), a null or empty `participant`, and a null `status`. Full output is unchanged.
+Breaking for compact consumers: `messages` used to return `data` as `{jid, messages: [...]}` when every row matched `--jid`, and an array otherwise. It now returns an array in both modes, and every row keeps its `jid`. Compact rows also now omit the unknown `deletion` default (previously `{status: "unknown"}`), a null or empty `participant`, and a null `status`. Full output is unchanged. Formatting happens in the CLI client, so the compact shape follows the CLI build a consumer runs, not the daemon's build: a new CLI talking to an older daemon already emits the new shape.
 
 ### Build identity
 
