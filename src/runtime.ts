@@ -969,6 +969,8 @@ export function createRuntime(
           contact,
         };
       }
+      case 'incoming':
+        return store.incomingView(command.jid, command.afterId, command.limit);
       case 'messages':
         return store
           .messages(command.jid, command.limit, command.offset)
@@ -1228,19 +1230,23 @@ export function createRuntime(
             validateTarget(command.jid);
             if (guard !== undefined) {
               const latestIncoming = store.latestIncoming(command.jid);
-              if ((latestIncoming?.id ?? null) !== guard) {
-                const newer = store.newerIncoming(command.jid, guard);
+              const newer = (latestIncoming?.id ?? null) !== guard;
+              if (newer || latestIncoming?.available === false) {
+                const listed = store.newerIncoming(command.jid, guard);
                 throw new CommandError(
                   'PRECONDITION_FAILED',
-                  'Incoming messages were stored after the one this command names; nothing was changed. Read them in messages before deciding again',
+                  newer
+                    ? 'Incoming messages were stored after the one this command names; nothing was changed. Read them with incoming --after before deciding again'
+                    : 'The named incoming message has no readable content yet; nothing was changed. Decide once it is available',
                   {
                     details: {
                       precondition: 'if-latest-incoming',
+                      reason: newer ? 'newer-incoming' : 'latest-unavailable',
                       expected: guard,
-                      expectedStored: newer.expectedStored,
+                      expectedStored: listed.expectedStored,
                       latestIncoming,
-                      newerIncoming: newer.messages,
-                      truncated: newer.truncated,
+                      newerIncoming: listed.messages,
+                      truncated: listed.truncated,
                       coverage: 'local',
                     },
                   },
@@ -1274,17 +1280,23 @@ export function createRuntime(
         const localChat = store.chatView(command.jid);
         const field = command.command === 'archive' ? 'archived' : 'unread';
         const pending = localChat?.pending[field];
+        const guardFeedback = () => {
+          if (guard === undefined) return {};
+          if ((localChat?.latestIncoming?.id ?? null) === guard)
+            return { latestIncomingChanged: false };
+          const listed = store.newerIncoming(command.jid, guard);
+          return {
+            latestIncomingChanged: true,
+            newerIncoming: listed.messages,
+            truncated: listed.truncated,
+          };
+        };
         return {
           request,
           feedback: {
             // The SDK may resync over the network before sending the patch built
             // at the check; report a reply stored since, without claiming its effect.
-            ...(guard === undefined
-              ? {}
-              : {
-                  latestIncomingChanged:
-                    (localChat?.latestIncoming?.id ?? null) !== guard,
-                }),
+            ...guardFeedback(),
             serverResponse: request.appStateResponse?.status ?? 'unknown',
             stateObservation: pending
               ? pending.key === request.key

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
 import { resolve as resolvePath } from 'node:path';
-import { object } from './protocol.js';
+import { object, wireCommand } from './protocol.js';
 import type { Command } from './protocol.js';
 import { socketPath } from './paths.js';
 import { CommandError, errorResponse } from './errors.js';
@@ -92,7 +92,7 @@ async function exchange(
     }
     throw error;
   }
-  const line = JSON.stringify({ ...command, id }) + '\n';
+  const line = JSON.stringify({ ...wireCommand(command), id }) + '\n';
   if (Buffer.byteLength(line) > 131072)
     throw new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB');
   return new Promise((resolve, reject) => {

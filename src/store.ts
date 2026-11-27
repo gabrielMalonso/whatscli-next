@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { StatementSync } from 'node:sqlite';
 import {
   getContentType,
   jidNormalizedUser,
@@ -85,7 +86,13 @@ export type Operation =
  * it saw none. Absent means unguarded.
  */
 export type IncomingGuard = { ifLatestIncoming?: string | null };
-export type LatestIncoming = { id: string; timestamp: number | null };
+/** available: false while the content could still arrive (undecrypted or missing, not deleted). */
+export type LatestIncoming = {
+  id: string;
+  timestamp: number | null;
+  available: boolean;
+};
+type IncomingRow = LatestIncoming & { json: string };
 
 export function isSendOperation(
   operation: Operation,
@@ -282,6 +289,7 @@ type ContactRecord = {
 export class Store {
   readonly db: DatabaseSync;
   private readonly lock: DatabaseSync;
+  private readonly statements = new Map<string, StatementSync>();
   readonly directory: string;
 
   constructor(directory: string) {
@@ -1911,7 +1919,7 @@ export class Store {
       this.markDeleted(message.key, 'chat-delete-boundary', barrier);
     }
     // Classify before a deletion clears the body.
-    const noise = isIncomingNoise(merged);
+    const excluded = !fromMe && !isIncomingUserMessage(merged);
     if (this.deletion(message.key)) {
       this.retainAudit(message.key, merged);
       merged.message = null;
@@ -1921,19 +1929,15 @@ export class Store {
     const inserted = this.db
       .prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)')
       .run(jid, id, Number(fromMe), participantSlot, timestamp, encode(merged));
-    // First storage only: rewrites keep the original arrival position.
+    // First storage only: rewrites keep the original arrival position. The
+    // exclusion hint follows the current content on every write.
     if (!fromMe) {
-      this.db
-        .prepare(
-          'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
-        )
-        .run(jid, id, participantSlot);
-      // Follow the current content on every write; a cleared flag costs only a decode.
-      this.db
-        .prepare(
-          'UPDATE message_arrivals SET noise=? WHERE jid=? AND id=? AND participant=? AND noise<>?',
-        )
-        .run(Number(noise), jid, id, participantSlot, Number(noise));
+      this.statement(
+        'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
+      ).run(jid, id, participantSlot);
+      this.statement(
+        'UPDATE message_arrivals SET excluded=? WHERE jid=? AND id=? AND participant=? AND excluded<>?',
+      ).run(Number(excluded), jid, id, participantSlot, Number(excluded));
     }
     if (previousRow)
       this.db
@@ -2000,9 +2004,18 @@ export class Store {
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
   }
 
+  private statement(sql: string): StatementSync {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statements.set(sql, statement);
+    }
+    return statement;
+  }
+
   /**
-   * Local coverage only: incoming user messages in this exact chat JID, most
-   * recently first-stored first. Arrival order is stable across row rewrites
+   * Local coverage only: incoming user messages in this exact chat JID, by
+   * first-stored order. Arrival order is stable across row rewrites
    * (receipts, re-deliveries, decryption retries) and independent of sender
    * timestamps, which have second resolution, can be earlier than an already
    * stored message, or be missing. Other JIDs of the same person and
@@ -2012,35 +2025,70 @@ export class Store {
     jid: string,
     order: 'newest-first' | 'oldest-first' = 'newest-first',
     after = 0,
-  ): Generator<LatestIncoming> {
+  ): Generator<IncomingRow> {
     // Deleted bodies are cleared; classify them by the retained private audit copy.
-    // The noise flag is only an index hint; every candidate is classified here.
-    for (const row of this.db
-      .prepare(
-        `SELECT m.id,m.timestamp,COALESCE(d.audit_json,m.json) AS json
-        FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
-        AND m.from_me=0 AND m.participant=a.participant
-        LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
-        AND d.from_me=0 AND d.participant=m.participant
-        WHERE a.jid=? AND a.noise=0 AND a.sequence>?
-        ORDER BY a.sequence ${order === 'newest-first' ? 'DESC' : 'ASC'}`,
-      )
-      .iterate(jid, after)) {
-      if (isIncomingUserMessage(decodeMessage(String(row.json))))
-        yield { id: String(row.id), timestamp: Number(row.timestamp) || null };
+    // The exclusion flag is an index hint; every candidate is classified here.
+    const rows = this.statement(
+      `SELECT m.id,m.timestamp,m.json,COALESCE(d.audit_json,m.json) AS original,
+      d.id IS NOT NULL AS deleted
+      FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
+      AND m.from_me=0 AND m.participant=a.participant
+      LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
+      AND d.from_me=0 AND d.participant=m.participant
+      WHERE a.jid=? AND a.excluded=0 AND a.sequence>?
+      ORDER BY a.sequence ${order === 'newest-first' ? 'DESC' : 'ASC'}`,
+    ).iterate(jid, after);
+    for (const row of rows) {
+      const original = decodeMessage(String(row.original));
+      if (!isIncomingUserMessage(original)) continue;
+      const missing =
+        original.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
+        (!hasStubType(original) && !normalizeMessageContent(original.message));
+      yield {
+        id: String(row.id),
+        timestamp: Number(row.timestamp) || null,
+        available: Number(row.deleted) === 1 || !missing,
+        json: String(row.json),
+      };
     }
   }
 
   latestIncoming(jid: string): LatestIncoming | null {
-    for (const message of this.incomingByArrival(jid)) return message;
+    for (const { json: _json, ...message } of this.incomingByArrival(jid))
+      return message;
     return null;
   }
 
   /**
-   * Incoming user messages first-stored after the expected one, oldest first,
-   * bounded; from the first stored one when it is null or not stored. Naming
-   * the last listed ID returns the next page, so no message can be skipped.
+   * Incoming user messages first-stored after the named one, oldest first,
+   * bounded; from the first stored one when it is null or not stored. The
+   * anchor is the earliest arrival with that ID, so paging by the last listed
+   * ID never skips a message.
    */
+  private incomingAfterRows(
+    jid: string,
+    after: string | null,
+    limit: number,
+  ): { rows: IncomingRow[]; truncated: boolean; afterStored: boolean } {
+    const anchor =
+      after === null
+        ? null
+        : this.statement(
+            'SELECT MIN(sequence) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
+          ).get(jid, after)?.sequence;
+    const afterStored = anchor != null;
+    const rows: IncomingRow[] = [];
+    for (const row of this.incomingByArrival(
+      jid,
+      'oldest-first',
+      afterStored ? Number(anchor) : 0,
+    )) {
+      if (rows.length === limit) return { rows, truncated: true, afterStored };
+      rows.push(row);
+    }
+    return { rows, truncated: false, afterStored };
+  }
+
   newerIncoming(
     jid: string,
     expected: string | null,
@@ -2050,25 +2098,37 @@ export class Store {
     truncated: boolean;
     expectedStored: boolean;
   } {
-    const anchor =
-      expected === null
-        ? null
-        : this.db
-            .prepare(
-              'SELECT MIN(sequence) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
-            )
-            .get(jid, expected)?.sequence;
-    const messages: LatestIncoming[] = [];
-    for (const message of this.incomingByArrival(
+    const { rows, truncated, afterStored } = this.incomingAfterRows(
       jid,
-      'oldest-first',
-      anchor == null ? 0 : Number(anchor),
-    )) {
-      if (messages.length === limit)
-        return { messages, truncated: true, expectedStored: anchor != null };
-      messages.push(message);
-    }
-    return { messages, truncated: false, expectedStored: anchor != null };
+      expected,
+      limit,
+    );
+    return {
+      messages: rows.map(({ json: _json, ...message }) => message),
+      truncated,
+      expectedStored: afterStored,
+    };
+  }
+
+  /** Read-only public listing for the guard's follow-up: full message projections. */
+  incomingView(jid: string, after: string | null, limit: number) {
+    const { rows, truncated, afterStored } = this.incomingAfterRows(
+      jid,
+      after,
+      limit,
+    );
+    return {
+      jid,
+      after,
+      afterStored,
+      messages: rows.map((row) => ({
+        ...this.messageView(this.visibleMessage(decodeMessage(row.json))),
+        available: row.available,
+      })),
+      truncated,
+      latestIncoming: this.latestIncoming(jid),
+      coverage: 'local',
+    };
   }
 
   /**
@@ -2106,13 +2166,13 @@ export class Store {
         WHERE a.sequence>? ORDER BY a.sequence LIMIT 500`,
       );
       const mark = this.db.prepare(
-        'UPDATE message_arrivals SET noise=1 WHERE sequence=?',
+        'UPDATE message_arrivals SET excluded=1 WHERE sequence=?',
       );
       for (;;) {
         const rows = batch.all(after);
         if (rows.length === 0) break;
         for (const row of rows)
-          if (isIncomingNoise(decodeMessage(String(row.json))))
+          if (!isIncomingUserMessage(decodeMessage(String(row.json))))
             mark.run(Number(row.sequence));
         after = Number(rows.at(-1)!.sequence);
       }

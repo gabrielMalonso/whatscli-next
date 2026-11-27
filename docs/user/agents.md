@@ -59,10 +59,11 @@ node dist/src/cli.js --output compact read \
   --if-latest-incoming 'FICTIONAL-IN-001'
 ```
 
-The daemon checks the guard immediately before it builds the patch, so no script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls, unrecognized content, and late or same-second arrivals block it.
+The daemon checks the guard immediately before it builds the patch, so no script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls, unrecognized content, and late or same-second arrivals block it. Never name a message whose `latestIncoming.available` is `false`.
 
-- **`PRECONDITION_FAILED`:** nothing changed. `details.newerIncoming` lists the messages stored after the one you named, oldest first, up to 20. Read `messages --jid` and find every listed ID. While `truncated` is `true`, repeat the command with the last listed ID to get the next page; the refusal changes nothing. When `truncated` is `false`, decide again and retry with the last listed ID, which is then `latestIncoming.id`. Never retry with `latestIncoming.id` from a truncated page: it can be an old history message that hides a newer reply.
-- **`feedback.latestIncomingChanged: true` on success:** a message arrived during or after the mutation, which the patch did not cover. Read it and decide whether the chat needs attention; do not repeat the command.
+- **`PRECONDITION_FAILED`:** nothing changed. Run `incoming --jid JID --after ID` with the ID you named, read every listed message, and repeat with `--after` set to the last listed ID while `truncated` is `true`. Then decide and retry with the last listed ID, which is the current `latestIncoming.id`. Never retry with `details.latestIncoming.id` alone: it can be an old history message that hides a newer reply.
+- **`feedback.latestIncomingChanged: true` on success:** a message arrived during or after the mutation, which the patch did not cover. Follow the same `incoming --after` procedure from the guarded ID and decide whether the chat needs attention. Do not repeat the command.
+- **`PROTOCOL` on a guarded command:** the daemon did not confirm the guard. Inspect `request --key` and restart the daemon with the current build.
 
 Pass only an ID you have actually read; copying the current value to make the check pass defeats the guard. Coverage is local; see [the incoming-message guard](chat-state.md#guard-against-new-incoming-messages).
 

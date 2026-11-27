@@ -10,8 +10,9 @@ import { makeEventBuffer, proto } from 'baileys';
 import type { WAMessage, WASocket } from 'baileys';
 import { pino } from 'pino';
 import { CommandError, errorResponse } from '../src/errors.js';
-import { object, parseCommand } from '../src/protocol.js';
+import { object, parseCommand, wireCommand } from '../src/protocol.js';
 import type { Command } from '../src/protocol.js';
+import { formatResponse } from '../src/response.js';
 import { createRuntime } from '../src/runtime.js';
 import { Store } from '../src/store.js';
 
@@ -163,6 +164,7 @@ for (const command of ['mark-read', 'archive'] as const) {
       assert.deepEqual(chat.latestIncoming, {
         id: 'in-1',
         timestamp: 1700000000,
+        available: true,
       });
       const result = object(
         await f.runtime.execute(guarded(command, 'ok', 'in-1')),
@@ -192,10 +194,11 @@ for (const command of ['mark-read', 'archive'] as const) {
       assert.equal(response.code, 'PRECONDITION_FAILED');
       assert.deepEqual(response.details, {
         precondition: 'if-latest-incoming',
+        reason: 'newer-incoming',
         expected: 'in-1',
         expectedStored: true,
-        latestIncoming: { id: 'in-2', timestamp: 1700000020 },
-        newerIncoming: [{ id: 'in-2', timestamp: 1700000020 }],
+        latestIncoming: { id: 'in-2', timestamp: 1700000020, available: true },
+        newerIncoming: [{ id: 'in-2', timestamp: 1700000020, available: true }],
         truncated: false,
         coverage: 'local',
       });
@@ -217,6 +220,7 @@ test('own messages, protocol stubs, edits, reactions and system stubs do not cou
     assert.deepEqual(chat.latestIncoming, {
       id: 'in-1',
       timestamp: 1700000000,
+      available: true,
     });
     await f.runtime.execute(guarded('mark-read', 'after-own-send', 'in-1'));
     assert.equal(f.patches.length, 1);
@@ -239,6 +243,7 @@ test('undecryptable incoming content counts, so the guard fails closed', async (
     assert.deepEqual(object(response.details).latestIncoming, {
       id: 'cipher-1',
       timestamp: 1700000030,
+      available: false,
     });
     await assertUnchanged(f, 'cipher');
   } finally {
@@ -261,6 +266,7 @@ test('none passes only while no incoming user message is stored for that exact c
     assert.deepEqual(object(response.details).latestIncoming, {
       id: 'in-3',
       timestamp: 1700000040,
+      available: true,
     });
     assert.equal(f.patches.length, 1);
     assert.equal(
@@ -331,6 +337,7 @@ test('equal-second replies keep their arrival order across rewrites and re-deliv
     assert.deepEqual(chat.latestIncoming, {
       id: 'in-c',
       timestamp: 1700000100,
+      available: true,
     });
     const response = await failure(
       f.runtime.execute(guarded('mark-read', 'tie', 'in-b')),
@@ -338,6 +345,7 @@ test('equal-second replies keep their arrival order across rewrites and re-deliv
     assert.deepEqual(object(response.details).latestIncoming, {
       id: 'in-c',
       timestamp: 1700000100,
+      available: true,
     });
     await assertUnchanged(f, 'tie');
     await f.runtime.execute(guarded('mark-read', 'tie', 'in-c'));
@@ -430,6 +438,7 @@ test('existing rows without arrivals are backfilled by timestamp, after recorded
     assert.deepEqual(store.latestIncoming(jid), {
       id: 'old-2',
       timestamp: 1700000002,
+      available: true,
     });
     store.observeMessage(incoming('new-0', 1700000000));
     assert.equal(store.latestIncoming(jid)?.id, 'new-0');
@@ -489,10 +498,11 @@ test('a refusal lists every reply stored after the named one, even behind later 
     assert.deepEqual(details.latestIncoming, {
       id: 'in-history',
       timestamp: 1700000050,
+      available: true,
     });
     assert.deepEqual(details.newerIncoming, [
-      { id: 'in-live', timestamp: 1700000200 },
-      { id: 'in-history', timestamp: 1700000050 },
+      { id: 'in-live', timestamp: 1700000200, available: true },
+      { id: 'in-history', timestamp: 1700000050, available: true },
     ]);
     assert.equal(details.expectedStored, true);
     assert.equal(details.truncated, false);
@@ -518,6 +528,7 @@ test('the refusal list is bounded and reports an expected ID that is not stored'
     assert.deepEqual((details.newerIncoming as unknown[])[0], {
       id: 'in-0',
       timestamp: 1700000000,
+      available: true,
     });
     assert.equal(details.truncated, true);
     assert.equal(details.expectedStored, false);
@@ -550,6 +561,7 @@ test('paging refusals from the named message reaches a live reply hidden behind 
       assert.deepEqual(details.latestIncoming, {
         id: 'in-h24',
         timestamp: 1700000024,
+        available: true,
       });
       const page = (details.newerIncoming as { id: string }[]).map(
         ({ id }) => id,
@@ -590,6 +602,102 @@ test('a key first stored as a protocol stub counts once it carries real content'
   }
 });
 
+test('a reply stored during the mutation stays visible when history follows it', async () => {
+  let during = () => {};
+  const f = fixture([incoming('in-a', 1700000100)], () => during());
+  during = () => {
+    f.receive(incoming('in-live', 1700000200, 'Fictional live reply'));
+    f.ev.emit('messages.upsert', {
+      messages: [incoming('in-history', 1700000050)],
+      type: 'append',
+    });
+  };
+  try {
+    const result = object(
+      await f.runtime.execute(guarded('mark-read', 'window', 'in-a')),
+    );
+    const feedback = object(result.feedback);
+    assert.equal(feedback.latestIncomingChanged, true);
+    assert.equal(
+      object(object(result.localChat).latestIncoming).id,
+      'in-history',
+    );
+    assert.deepEqual(feedback.newerIncoming, [
+      { id: 'in-live', timestamp: 1700000200, available: true },
+      { id: 'in-history', timestamp: 1700000050, available: true },
+    ]);
+    assert.equal(feedback.truncated, false);
+    // Read-only follow-up: full projections, oldest first, without another mutation.
+    const listing = object(
+      await f.runtime.execute({
+        command: 'incoming',
+        jid,
+        afterId: 'in-a',
+        limit: 1,
+      }),
+    );
+    assert.equal(listing.afterStored, true);
+    assert.equal(listing.truncated, true);
+    const [first] = listing.messages as Record<string, unknown>[];
+    assert.equal(first?.id, 'in-live');
+    assert.equal(first?.text, 'Fictional live reply');
+    assert.equal(first?.available, true);
+    const next = object(
+      await f.runtime.execute({
+        command: 'incoming',
+        jid,
+        afterId: 'in-live',
+        limit: 1,
+      }),
+    );
+    assert.deepEqual(
+      (next.messages as Record<string, unknown>[]).map(({ id }) => id),
+      ['in-history'],
+    );
+    assert.equal(next.truncated, false);
+    const compact = object(
+      formatResponse('incoming', { ok: true, data: next }, 'compact').data,
+    );
+    // Same compact row shape as messages and search: each row keeps its jid.
+    assert.equal(object((compact.messages as unknown[])[0]).jid, jid);
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a guard naming a message without readable content is refused until it decrypts', async () => {
+  const f = fixture([incoming('in-a', 1700000100)]);
+  try {
+    f.receive({
+      key: { remoteJid: jid, id: 'cipher-1', fromMe: false },
+      messageTimestamp: 1700000150,
+      messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT,
+    });
+    const chat = object(await f.runtime.execute({ command: 'chat', jid }));
+    assert.deepEqual(chat.latestIncoming, {
+      id: 'cipher-1',
+      timestamp: 1700000150,
+      available: false,
+    });
+    const response = await failure(
+      f.runtime.execute(guarded('mark-read', 'unavailable', 'cipher-1')),
+    );
+    assert.equal(response.code, 'PRECONDITION_FAILED');
+    assert.equal(object(response.details).reason, 'latest-unavailable');
+    assert.deepEqual(object(response.details).newerIncoming, []);
+    await assertUnchanged(f, 'unavailable');
+    // The retry decrypts it under the same ID and arrival position.
+    f.receive(incoming('cipher-1', 1700000150, 'Fictional decrypted reply'));
+    assert.deepEqual(
+      object(await f.runtime.execute({ command: 'chat', jid })).latestIncoming,
+      { id: 'cipher-1', timestamp: 1700000150, available: true },
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 test('a reply stored while the SDK sends the patch is reported, not hidden', async () => {
   let receive = (_message: WAMessage) => {};
   const f = fixture([incoming('in-a', 1700000100)], () =>
@@ -604,6 +712,7 @@ test('a reply stored while the SDK sends the patch is reported, not hidden', asy
     assert.deepEqual(object(result.localChat).latestIncoming, {
       id: 'in-during',
       timestamp: 1700000150,
+      available: true,
     });
     assert.equal(f.patches.length, 1);
     const replay = object(await f.runtime.execute(intent));
@@ -634,8 +743,8 @@ test('rows written by an older build after arrivals exist are placed after them 
   // The current build flags reactions on write, so lookups skip them cheaply.
   assert.equal(
     store.db
-      .prepare("SELECT noise FROM message_arrivals WHERE id='old-reaction'")
-      .get()?.noise,
+      .prepare("SELECT excluded FROM message_arrivals WHERE id='old-reaction'")
+      .get()?.excluded,
     1,
   );
   // As if both rows were written by a build that did not record arrivals.
@@ -648,9 +757,9 @@ test('rows written by an older build after arrivals exist are placed after them 
     assert.equal(store.latestIncoming(jid)?.id, 'old-build');
     assert.deepEqual(
       store.db
-        .prepare('SELECT id,noise FROM message_arrivals ORDER BY sequence')
+        .prepare('SELECT id,excluded FROM message_arrivals ORDER BY sequence')
         .all()
-        .map((row) => [row.id, row.noise]),
+        .map((row) => [row.id, row.excluded]),
       [
         ['current', 0],
         ['old-build', 0],
@@ -662,27 +771,124 @@ test('rows written by an older build after arrivals exist are placed after them 
   }
 });
 
-test('the wire precondition accepts a message ID or null only', () => {
+test('the guard travels only under guarded command names, as a message ID or null', () => {
   const base = { command: 'mark-read', jid, key: 'k', value: true };
-  assert.equal(
-    'ifLatestIncoming' in parseCommand(base),
-    false,
-    'absent stays unguarded',
-  );
-  assert.deepEqual(parseCommand({ ...base, ifLatestIncoming: null }), {
-    ...base,
-    ifLatestIncoming: null,
-  });
-  assert.deepEqual(parseCommand({ ...base, ifLatestIncoming: 'in-1' }), {
-    ...base,
-    ifLatestIncoming: 'in-1',
-  });
-  for (const ifLatestIncoming of ['', 7, false, {}, 'x'.repeat(201)])
+  assert.deepEqual(parseCommand(base), base, 'unguarded stays unguarded');
+  for (const [wire, command] of [
+    ['guarded-mark-read', 'mark-read'],
+    ['guarded-archive', 'archive'],
+  ] as const) {
+    for (const ifLatestIncoming of [null, 'in-1'])
+      assert.deepEqual(
+        parseCommand({ ...base, command: wire, ifLatestIncoming }),
+        { ...base, command, ifLatestIncoming },
+      );
+    assert.deepEqual(
+      wireCommand({ ...base, command, ifLatestIncoming: 'in-1' }),
+      { ...base, command: wire, ifLatestIncoming: 'in-1' },
+    );
+  }
+  assert.deepEqual(wireCommand(base as Command), base);
+  const invalid = [
+    // A plain name with a guard would be silently dropped by an older daemon.
+    { ...base, ifLatestIncoming: 'in-1' },
+    { ...base, ifLatestIncoming: null },
+    { ...base, command: 'guarded-mark-read' },
+    ...['', 7, false, {}, 'x'.repeat(201)].map((ifLatestIncoming) => ({
+      ...base,
+      command: 'guarded-mark-read',
+      ifLatestIncoming,
+    })),
+  ];
+  for (const value of invalid)
     assert.throws(
-      () => parseCommand({ ...base, ifLatestIncoming }),
+      () => parseCommand(value),
       (error) =>
         error instanceof CommandError && error.code === 'INVALID_ARGUMENT',
     );
+  assert.deepEqual(parseCommand({ command: 'incoming', jid }), {
+    command: 'incoming',
+    jid,
+    afterId: null,
+    limit: 20,
+  });
+});
+
+/** The archive/read parser of a daemon built before the guard existed. */
+function preGuardParse(value: Record<string, unknown>) {
+  if (value.command !== 'archive' && value.command !== 'mark-read')
+    return { ok: false, error: 'Unknown command', code: 'INVALID_ARGUMENT' };
+  if (typeof value.value !== 'boolean')
+    return {
+      ok: false,
+      error: 'value must be a boolean',
+      code: 'INVALID_ARGUMENT',
+    };
+  return {
+    ok: true,
+    data: {
+      request: { key: value.key, attempt: 'sdk-returned' },
+      feedback: { serverResponse: 'unknown', stateObservation: 'pending' },
+    },
+  };
+}
+
+test('a guarded command fails closed against a daemon without the guard', async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'incoming-guard-old-'));
+  const applied: unknown[] = [];
+  let legacyReply = false;
+  const server = createServer((socket) => {
+    socket.setEncoding('utf8');
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      if (!buffer.includes('\n')) return;
+      const command = JSON.parse(buffer.trim()) as Record<string, unknown>;
+      // Optionally pretend a daemon accepted the guarded name without honoring it.
+      const response = legacyReply
+        ? preGuardParse({ ...command, command: 'mark-read' })
+        : preGuardParse(command);
+      if (response.ok) applied.push(command);
+      socket.end(JSON.stringify({ ...response, id: command.id }) + '\n');
+    });
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(join(directory, 'control.sock'), resolve),
+  );
+  t.after(() => server.close());
+  const run = async (...args: string[]) => {
+    try {
+      const { stdout } = await runFile(
+        process.execPath,
+        ['dist/src/cli.js', '--data-dir', directory, ...args],
+        { timeout: 5000 },
+      );
+      return JSON.parse(stdout) as Record<string, unknown>;
+    } catch (error) {
+      assert.ok(error && typeof error === 'object' && 'stdout' in error);
+      return JSON.parse(String(error.stdout)) as Record<string, unknown>;
+    }
+  };
+  const guardedRead = [
+    'read',
+    '--jid',
+    jid,
+    '--key',
+    'k1',
+    '--if-latest-incoming',
+    'in-1',
+  ];
+  const refused = await run(...guardedRead);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, 'INVALID_ARGUMENT');
+  assert.deepEqual(applied, []);
+  // Unguarded commands keep working against the same daemon.
+  assert.equal((await run('archive', '--jid', jid, '--key', 'k2')).ok, true);
+  legacyReply = true;
+  const unconfirmed = await run(...guardedRead);
+  assert.equal(unconfirmed.ok, false);
+  assert.equal(unconfirmed.code, 'PROTOCOL');
+  assert.match(String(unconfirmed.error), /request --key/);
 });
 
 test('CLI maps --if-latest-incoming (none as null) and passes refusal details through', async (t) => {
@@ -691,7 +897,7 @@ test('CLI maps --if-latest-incoming (none as null) and passes refusal details th
   const details = {
     precondition: 'if-latest-incoming',
     expected: null,
-    latestIncoming: { id: 'in-9', timestamp: 1700000090 },
+    latestIncoming: { id: 'in-9', timestamp: 1700000090, available: true },
     coverage: 'local',
   };
   const server = createServer((socket) => {
@@ -762,14 +968,14 @@ test('CLI maps --if-latest-incoming (none as null) and passes refusal details th
     commands.map(({ id: _id, ...command }) => command),
     [
       {
-        command: 'mark-read',
+        command: 'guarded-mark-read',
         jid,
         key: 'k1',
         value: true,
         ifLatestIncoming: null,
       },
       {
-        command: 'archive',
+        command: 'guarded-archive',
         jid,
         key: 'k2',
         value: false,

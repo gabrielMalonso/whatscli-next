@@ -213,7 +213,7 @@ const chats = [
       unreadCount: 0,
     }),
     pending: {},
-    latestIncoming: { id: 'text-1', timestamp: 1700000000 },
+    latestIncoming: { id: 'text-1', timestamp: 1700000000, available: true },
     observedAt,
     activity: { timestamp: 1700000000, source: 'message.messageTimestamp' },
   },

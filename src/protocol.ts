@@ -37,6 +37,7 @@ export type Command =
   | { command: 'contact'; jid: string }
   | { command: 'resolve'; phone: string }
   | { command: 'messages'; jid: string; limit: number; offset: number }
+  | { command: 'incoming'; jid: string; afterId: string | null; limit: number }
   | {
       command: 'search';
       query: string;
@@ -162,6 +163,32 @@ function chatFilters(value: Record<string, unknown>): ChatFilters {
     filters[field] = state;
   }
   return filters;
+}
+
+/** A message ID, or null for none. */
+function messageSelector(value: unknown, label: string): string | null {
+  if (
+    value !== null &&
+    (typeof value !== 'string' || value.length === 0 || value.length > 200)
+  )
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      `${label} must be a message ID (up to 200 characters) or null`,
+    );
+  return value;
+}
+
+/**
+ * The socket spelling of a command. Guarded chat mutations use their own
+ * names, so a daemon without the guard rejects them instead of dropping it.
+ */
+export function wireCommand(command: Command): Record<string, unknown> {
+  if (
+    (command.command === 'archive' || command.command === 'mark-read') &&
+    command.ifLatestIncoming !== undefined
+  )
+    return { ...command, command: `guarded-${command.command}` };
+  return command;
 }
 
 export function parseCommand(value: Record<string, unknown>): Command {
@@ -360,27 +387,47 @@ export function parseCommand(value: Record<string, unknown>): Command {
     }
     case 'archive':
     case 'mark-read':
+    case 'guarded-archive':
+    case 'guarded-mark-read': {
       if (typeof value.value !== 'boolean')
         throw new CommandError('INVALID_ARGUMENT', 'value must be a boolean');
-      if (
-        value.ifLatestIncoming !== undefined &&
-        value.ifLatestIncoming !== null &&
-        (typeof value.ifLatestIncoming !== 'string' ||
-          value.ifLatestIncoming.length === 0 ||
-          value.ifLatestIncoming.length > 200)
-      )
+      const guarded = value.command.startsWith('guarded-');
+      // A guard sent under a plain command name would be dropped by an older
+      // daemon; accept it only under the guarded names, which such a daemon rejects.
+      if (guarded !== (value.ifLatestIncoming !== undefined))
         throw new CommandError(
           'INVALID_ARGUMENT',
-          'ifLatestIncoming must be a message ID (up to 200 characters) or null',
+          guarded
+            ? 'guarded-archive and guarded-mark-read require ifLatestIncoming'
+            : 'ifLatestIncoming requires guarded-archive or guarded-mark-read',
         );
       return {
-        command: value.command,
+        command:
+          value.command === 'archive' || value.command === 'guarded-archive'
+            ? 'archive'
+            : 'mark-read',
         jid: recipientJid(string(value.jid, 'jid')),
         key: string(value.key, 'key'),
         value: value.value,
-        ...(value.ifLatestIncoming === undefined
-          ? {}
-          : { ifLatestIncoming: value.ifLatestIncoming }),
+        ...(guarded
+          ? {
+              ifLatestIncoming: messageSelector(
+                value.ifLatestIncoming,
+                'ifLatestIncoming',
+              ),
+            }
+          : {}),
+      };
+    }
+    case 'incoming':
+      return {
+        command: value.command,
+        jid: recipientJid(string(value.jid, 'jid')),
+        afterId:
+          value.afterId === undefined
+            ? null
+            : messageSelector(value.afterId, 'afterId'),
+        limit: integer(value.limit ?? 20, 1, 100),
       };
     default:
       throw new CommandError('INVALID_ARGUMENT', 'Unknown command');
