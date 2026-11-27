@@ -10,6 +10,11 @@ export type ChatFilters = {
   archived?: ChatStateFilter;
   observedOnly?: boolean;
 };
+/** Upper bound for the optional, response-only acceptance wait on sends. */
+export const MAX_WAIT_ACK_MS = 30000;
+/** Response option only: never part of the immutable operation or its idempotency comparison. */
+export type AckWaitOption = { waitAckMs?: number };
+
 export type QuoteSelector = {
   id: string;
   fromMe: boolean;
@@ -44,28 +49,28 @@ export type Command =
   | { command: 'request'; key: string }
   | { command: 'backup'; path: string }
   | { command: 'pair-code'; phone: string }
-  | {
+  | ({
       command: 'send';
       key: string;
       jid: string;
       text: string;
       quote?: QuoteSelector;
-    }
-  | {
+    } & AckWaitOption)
+  | ({
       command: 'send-file';
       key: string;
       jid: string;
       path: string;
       mime: string;
       caption: string;
-    }
-  | {
+    } & AckWaitOption)
+  | ({
       command: 'send-contact';
       key: string;
       jid: string;
       name: string;
       phone: string;
-    }
+    } & AckWaitOption)
   | {
       command: 'download';
       jid: string;
@@ -111,6 +116,23 @@ function integer(value: unknown, min: number, max: number): number {
       `Expected an integer from ${min} to ${max}`,
     );
   return value;
+}
+
+function ackWait(value: Record<string, unknown>): AckWaitOption {
+  if (value.waitAckMs === undefined) return {};
+  const waitAckMs = value.waitAckMs;
+  if (
+    typeof waitAckMs !== 'number' ||
+    !Number.isSafeInteger(waitAckMs) ||
+    waitAckMs < 0 ||
+    waitAckMs > MAX_WAIT_ACK_MS
+  )
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      `waitAckMs must be an integer from 0 to ${MAX_WAIT_ACK_MS}`,
+    );
+  // Zero keeps the exact immediate response; it is not forwarded as a wait.
+  return waitAckMs === 0 ? {} : { waitAckMs };
 }
 
 function chatFilters(value: Record<string, unknown>): ChatFilters {
@@ -289,6 +311,7 @@ export function parseCommand(value: Record<string, unknown>): Command {
         key: string(value.key, 'key'),
         text,
         ...(quote ? { quote } : {}),
+        ...ackWait(value),
       };
     }
     case 'send-file':
@@ -304,6 +327,7 @@ export function parseCommand(value: Record<string, unknown>): Command {
             : typeof value.caption === 'string'
               ? value.caption
               : string(value.caption, 'caption'),
+        ...ackWait(value),
       };
     case 'send-contact':
       return {
@@ -312,6 +336,7 @@ export function parseCommand(value: Record<string, unknown>): Command {
         key: string(value.key, 'key'),
         name: contactName(string(value.name, 'name')),
         phone: internationalPhone(string(value.phone, 'phone')),
+        ...ackWait(value),
       };
     case 'download': {
       if (value.fromMe !== undefined && typeof value.fromMe !== 'boolean')

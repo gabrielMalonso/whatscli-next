@@ -41,7 +41,7 @@ import { prepareQuote, quotedMessage } from './quoted-text.js';
 import { MAX_FILE_BYTES, prepareFile, saveMedia } from './media.js';
 import { savePairingQr } from './pairing.js';
 import { decode, encode, Store } from './store.js';
-import type { PendingChatState } from './store.js';
+import type { PendingChatState, RequestRecord } from './store.js';
 import { isUnreadCount } from './output.js';
 import { withoutDerivedMessageEdit } from './message-edits.js';
 
@@ -51,6 +51,13 @@ import type { Command } from './protocol.js';
 // pnpm build stamps this literal into the emitted runtime, never a separate mutable sidecar.
 // Plain tsc/source execution stays unknown; status does no disk or Git inspection.
 const buildFingerprint: string | null = /* @build-fingerprint */ null;
+
+export type AckWait = {
+  requestedMs: number;
+  waitedMs: number;
+  /** What ended the wait. Only `accepted` and `error` reflect request evidence. */
+  outcome: 'accepted' | 'error' | 'timeout' | 'interrupted';
+};
 
 export type RuntimeOptions = {
   dataDir: string;
@@ -138,6 +145,74 @@ export function createRuntime(
     }
   };
   let qr: string | undefined;
+  // Response-only waits for locally observed acceptance of an already persisted send.
+  // Each settles from committed store state after observed events, never by polling or resending.
+  const ackWaiters = new Set<(interrupted: boolean) => void>();
+  function settleAckWaits(): void {
+    if (ackWaiters.size === 0 || store.db.isTransaction) return;
+    const interrupted = stopped || connection !== 'open';
+    for (const settle of [...ackWaiters]) settle(interrupted);
+  }
+  function waitForAck(key: string, requestedMs: number): Promise<unknown> {
+    const startedAt = clock.now();
+    return new Promise((resolve, reject) => {
+      let cancel = () => {};
+      const settle = (
+        ended: false | 'timeout' | 'interrupted',
+      ): RequestRecord | undefined => {
+        // The same projection request --key returns at this moment.
+        let latest: RequestRecord | undefined;
+        try {
+          latest = store.request(key);
+        } catch (cause) {
+          // Never throw into SDK event delivery or a timer; the committed intent stays authoritative.
+          ackWaiters.delete(waiter);
+          cancel();
+          reject(
+            new CommandError(
+              'LOCAL_STATE',
+              'Request state could not be read during the acceptance wait; inspect the original idempotency key',
+              { cause },
+            ),
+          );
+          return undefined;
+        }
+        if (!latest) return undefined;
+        const outcome =
+          latest.acceptance === 'server-ack'
+            ? 'accepted'
+            : latest.errorObserved
+              ? 'error'
+              : ended;
+        if (!outcome) return latest;
+        ackWaiters.delete(waiter);
+        cancel();
+        const wait: AckWait = {
+          requestedMs,
+          waitedMs: Math.max(0, clock.now() - startedAt),
+          outcome,
+        };
+        resolve({ ...latest, wait });
+        return latest;
+      };
+      const waiter = (interrupted: boolean): void => {
+        settle(interrupted ? 'interrupted' : false);
+      };
+      ackWaiters.add(waiter);
+      cancel = clock.schedule(() => {
+        if (ackWaiters.has(waiter)) settle('timeout');
+      }, requestedMs);
+      if (
+        !settle(stopped || connection !== 'open' ? 'interrupted' : false) &&
+        ackWaiters.has(waiter)
+      ) {
+        // No persisted intent means there is nothing to wait for; return what is known.
+        ackWaiters.delete(waiter);
+        cancel();
+        resolve(null);
+      }
+    });
+  }
   const issues = new Set(store.get<string[]>('probe', 'issues') ?? []);
   const issue = (name: string): void => {
     issues.add(name);
@@ -338,6 +413,7 @@ export function createRuntime(
       } catch {
         fatal();
       }
+      settleAckWaits();
     };
     // Local echoes have their own typed event; legacy callbacks are independent.
     // Apply accepted state before buffering can sum absolute actions with deltas.
@@ -1120,6 +1196,7 @@ export function createRuntime(
     qr = undefined;
     receivedPendingNotifications = false;
     connection = 'connecting';
+    settleAckWaits();
     if (manual) {
       attempts = 0;
       recovery = {
@@ -1169,6 +1246,7 @@ export function createRuntime(
     qr = undefined;
     receivedPendingNotifications = false;
     if (started && options.connect) interrupt('runtime-stop');
+    settleAckWaits();
     const current = socket;
     const currentClosed = socketClosed;
     socket = undefined;
@@ -1198,11 +1276,22 @@ export function createRuntime(
       return execution.run(state, async () => {
         let result: unknown;
         let code = 'OK';
+        const sending =
+          command.command === 'send' ||
+          command.command === 'send-file' ||
+          command.command === 'send-contact';
         try {
           result = await execute(command);
+          // A concurrent same-key call may already be waiting on this record.
+          // perform() commits its final state outside persist(), so wake waiters here.
+          if (sending) settleAckWaits();
+          if (sending && command.waitAckMs && result)
+            result =
+              (await waitForAck(command.key, command.waitAckMs)) ?? result;
           return result;
         } catch (error) {
           code = errorResponse(error).code;
+          if (sending) settleAckWaits();
           throw error;
         } finally {
           observability.record('execution', {

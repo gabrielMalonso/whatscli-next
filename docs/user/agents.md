@@ -35,10 +35,13 @@ Choose a stable key before invoking an intended action:
 node dist/src/cli.js --output compact send \
   --jid '12025550101@s.whatsapp.net' \
   --key 'example-message-001' \
-  --text 'A fictional example message.'
+  --text 'A fictional example message.' \
+  --wait-ack-ms 5000
 
 node dist/src/cli.js --output full request --key 'example-message-001'
 ```
+
+`--wait-ack-ms 5000` returns once server acceptance or an error is observed, or after 5 seconds with `data.wait.outcome: timeout` and acceptance still unknown. Use it instead of sleeping and polling; a timeout is not a failure. Use `request --key` later for delivery and read evidence. See [waiting for acceptance](sending.md#waiting-for-server-acceptance).
 
 After an error or timeout, inspect the original key. Never use a new key to retry an uncertain action. Read [command results and retry rules](evidence.md) before interpreting the outcome; command success alone does not establish delivery.
 
