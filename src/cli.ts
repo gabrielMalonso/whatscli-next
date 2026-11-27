@@ -201,7 +201,7 @@ function help(): Record<string, unknown> {
       outputOption: '--output compact|full (default: full)',
       waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
       ifLatestIncomingOption:
-        '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null), checked in the daemon immediately before the intent is persisted; otherwise PRECONDITION_FAILED with details.latestIncoming and nothing changes. Local coverage only. Excludes own messages, protocol stubs, edits and reactions. Part of the key intent; a replay never re-checks it.',
+        '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null), checked in the daemon immediately before the intent is persisted; otherwise PRECONDITION_FAILED with details.latestIncoming and nothing changes. Latest means most recently stored by this runtime, not newest timestamp. Local coverage only. Excludes own messages, protocol stubs, edits and reactions; missed calls and undecryptable messages count. Part of the key intent; a replay never re-checks it.',
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };

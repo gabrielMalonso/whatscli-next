@@ -59,7 +59,7 @@ node dist/src/cli.js --output compact read \
   --if-latest-incoming 'FICTIONAL-IN-001'
 ```
 
-The daemon checks it immediately before the mutation, so no separate `messages` call or script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. On `PRECONDITION_FAILED`, nothing changed; `details.latestIncoming` names the newer message. Read it, decide again, and only then retry with its ID. Pass only an ID you have actually read; copying the current value to make the check pass defeats the guard. Coverage is local; see [the incoming-message guard](chat-state.md#guard-against-new-incoming-messages).
+The daemon checks it immediately before the mutation, so no separate `messages` call or script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. Missed calls and late or same-second arrivals block it. On `PRECONDITION_FAILED`, nothing changed; `details.latestIncoming` names the newer message. Read it, decide again, and only then retry with its ID. Pass only an ID you have actually read; copying the current value to make the check pass defeats the guard. Coverage is local; see [the incoming-message guard](chat-state.md#guard-against-new-incoming-messages).
 
 ## Inspect unresolved chat state
 

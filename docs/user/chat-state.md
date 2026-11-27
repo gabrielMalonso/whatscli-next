@@ -47,9 +47,11 @@ An incoming user message is a message with `fromMe: false` stored under that exa
 - the account's own messages from any device;
 - protocol envelopes, such as edits, revokes, ephemeral settings, key shares, and the text-less `protocolMessage` stubs the server can emit shortly after the account's own sends;
 - reactions, matching the SDK's unread behavior;
-- system stubs and content-free SDK envelopes.
+- system stubs (group changes, encryption notices, group call offers) and content-free SDK envelopes.
 
-Undecryptable (`CIPHERTEXT`) or otherwise unavailable content still counts, so the guard fails closed. Deleted messages are classified by their original content. `chat`, `chats` rows and the mutation's `localChat` expose the same value as `latestIncoming: {id, timestamp} | null`; ordering matches `messages`, newest first.
+Missed calls count, because someone tried to reach the account. Undecryptable (`CIPHERTEXT`) or otherwise unavailable content also counts, so the guard fails closed. Deleted messages are classified by their original content. `chat`, `chats` rows and the mutation's `localChat` expose the same value as `latestIncoming: {id, timestamp} | null`.
+
+"Latest" means stored most recently by this runtime, not the newest sender timestamp. Each incoming message keeps the position at which it was first stored. Receipts, status updates, re-deliveries after a reconnection and decryption retries do not move it. A message that arrives later therefore blocks the guard even when it shares the same second as the one you saw, carries an earlier timestamp, or has none (`timestamp: null`). Usually this is also the newest incoming row in `messages`. When history sync stores older messages later, `latestIncoming` can name an older message, and the guard fails closed until you pass that ID. When a data directory is first opened by a build with this guard, existing messages are ordered by timestamp. Rows written later by an older build are placed after every recorded arrival.
 
 Coverage is local and partial. The guard cannot see messages the runtime has not stored yet, messages stored under another JID of the same person (PN or LID), or history that never synced. A pass therefore means no newer reply was observed locally; it does not prove none exists.
 

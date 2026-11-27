@@ -309,6 +309,103 @@ test('a persisted key replays without re-evaluating, and the guard is part of it
   }
 });
 
+test('equal-second replies keep their arrival order across rewrites and re-deliveries', async () => {
+  const f = fixture([incoming('in-b', 1700000100)]);
+  try {
+    // Seen B; C arrives in the same second; then B's row is rewritten twice.
+    f.receive(incoming('in-c', 1700000100, 'Fictional unseen reply'));
+    f.ev.emit('messages.update', [
+      {
+        key: { remoteJid: jid, id: 'in-b', fromMe: false },
+        update: { status: proto.WebMessageInfo.Status.READ },
+      },
+    ]);
+    f.receive(incoming('in-b', 1700000100));
+    const chat = object(await f.runtime.execute({ command: 'chat', jid }));
+    assert.deepEqual(chat.latestIncoming, {
+      id: 'in-c',
+      timestamp: 1700000100,
+    });
+    const response = await failure(
+      f.runtime.execute(guarded('mark-read', 'tie', 'in-b')),
+    );
+    assert.deepEqual(object(response.details).latestIncoming, {
+      id: 'in-c',
+      timestamp: 1700000100,
+    });
+    await assertUnchanged(f, 'tie');
+    await f.runtime.execute(guarded('mark-read', 'tie', 'in-c'));
+    assert.equal(f.patches.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const [name, late] of [
+  ['an earlier sender timestamp', incoming('in-late', 1700000099)],
+  [
+    'no sender timestamp',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      message: { conversation: 'Fictional undated reply' },
+    } satisfies WAMessage,
+  ],
+  [
+    'a missed call',
+    {
+      key: { remoteJid: jid, id: 'in-late', fromMe: false },
+      messageTimestamp: 1700000200,
+      messageStubType: proto.WebMessageInfo.StubType.CALL_MISSED_VOICE,
+    } satisfies WAMessage,
+  ],
+] as const)
+  test(`a later arrival with ${name} blocks the guard`, async () => {
+    const f = fixture([incoming('in-b', 1700000100)]);
+    try {
+      f.receive(late);
+      const response = await failure(
+        f.runtime.execute(guarded('archive', 'late', 'in-b')),
+      );
+      assert.equal(response.code, 'PRECONDITION_FAILED');
+      assert.equal(
+        object(object(response.details).latestIncoming).id,
+        'in-late',
+      );
+      await assertUnchanged(f, 'late');
+    } finally {
+      await f.close();
+    }
+  });
+
+test('existing rows without arrivals are backfilled by timestamp, after recorded ones', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'incoming-guard-legacy-'));
+  let store = new Store(directory);
+  store.observeChat({ id: jid });
+  store.observeMessage(incoming('old-2', 1700000002));
+  store.observeMessage(incoming('old-1', 1700000001));
+  // As if written by a build that did not record arrivals.
+  store.db.exec('DELETE FROM message_arrivals');
+  store.close();
+  store = new Store(directory);
+  try {
+    assert.deepEqual(store.latestIncoming(jid), {
+      id: 'old-2',
+      timestamp: 1700000002,
+    });
+    store.observeMessage(incoming('new-0', 1700000000));
+    assert.equal(store.latestIncoming(jid)?.id, 'new-0');
+  } finally {
+    store.close();
+  }
+  store = new Store(directory);
+  try {
+    // Reopening does not reorder recorded arrivals.
+    assert.equal(store.latestIncoming(jid)?.id, 'new-0');
+  } finally {
+    store.close();
+  }
+});
+
 test('the wire precondition accepts a message ID or null only', () => {
   const base = { command: 'mark-read', jid, key: 'k', value: true };
   assert.equal(

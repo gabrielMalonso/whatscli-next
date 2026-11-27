@@ -201,18 +201,29 @@ function isReaction(message: WAMessage): boolean {
   );
 }
 
+const missedCalls = new Set<number>([
+  proto.WebMessageInfo.StubType.CALL_MISSED_VOICE,
+  proto.WebMessageInfo.StubType.CALL_MISSED_VIDEO,
+  proto.WebMessageInfo.StubType.CALL_MISSED_GROUP_VOICE,
+  proto.WebMessageInfo.StubType.CALL_MISSED_GROUP_VIDEO,
+]);
+
 /**
  * A message the other side of the chat may expect an answer to, for the
  * mutation guard. Excluded: the account's own messages from any device,
  * protocol envelopes (edits, revokes, ephemeral settings, key shares and the
  * stubs a server emits after own sends), reactions, content-free SDK
- * envelopes and system stubs. Content the runtime could not decrypt or no
- * longer has still counts, so the guard fails closed.
+ * envelopes (including group call offers) and system stubs. Missed calls,
+ * and content the runtime could not decrypt or no longer has, still count,
+ * so the guard fails closed.
  */
 function isIncomingUserMessage(message: WAMessage): boolean {
   if (message.key.fromMe !== false) return false;
   if (message.messageStubType != null)
-    return message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
+    return (
+      message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
+      missedCalls.has(message.messageStubType)
+    );
   const content = normalizeMessageContent(message.message);
   if (!content) return true;
   return (
@@ -292,6 +303,7 @@ export class Store {
       this.recoverLegacy();
       this.initializeQueries();
       this.recoverMessageEdits();
+      this.recordMissingArrivals();
     } catch (error) {
       opened?.close();
       this.lock.close();
@@ -1881,6 +1893,13 @@ export class Store {
     const inserted = this.db
       .prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)')
       .run(jid, id, Number(fromMe), participantSlot, timestamp, encode(merged));
+    // First storage only: rewrites keep the original arrival position.
+    if (!fromMe)
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO message_arrivals(jid,id,participant) VALUES (?,?,?)',
+        )
+        .run(jid, id, participantSlot);
     if (previousRow)
       this.db
         .prepare('DELETE FROM message_text WHERE message_rowid=?')
@@ -1947,18 +1966,23 @@ export class Store {
   }
 
   /**
-   * Local coverage only: the newest stored incoming user message in this
-   * exact chat JID, in the same order as messages. Other JIDs of the same
-   * person and unsynchronized history are not consulted.
+   * Local coverage only: the incoming user message in this exact chat JID
+   * that this store recorded first-stored most recently. Arrival order is
+   * stable across row rewrites (receipts, re-deliveries, decryption retries)
+   * and independent of sender timestamps, which have second resolution, can
+   * be earlier than an already stored message, or be missing. Other JIDs of
+   * the same person and unsynchronized history are not consulted.
    */
   latestIncoming(jid: string): LatestIncoming | null {
     // Deleted bodies are cleared; classify them by the retained private audit copy.
     for (const row of this.db
       .prepare(
-        `SELECT m.id,m.timestamp,COALESCE(d.audit_json,m.json) AS json FROM messages m
+        `SELECT m.id,m.timestamp,COALESCE(d.audit_json,m.json) AS json
+        FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
+        AND m.from_me=0 AND m.participant=a.participant
         LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
-        AND d.from_me=m.from_me AND d.participant=m.participant
-        WHERE m.jid=? AND m.from_me=0 ORDER BY m.timestamp DESC,m.rowid DESC`,
+        AND d.from_me=0 AND d.participant=m.participant
+        WHERE a.jid=? ORDER BY a.sequence DESC`,
       )
       .iterate(jid)) {
       if (isIncomingUserMessage(decodeMessage(String(row.json))))
@@ -1968,6 +1992,23 @@ export class Store {
         };
     }
     return null;
+  }
+
+  /**
+   * Give rows that lack an arrival (an existing directory, or rows written by
+   * an older build) one after every recorded arrival, oldest timestamp first.
+   * Writes nothing when every incoming row already has one.
+   */
+  private recordMissingArrivals(): void {
+    this.db
+      .prepare(
+        `INSERT INTO message_arrivals(jid,id,participant)
+        SELECT m.jid,m.id,m.participant FROM messages m WHERE m.from_me=0
+        AND NOT EXISTS (SELECT 1 FROM message_arrivals a
+          WHERE a.jid=m.jid AND a.id=m.id AND a.participant=m.participant)
+        ORDER BY m.timestamp,m.rowid`,
+      )
+      .run();
   }
 
   /** Receipt updates can reorder equal-second rowids; keep the whole newest boundary. */
