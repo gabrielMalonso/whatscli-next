@@ -32,9 +32,9 @@ A successful `resync` does not prove that the app state is complete. The SDK can
 
 ## Recovery states
 
-`status` and successful daemon/probe responses include `recovery` and `receiveContinuity` in the existing response envelope. Both fields have the same structure in full and compact output.
+`status` and successful daemon/probe responses include `recovery` and `receiveContinuity` in the existing response envelope. `receiveContinuity` has the same structure in full and compact output. Compact output omits a steady `recovery` (open or offline, no retry pending); see [compact envelope defaults](../user/output.md#compact-envelope-defaults). Read it with a default: an absent `recovery` in compact output means the steady state, not an unknown one.
 
-The existing `connection` field retains its coarse connection status. Use `recovery.state` to determine the current runtime state and next action.
+The existing `connection` field retains its coarse connection status. Use `recovery.state` (or its documented compact absence) to determine the current runtime state and next action.
 
 | `recovery.state`        | Meaning and next step                                                                                                |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -47,7 +47,7 @@ The existing `connection` field retains its coarse connection status. Use `recov
 
 ### Recovery fields
 
-`recovery` always includes:
+In full output, and whenever compact output keeps it, `recovery` includes:
 
 - `reason` and `code` — the current recovery reason and code, or null when unknown or inapplicable.
 - `attempt` — the automatic retry count since the last open or manual reconnect.
@@ -64,7 +64,7 @@ For `attempt`:
 
 `since` is a local Unix timestamp in milliseconds. It changes on every recovery transition, including each new retry attempt and a manual reconnect, so a stale `since` shows how long the runtime has been in one state.
 
-An open connection resets current recovery state. The `issues` field retains historical entries, including possible `connection-stopped-review-required` entries from earlier failures. `activeIssues` lists only the codes that are active now, with their counts and observation times; see [issue history and activity](../user/output.md#issue-history-and-activity).
+An open connection resets current recovery state. The `issues` field retains historical entries, including possible `connection-stopped-review-required` entries from earlier failures. `activeIssues` lists the codes that are active as defined in issue activity (some stay active for the whole daemon process, so an active code does not prove a current failure), with their counts and observation times; see [issue history and activity](../user/output.md#issue-history-and-activity).
 
 ## Automatic retries
 

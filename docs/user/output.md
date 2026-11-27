@@ -53,7 +53,7 @@ Compact output adds `inactiveIssues: <count>` when recorded issue codes are not 
 
 ### Compact status
 
-`data.observability` keeps `configured`, `enabled`, `effective`, `degraded`, `dropped`, `uncertain`, and `captureCompleteness`. It adds `cleanupFailures`, `hashingFailures`, and `preferenceWatchDegraded` only when they differ from `0`/`0`/`false`. Component flags, session, generation, retention counters, limits, directory, scope, buffer counters and sampler state are only in full output and in `observability status` (which is never compacted). `degraded` already aggregates the component flags. `data.issueHistory` is omitted; active issues remain in the envelope.
+`data.observability` keeps `configured`, `enabled`, `effective`, `degraded`, `dropped`, `uncertain`, and `captureCompleteness`. It adds `cleanupFailures`, `hashingFailures`, and `preferenceWatchDegraded` only when they differ from `0`/`0`/`false`. Component flags, session, generation, retention counters, limits, directory, scope, buffer counters and sampler state are only in full output and in `observability status` (which is never compacted). `degraded` already aggregates the component flags. `data.issueHistory` is omitted; active issues remain in the envelope. This is a fixed list: fields a newer daemon adds to observability status are not passed through in compact `status`; read `observability status` for the complete set.
 
 ### Issue history and activity
 
@@ -75,7 +75,7 @@ Compact output adds `inactiveIssues: <count>` when recorded issue codes are not 
 - `connection-stopped-review-required` is active exactly while `recovery.state` is `intervention-required`.
 - Every other code (`decryption-or-integrity-failure`, `app-state-sync-incomplete`, `initial-sync-timed-out`, `history-completion-not-explicit`) is active once this runtime process (the envelope `pid`) has observed it. Nothing reports that these conditions ended, so they stay active until the process exits and are never cleared by elapsed time. Use `lastAt` to judge recency.
 
-An inactive code may still affect older local data, and an active code does not prove a current failure. Neither replaces the evidence in [command results](evidence.md).
+An inactive code may still affect older local data, and an active code does not prove a current failure. Running an older daemon on the same data directory records codes without updating their history, so after re-upgrading `count` and `lastAt` can be low for those codes. Neither replaces the evidence in [command results](evidence.md).
 
 ### Compact envelope and status change
 
