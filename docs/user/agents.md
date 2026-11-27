@@ -47,6 +47,20 @@ After an error or timeout, inspect the original key. Never use a new key to retr
 
 See [sending and media](sending.md) for files, cards, routes, and downloads, and [quoted replies](quoted-replies.md) for exact quote selectors.
 
+## Mark read or archive without missing a reply
+
+Before `read` or `archive`, take `latestIncoming.id` from the same `chat` or `chats` row you triaged (or `none` when it was `null`) and pass it as the guard:
+
+```sh
+node dist/src/cli.js --output compact chat --jid '12025550101@s.whatsapp.net'
+node dist/src/cli.js --output compact read \
+  --jid '12025550101@s.whatsapp.net' \
+  --key 'example-read-001' \
+  --if-latest-incoming 'FICTIONAL-IN-001'
+```
+
+The daemon checks it immediately before the mutation, so no separate `messages` call or script comparison is needed. Own messages, protocol stubs after your sends, edits and reactions are ignored. On `PRECONDITION_FAILED`, nothing changed; `details.latestIncoming` names the newer message. Read it, decide again, and only then retry with its ID. Pass only an ID you have actually read; copying the current value to make the check pass defeats the guard. Coverage is local; see [the incoming-message guard](chat-state.md#guard-against-new-incoming-messages).
+
 ## Inspect unresolved chat state
 
 For archive/read changes, inspect the original request, the exact `chat`, and one bounded `events --after SEQUENCE` page (or `events --tail N [--kind KIND]` for the latest entries, still in ascending order). Report unresolved state rather than repeating mutations or resyncs to obtain a preferred verdict. See [Chat state](chat-state.md) for pending fields and observation rules.

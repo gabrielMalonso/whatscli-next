@@ -9,6 +9,52 @@ node dist/src/cli.js read      --jid '12025550101@s.whatsapp.net' --key 'example
 node dist/src/cli.js unread    --jid '12025550101@s.whatsapp.net' --key 'example-unread-001'
 ```
 
+## Guard against new incoming messages
+
+Add `--if-latest-incoming` so a conversation is not marked read or archived over a reply that arrived after you last looked:
+
+```sh
+node dist/src/cli.js --output compact chat --jid '12025550101@s.whatsapp.net'
+# data.latestIncoming: {"id":"FICTIONAL-IN-002","timestamp":1700000020} or null
+node dist/src/cli.js read --jid '12025550101@s.whatsapp.net' --key 'example-read-002' \
+  --if-latest-incoming 'FICTIONAL-IN-002'
+node dist/src/cli.js archive --jid '12025550101@s.whatsapp.net' --key 'example-archive-002' \
+  --if-latest-incoming none
+```
+
+The daemon compares the value with the latest locally stored incoming user message in that exact chat JID, immediately before persisting the intent and building the patch; nothing can be stored between the check and the mutation. `none` requires that no such message is stored. The option works the same way on `unarchive` and `unread`.
+
+When another message is the latest, the command returns `PRECONDITION_FAILED`, persists no intent and invokes nothing. The key stays unused:
+
+```json
+{
+  "ok": false,
+  "code": "PRECONDITION_FAILED",
+  "error": "A different incoming message is now the latest stored for this chat; nothing was changed. Read it before deciding again",
+  "details": {
+    "precondition": "if-latest-incoming",
+    "expected": "FICTIONAL-IN-002",
+    "latestIncoming": { "id": "FICTIONAL-IN-003", "timestamp": 1700000040 },
+    "coverage": "local"
+  }
+}
+```
+
+Read that message with `messages --jid`, decide again, and pass its ID.
+
+An incoming user message is a message with `fromMe: false` stored under that exact JID. These do not count:
+
+- the account's own messages from any device;
+- protocol envelopes, such as edits, revokes, ephemeral settings, key shares, and the text-less `protocolMessage` stubs the server can emit shortly after the account's own sends;
+- reactions, matching the SDK's unread behavior;
+- system stubs and content-free SDK envelopes.
+
+Undecryptable (`CIPHERTEXT`) or otherwise unavailable content still counts, so the guard fails closed. Deleted messages are classified by their original content. `chat`, `chats` rows and the mutation's `localChat` expose the same value as `latestIncoming: {id, timestamp} | null`; ordering matches `messages`, newest first.
+
+Coverage is local and partial. The guard cannot see messages the runtime has not stored yet, messages stored under another JID of the same person (PN or LID), or history that never synced. A pass therefore means no newer reply was observed locally; it does not prove none exists.
+
+The guard is part of the key's immutable intent. A replay of a persisted key with the same value returns the original request without re-checking, even if newer messages have arrived since; it never fails a mutation that was already invoked. Reusing the key with a different value, or adding or dropping the guard, returns `KEY_CONFLICT`, because it describes a different decision.
+
 ## How state changes work
 
 These commands use `chatModify` with a stored last-message key/timestamp.

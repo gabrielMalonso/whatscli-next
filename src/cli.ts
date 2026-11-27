@@ -106,6 +106,7 @@ const optionSpec = {
   output: { type: 'string' },
   name: { type: 'string' },
   'wait-ack-ms': { type: 'string' },
+  'if-latest-incoming': { type: 'string' },
 } as const;
 
 function options() {
@@ -180,10 +181,10 @@ function help(): Record<string, unknown> {
           '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS [--wait-ack-ms MS]',
         download:
           '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
-        archive: '--jid JID --key KEY',
-        unarchive: '--jid JID --key KEY',
-        read: '--jid JID --key KEY',
-        unread: '--jid JID --key KEY',
+        archive: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        unarchive: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        read: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        unread: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
         request: '--key KEY',
         events:
           '[--after SEQUENCE] [--tail 1-100] [--kind KIND] (ascending; --tail returns the latest N)',
@@ -199,6 +200,8 @@ function help(): Record<string, unknown> {
       globalOption: '--account NAME | --data-dir PATH',
       outputOption: '--output compact|full (default: full)',
       waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
+      ifLatestIncomingOption:
+        '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null), checked in the daemon immediately before the intent is persisted; otherwise PRECONDITION_FAILED with details.latestIncoming and nothing changes. Local coverage only. Excludes own messages, protocol stubs, edits and reactions. Part of the key intent; a replay never re-checks it.',
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };
@@ -625,7 +628,7 @@ async function execute(
     case 'unarchive':
     case 'read':
     case 'unread':
-      only('jid', 'key');
+      only('jid', 'key', 'if-latest-incoming');
       command = {
         command: ['archive', 'unarchive'].includes(action)
           ? 'archive'
@@ -633,6 +636,17 @@ async function execute(
         jid: jid(),
         key: key(),
         value: action === 'archive' || action === 'read',
+        ...(values['if-latest-incoming'] === undefined
+          ? {}
+          : {
+              ifLatestIncoming:
+                values['if-latest-incoming'] === 'none'
+                  ? null
+                  : required(
+                      values['if-latest-incoming'],
+                      'if-latest-incoming',
+                    ),
+            }),
       };
       break;
     case 'request':

@@ -76,8 +76,16 @@ export type Operation =
       phone: string;
       vcard: string;
     }
-  | { kind: 'archive'; jid: string; value: boolean }
-  | { kind: 'mark-read'; jid: string; value: boolean };
+  | ({ kind: 'archive'; jid: string; value: boolean } & IncomingGuard)
+  | ({ kind: 'mark-read'; jid: string; value: boolean } & IncomingGuard);
+
+/**
+ * Optional chat-mutation precondition, part of the immutable intent: the ID of
+ * the latest locally stored incoming user message the caller saw, or null when
+ * it saw none. Absent means unguarded.
+ */
+export type IncomingGuard = { ifLatestIncoming?: string | null };
+export type LatestIncoming = { id: string; timestamp: number | null };
 
 export function isSendOperation(
   operation: Operation,
@@ -190,6 +198,29 @@ function isReaction(message: WAMessage): boolean {
   return (
     message.messageStubType == null &&
     !!normalizeMessageContent(message.message)?.reactionMessage
+  );
+}
+
+/**
+ * A message the other side of the chat may expect an answer to, for the
+ * mutation guard. Excluded: the account's own messages from any device,
+ * protocol envelopes (edits, revokes, ephemeral settings, key shares and the
+ * stubs a server emits after own sends), reactions, content-free SDK
+ * envelopes and system stubs. Content the runtime could not decrypt or no
+ * longer has still counts, so the guard fails closed.
+ */
+function isIncomingUserMessage(message: WAMessage): boolean {
+  if (message.key.fromMe !== false) return false;
+  if (message.messageStubType != null)
+    return message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
+  const content = normalizeMessageContent(message.message);
+  if (!content) return true;
+  return (
+    !isMessageEdit(message) &&
+    !content.protocolMessage &&
+    !content.reactionMessage &&
+    !content.encReactionMessage &&
+    getContentType(content) !== undefined
   );
 }
 
@@ -729,6 +760,7 @@ export class Store {
       ...(readObservation ? { readObservation } : {}),
       ...(readReconciliation ? { readReconciliation } : {}),
       ...(Object.keys(sdkReported).length ? { sdkReported } : {}),
+      latestIncoming: this.latestIncoming(jid),
       observedAt: row.observed_at,
       activity: {
         timestamp: row.activity_timestamp,
@@ -1912,6 +1944,30 @@ export class Store {
       )
       .all(jid, limit, offset)
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
+  }
+
+  /**
+   * Local coverage only: the newest stored incoming user message in this
+   * exact chat JID, in the same order as messages. Other JIDs of the same
+   * person and unsynchronized history are not consulted.
+   */
+  latestIncoming(jid: string): LatestIncoming | null {
+    // Deleted bodies are cleared; classify them by the retained private audit copy.
+    for (const row of this.db
+      .prepare(
+        `SELECT m.id,m.timestamp,COALESCE(d.audit_json,m.json) AS json FROM messages m
+        LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
+        AND d.from_me=m.from_me AND d.participant=m.participant
+        WHERE m.jid=? AND m.from_me=0 ORDER BY m.timestamp DESC,m.rowid DESC`,
+      )
+      .iterate(jid)) {
+      if (isIncomingUserMessage(decodeMessage(String(row.json))))
+        return {
+          id: String(row.id),
+          timestamp: Number(row.timestamp) || null,
+        };
+    }
+    return null;
   }
 
   /** Receipt updates can reorder equal-second rowids; keep the whole newest boundary. */

@@ -1211,17 +1211,37 @@ export function createRuntime(
       }
       case 'archive':
       case 'mark-read': {
+        const guard = command.ifLatestIncoming;
         const operation = {
           kind: command.command,
           jid: command.jid,
           value: command.value,
+          ...(guard === undefined ? {} : { ifLatestIncoming: guard }),
         };
         const request = await perform(
           store,
           command.key,
           operation,
+          // Runs for a new key only, synchronously before the intent is persisted
+          // and the patch is built: nothing can be stored between check and use.
           () => {
             validateTarget(command.jid);
+            if (guard !== undefined) {
+              const latestIncoming = store.latestIncoming(command.jid);
+              if ((latestIncoming?.id ?? null) !== guard)
+                throw new CommandError(
+                  'PRECONDITION_FAILED',
+                  'A different incoming message is now the latest stored for this chat; nothing was changed. Read it before deciding again',
+                  {
+                    details: {
+                      precondition: 'if-latest-incoming',
+                      expected: guard,
+                      latestIncoming,
+                      coverage: 'local',
+                    },
+                  },
+                );
+            }
             const last = store.chatMutationMessages(command.jid)[0];
             if (!last || toNumber(last.messageTimestamp ?? 0) === 0)
               throw new CommandError(

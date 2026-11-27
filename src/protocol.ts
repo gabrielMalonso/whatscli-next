@@ -84,6 +84,8 @@ export type Command =
       key: string;
       jid: string;
       value: boolean;
+      /** Proceed only if this is the latest stored incoming message ID; null means none. */
+      ifLatestIncoming?: string | null;
     };
 
 export function object(value: unknown): Record<string, unknown> {
@@ -360,11 +362,25 @@ export function parseCommand(value: Record<string, unknown>): Command {
     case 'mark-read':
       if (typeof value.value !== 'boolean')
         throw new CommandError('INVALID_ARGUMENT', 'value must be a boolean');
+      if (
+        value.ifLatestIncoming !== undefined &&
+        value.ifLatestIncoming !== null &&
+        (typeof value.ifLatestIncoming !== 'string' ||
+          value.ifLatestIncoming.length === 0 ||
+          value.ifLatestIncoming.length > 200)
+      )
+        throw new CommandError(
+          'INVALID_ARGUMENT',
+          'ifLatestIncoming must be a message ID (up to 200 characters) or null',
+        );
       return {
         command: value.command,
         jid: recipientJid(string(value.jid, 'jid')),
         key: string(value.key, 'key'),
         value: value.value,
+        ...(value.ifLatestIncoming === undefined
+          ? {}
+          : { ifLatestIncoming: value.ifLatestIncoming }),
       };
     default:
       throw new CommandError('INVALID_ARGUMENT', 'Unknown command');
