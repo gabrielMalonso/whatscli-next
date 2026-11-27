@@ -22,6 +22,7 @@ export function publicResponse(data: unknown): Record<string, unknown> {
       code: null,
       attempt: 0,
       nextRetryAt: null,
+      since: 1700000000000,
     },
     receiveContinuity: { status: 'unproven', lastInterruption: null },
     source: 'local',

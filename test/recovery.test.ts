@@ -13,6 +13,7 @@ import type {
   WAMessage,
   WASocket,
 } from 'baileys';
+import { HANDSHAKE_TIMEOUT_MS } from '../src/health.js';
 import type { RecoveryClock } from '../src/health.js';
 import { createRuntime } from '../src/runtime.js';
 import { formatResponse } from '../src/response.js';
@@ -43,6 +44,13 @@ class Clock implements RecoveryClock {
   pending() {
     return this.tasks.filter((task) => !task.cancelled);
   }
+  /** Pending timers other than the connecting-phase handshake watchdog. */
+  retries() {
+    return this.pending().filter((task) => task.delay !== HANDSHAKE_TIMEOUT_MS);
+  }
+  watchdogs() {
+    return this.pending().filter((task) => task.delay === HANDSHAKE_TIMEOUT_MS);
+  }
   async tick() {
     assert.equal(this.pending().length, 1, 'exactly one retry timer');
     const task = this.pending()[0]!;
@@ -53,7 +61,11 @@ class Clock implements RecoveryClock {
   }
 }
 
-function fixture(directory = temporary(), factoryError?: unknown) {
+function fixture(
+  directory = temporary(),
+  factoryError?: unknown,
+  lifecycle?: (record: Record<string, unknown>) => void,
+) {
   const clock = new Clock();
   const sockets: {
     events: EventEmitter;
@@ -69,7 +81,7 @@ function fixture(directory = temporary(), factoryError?: unknown) {
   let sends = 0;
   let pairing = 0;
   const runtime = createRuntime(
-    { dataDir: directory, connect: true },
+    { dataDir: directory, connect: true, ...(lifecycle ? { lifecycle } : {}) },
     (config) => {
       creations++;
       assert.ok(
@@ -285,6 +297,7 @@ test('runtime recovers after over an hour and 160 offline failures using the sam
       code: null,
       attempt: 0,
       nextRetryAt: null,
+      since: f.clock.time,
     });
     assert.equal(f.runtime.snapshot().receiveContinuity.status, 'unproven');
     assert.equal(f.runtime.snapshot().coverage, 'partial');
@@ -295,6 +308,190 @@ test('runtime recovers after over an hour and 160 offline failures using the sam
     );
     assert.deepEqual(f.counts(), { creations: 161, sends: 0, pairing: 0 });
     assert.equal(f.clock.pending().length, 0);
+  } finally {
+    await f.runtime.close();
+  }
+});
+
+test('a socket stalled after a 503 retry is ended by the handshake watchdog and retried with backoff', async () => {
+  const lines: Record<string, unknown>[] = [];
+  const f = fixture(undefined, undefined, (record) => lines.push(record));
+  const created = f.clock.time;
+  try {
+    assert.equal(f.runtime.snapshot().recovery.since, created);
+    f.clock.time += 5_000;
+    f.runtime.start();
+    assert.deepEqual(f.runtime.snapshot().recovery, {
+      state: 'connecting',
+      reason: 'startup',
+      code: null,
+      attempt: 0,
+      nextRetryAt: null,
+      since: created + 5_000,
+    });
+    // The initial connect is bounded too.
+    assert.equal(f.clock.watchdogs().length, 1);
+    await f.clock.tick();
+    const initial = f.sockets[0]!;
+    assert.equal(initial.ends, 1, 'the stalled socket is ended');
+    assert.equal(initial.active, false);
+    assert.deepEqual(f.runtime.snapshot().recovery, {
+      state: 'waiting-retry',
+      reason: 'handshake-timeout',
+      code: null,
+      attempt: 1,
+      nextRetryAt: f.clock.time + 1_000,
+      since: f.clock.time,
+    });
+    assert.equal(
+      f.runtime.snapshot().receiveContinuity.lastInterruption?.reason,
+      'connection-closed',
+    );
+    // end() emitted close; neither it nor a late open owns recovery again.
+    const waiting = f.runtime.snapshot();
+    initial.events.emit('connection.update', { connection: 'open' });
+    assert.deepEqual(f.runtime.snapshot(), waiting);
+    await f.clock.tick();
+    assert.equal(f.counts().creations, 2);
+    f.drop(503);
+    assert.equal(f.runtime.snapshot().recovery.attempt, 2);
+    await f.clock.tick();
+    const retried = f.clock.time;
+    assert.deepEqual(f.runtime.snapshot().recovery, {
+      state: 'connecting',
+      reason: 'service-unavailable',
+      code: 503,
+      attempt: 2,
+      nextRetryAt: null,
+      since: retried,
+    });
+    assert.equal(f.counts().creations, 3);
+    // The replacement socket never reports open or close.
+    assert.equal(f.clock.watchdogs().length, 1);
+    assert.equal(f.clock.retries().length, 0);
+    assert.equal(f.clock.pending()[0]!.delay, HANDSHAKE_TIMEOUT_MS);
+    await f.clock.tick();
+    assert.equal(f.clock.time, retried + HANDSHAKE_TIMEOUT_MS);
+    assert.deepEqual(f.runtime.snapshot().recovery, {
+      state: 'waiting-retry',
+      reason: 'handshake-timeout',
+      code: null,
+      attempt: 3,
+      nextRetryAt: f.clock.time + 4_000,
+      since: f.clock.time,
+    });
+    assert.equal(f.runtime.snapshot().connection, 'close');
+    assert.deepEqual(lines.at(-1), {
+      level: 'lifecycle',
+      event: 'connection',
+      state: 'close',
+      recovery: 'waiting-retry',
+      reason: 'handshake-timeout',
+      disconnectCode: null,
+      attempt: 3,
+    });
+    await f.clock.tick();
+    assert.equal(f.counts().creations, 4);
+    assert.equal(f.runtime.snapshot().recovery.reason, 'handshake-timeout');
+    assert.equal(f.runtime.snapshot().recovery.state, 'connecting');
+    f.emit('connection.update', { connection: 'open' });
+    assert.deepEqual(f.runtime.snapshot().recovery, {
+      state: 'open',
+      reason: null,
+      code: null,
+      attempt: 0,
+      nextRetryAt: null,
+      since: f.clock.time,
+    });
+    assert.equal(f.clock.pending().length, 0);
+    assert.doesNotMatch(encode(lines), /PRIVATE_|Handshake timed out/);
+  } finally {
+    await f.runtime.close();
+  }
+});
+
+test('open, close or a pairing QR before the deadline cancels the handshake watchdog', async () => {
+  for (const outcome of ['open', 'close', 'qr'] as const) {
+    const f = fixture();
+    try {
+      f.runtime.start();
+      const watchdog = f.clock.watchdogs()[0]!;
+      // The SDK's own initial "connecting" update clears qr but is not progress.
+      f.latest().events.emit('connection.update', {
+        connection: 'connecting',
+        qr: undefined,
+      });
+      assert.equal(f.clock.watchdogs().length, 1);
+      if (outcome === 'open')
+        f.emit('connection.update', { connection: 'open' });
+      else if (outcome === 'close') f.drop(503);
+      else f.emit('connection.update', { qr: 'FICTIONAL_QR' });
+      assert.equal(watchdog.cancelled, true, outcome);
+      assert.equal(f.clock.watchdogs().length, 0);
+      const snapshot = f.runtime.snapshot();
+      f.clock.time += HANDSHAKE_TIMEOUT_MS;
+      watchdog.callback(); // Simulate an already queued, cancelled callback.
+      assert.deepEqual(f.runtime.snapshot(), snapshot);
+      assert.equal(f.latest().ends, 0);
+      assert.equal(f.counts().creations, 1);
+      assert.equal(
+        f.runtime.snapshot().recovery.state,
+        { open: 'open', close: 'waiting-retry', qr: 'connecting' }[outcome],
+      );
+    } finally {
+      await f.runtime.close();
+    }
+  }
+});
+
+test('stop while connecting cancels the handshake watchdog', async () => {
+  const f = fixture();
+  f.runtime.start();
+  const watchdog = f.clock.watchdogs()[0]!;
+  f.clock.time += 1_000;
+  await f.runtime.stop();
+  assert.equal(watchdog.cancelled, true);
+  const stopped = f.runtime.snapshot();
+  assert.equal(stopped.recovery.state, 'stopping');
+  assert.equal(stopped.recovery.since, f.clock.time);
+  watchdog.callback();
+  assert.deepEqual(f.runtime.snapshot(), stopped);
+  assert.equal(f.clock.pending().length, 0);
+  assert.equal(f.counts().creations, 1);
+  await f.runtime.close();
+});
+
+test('a stale handshake watchdog never ends or times out a replacement socket', async () => {
+  const f = fixture();
+  try {
+    f.runtime.start();
+    const stale = f.clock.watchdogs()[0]!;
+    f.clock.time += 10_000;
+    await f.runtime.execute({ command: 'reconnect' });
+    assert.equal(stale.cancelled, true);
+    assert.equal(f.counts().creations, 2);
+    const replacement = f.latest();
+    const current = f.clock.watchdogs();
+    assert.equal(current.length, 1);
+    const snapshot = f.runtime.snapshot();
+    assert.equal(snapshot.recovery.reason, 'manual-reconnect');
+    assert.equal(snapshot.recovery.since, f.clock.time);
+    f.clock.time += HANDSHAKE_TIMEOUT_MS;
+    stale.callback();
+    assert.deepEqual(f.runtime.snapshot(), snapshot);
+    assert.equal(replacement.ends, 0);
+    assert.equal(current[0]!.cancelled, false);
+    // A watchdog armed during an automatic retry is replaced the same way.
+    f.drop(428);
+    const retryWatchdog = current[0]!;
+    assert.equal(retryWatchdog.cancelled, true);
+    await f.clock.tick();
+    const next = f.clock.watchdogs();
+    assert.equal(next.length, 1);
+    retryWatchdog.callback();
+    assert.equal(f.runtime.snapshot().recovery.state, 'connecting');
+    assert.equal(f.latest().ends, 0);
+    assert.equal(f.counts().creations, 3);
   } finally {
     await f.runtime.close();
   }
@@ -349,6 +546,7 @@ test('all rc14 terminal reasons and unknown errors stop retries with safe action
         code: code ?? null,
         attempt: 0,
         nextRetryAt: null,
+        since: f.clock.time,
       });
       assert.equal(f.clock.pending().length, 0);
       assert.equal(
@@ -410,7 +608,8 @@ test('duplicates and stale socket events cannot reschedule, persist credentials 
   );
   await f.clock.tick();
   old.events.emit('connection.update', { connection: 'close' });
-  assert.equal(f.clock.pending().length, 0);
+  assert.equal(f.clock.retries().length, 0);
+  assert.equal(f.clock.watchdogs().length, 1, 'only the new socket is bounded');
   assert.equal(f.counts().creations, 2);
   assert.deepEqual(
     await f.runtime.execute({
@@ -442,7 +641,7 @@ test('manual reconnect cancels a pending timer and concurrent reconnects share o
     ]);
     cancelled.callback();
     assert.equal(f.counts().creations, 2);
-    assert.equal(f.clock.pending().length, 0);
+    assert.equal(f.clock.retries().length, 0);
     const previous = f.latest();
     const wait = gate();
     f.waitEnd(wait.promise);
@@ -451,7 +650,7 @@ test('manual reconnect cancels a pending timer and concurrent reconnects share o
     assert.equal(previous.ends, 1);
     assert.equal(f.counts().creations, 2);
     previous.events.emit('connection.update', { connection: 'close' });
-    assert.equal(f.clock.pending().length, 0);
+    assert.equal(f.clock.pending().length, 0, 'no watchdog during cleanup');
     wait.release();
     await Promise.all([first, second]);
     assert.equal(f.counts().creations, 3);

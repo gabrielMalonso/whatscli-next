@@ -39,7 +39,7 @@ The existing `connection` field retains its coarse connection status. Use `recov
 | `recovery.state`        | Meaning and next step                                                                                                |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `offline`               | Intentionally offline. Local queries work. To enable network access, stop normally and restart without `--offline`.  |
-| `connecting`            | Initial connection, retry, or replacement/cleanup in progress. Wait for the outcome.                                 |
+| `connecting`            | Initial connection, retry, or replacement/cleanup in progress. Wait for the outcome; a stalled handshake times out.  |
 | `open`                  | The SDK reported an open connection. Check independent observations and receipts for receiving or delivery evidence. |
 | `waiting-retry`         | A retry is scheduled at `nextRetryAt`. Allow automatic recovery to proceed.                                          |
 | `intervention-required` | Automatic recovery stopped. Investigate `reason` and `code` before reconnecting or restarting.                       |
@@ -52,6 +52,7 @@ The existing `connection` field retains its coarse connection status. Use `recov
 - `reason` and `code` — the current recovery reason and code, or null when unknown or inapplicable.
 - `attempt` — the automatic retry count since the last open or manual reconnect.
 - `nextRetryAt` — the scheduled retry time, or null when not waiting.
+- `since` — when the runtime entered the current recovery state.
 
 For `attempt`:
 
@@ -60,6 +61,8 @@ For `attempt`:
 - Initial and manual connection attempts use zero.
 
 `nextRetryAt` is a local Unix timestamp in milliseconds and is present only while waiting.
+
+`since` is a local Unix timestamp in milliseconds. It changes on every recovery transition, including each new retry attempt and a manual reconnect, so a stale `since` shows how long the runtime has been in one state.
 
 An open connection resets current recovery state. The `issues` field retains historical entries, including possible `connection-stopped-review-required` entries from earlier failures.
 
@@ -75,6 +78,12 @@ For pinned rc14, these disconnect codes trigger automatic retries:
 | 515  | Restart required             |
 
 Retry delays are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds without an attempt limit.
+
+### Handshake timeout
+
+Every new socket (startup, automatic retry, or manual reconnect) must report open, close, or a pairing QR within 4 minutes. The bound sits above the SDK's own worst case before open (connect timeout plus post-login queries that still end in open), so a slow login is never cut short. Otherwise the runtime ends that socket and handles it like an observed close with reason `handshake-timeout` and code null: `attempt` increases and the next retry uses the same backoff. This prevents a socket that never reports an outcome from leaving recovery in `connecting` indefinitely.
+
+Open, close, a pairing QR, stop, manual reconnect, and a disconnect requiring intervention cancel the timeout. It applies only to the socket that started it; it never ends a replacement. Waiting for a QR scan or pairing code is not bounded by this timeout. Cleanup of a previous socket during replacement is also not bounded.
 
 Code 515 can complete the SDK's pairing restart. It also waits at least one second to prevent repeated-restart spin.
 
@@ -159,16 +168,16 @@ During outages:
 
 A background `start` appends the daemon's stderr to the private `daemon.log` in the data directory. Each line is one JSON object whose first field, `at`, is an ISO-8601 UTC timestamp. Lifecycle lines carry `level: "lifecycle"` and one `event`:
 
-| `event`             | Fields                                                     | Meaning                                                               |
-| ------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
-| `startup`           | `pid`, `build` (fingerprint or null), `network`            | The process holds the writer lock for this data directory.            |
-| `ready`             | `pid`                                                      | The control socket is listening and the runtime has started.          |
-| `connection`        | `state`, `recovery`, `reason`, `disconnectCode`, `attempt` | The SDK reported a connection state change, with the recovery result. |
-| `signal`            | `signal` (`SIGINT` or `SIGTERM`)                           | A termination signal was received; shutdown follows.                  |
-| `shutdown-started`  | `reason` (`stop-command`, a signal, or `startup-failed`)   | Cleanup began.                                                        |
-| `shutdown-complete` | `reason`                                                   | SDK cleanup, database closure and socket removal finished.            |
-| `shutdown-failed`   | `code`                                                     | Cleanup failed; the process exits with code 1.                        |
-| `exit`              | `pid`, `code`                                              | The process is exiting with that code.                                |
+| `event`             | Fields                                                     | Meaning                                                                                                                                           |
+| ------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `startup`           | `pid`, `build` (fingerprint or null), `network`            | The process holds the writer lock for this data directory.                                                                                        |
+| `ready`             | `pid`                                                      | The control socket is listening and the runtime has started.                                                                                      |
+| `connection`        | `state`, `recovery`, `reason`, `disconnectCode`, `attempt` | The SDK reported a connection state change, or the runtime timed out a stalled handshake (`reason: handshake-timeout`), with the recovery result. |
+| `signal`            | `signal` (`SIGINT` or `SIGTERM`)                           | A termination signal was received; shutdown follows.                                                                                              |
+| `shutdown-started`  | `reason` (`stop-command`, a signal, or `startup-failed`)   | Cleanup began.                                                                                                                                    |
+| `shutdown-complete` | `reason`                                                   | SDK cleanup, database closure and socket removal finished.                                                                                        |
+| `shutdown-failed`   | `code`                                                     | Cleanup failed; the process exits with code 1.                                                                                                    |
+| `exit`              | `pid`, `code`                                              | The process is exiting with that code.                                                                                                            |
 
 Lines without `level: "lifecycle"` are the existing diagnostics and errors described in [Privacy](privacy.md#diagnostics). A log that ends without an `exit` line means the process was killed without running its exit handlers, for example by `SIGKILL` or an out-of-memory or cgroup kill. A `signal` line followed by `shutdown-complete` and `exit` shows an orderly signal-driven stop rather than a crash.
 

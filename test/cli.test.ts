@@ -226,7 +226,9 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
   assert.equal(first.ok, true);
   assert.equal(first.connection, 'offline');
   assert.equal(first.running, true);
-  assert.deepEqual(first.recovery, {
+  const { since, ...recovery } = first.recovery as Record<string, unknown>;
+  assert.ok(Number.isSafeInteger(since));
+  assert.deepEqual(recovery, {
     state: 'offline',
     reason: null,
     code: null,

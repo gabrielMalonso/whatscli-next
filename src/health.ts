@@ -23,8 +23,22 @@ export function reconnectDelay(
   )
     return undefined;
   // Restart-required also waits: repeated 515s must not spin, even across brief opens.
+  return retryDelay(attempts);
+}
+
+/** Exponential backoff shared by observed disconnects and handshake timeouts. */
+export function retryDelay(attempts: number): number {
   return Math.min(1_000 * 2 ** Math.min(attempts, 5), 30_000);
 }
+
+/**
+ * A socket that emits neither open, close nor a pairing QR within this bound is treated
+ * as closed. It sits above the SDK's worst case before open: the 20 s connect timeout,
+ * then sequential post-login queries (prekey count up to 60 s, prekey upload up to 30 s,
+ * passive IQ up to 60 s) whose timeouts still end in open. A slow but progressing login
+ * is never cut short; only a socket that has stopped progressing is.
+ */
+export const HANDSHAKE_TIMEOUT_MS = 240_000;
 
 export function disconnectReason(code: number | undefined) {
   switch (code) {
@@ -52,7 +66,9 @@ export function disconnectReason(code: number | undefined) {
 }
 
 type Reason = ReturnType<typeof disconnectReason>;
-export type Recovery =
+/** Reasons that schedule an automatic retry. */
+export type RetryReason = Reason | 'handshake-timeout';
+export type RecoveryState =
   | {
       state: 'offline' | 'open' | 'stopping';
       reason: null;
@@ -62,15 +78,15 @@ export type Recovery =
     }
   | {
       state: 'connecting';
-      reason: Reason | 'startup' | 'manual-reconnect';
+      reason: RetryReason | 'startup' | 'manual-reconnect';
       code: number | null;
       attempt: number;
       nextRetryAt: null;
     }
   | {
       state: 'waiting-retry';
-      reason: Reason;
-      code: number;
+      reason: RetryReason;
+      code: number | null;
       attempt: number;
       nextRetryAt: number;
     }
@@ -82,13 +98,16 @@ export type Recovery =
       nextRetryAt: null;
     };
 
+/** `since` is the local clock time (Unix ms) at which the runtime entered this recovery state. */
+export type Recovery = RecoveryState & { since: number };
+
 export type ReceiveInterruption = {
   at: number;
   reason:
     'runtime-start' | 'runtime-stop' | 'connection-closed' | 'manual-reconnect';
 };
 
-/** The runtime needs only one cancellable timer; tests inject time without a network or real waits. */
+/** Retry and handshake-watchdog timers never overlap with each other; other callers may schedule concurrently. Tests inject time without a network or real waits. */
 export type RecoveryClock = {
   now(): number;
   schedule(callback: () => void, delay: number): () => void;
