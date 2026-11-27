@@ -232,15 +232,46 @@ export function createRuntime(
       }
     });
   }
+  // `issues` keeps every code ever recorded; `issue-log` adds timing from this build onward.
   const issues = new Set(store.get<string[]>('probe', 'issues') ?? []);
+  const issueLog = readIssueLog(store.get<unknown>('probe', 'issue-log'));
+  // Codes observed by this runtime process; nothing here is ever cleared by elapsed time.
+  const sessionIssues = new Set<string>();
   const issue = (name: string): void => {
+    const now = clock.now();
+    const previous = issueLog.get(name);
+    issueLog.set(
+      name,
+      previous
+        ? { ...previous, count: previous.count + 1, lastAt: now }
+        : // A code recorded before timing was kept has an unknown first time and total.
+          { count: 1, firstAt: issues.has(name) ? null : now, lastAt: now },
+    );
     issues.add(name);
+    sessionIssues.add(name);
     try {
-      store.set('probe', 'issues', [...issues]);
-      store.event('diagnostic', { issue: name });
+      store.transaction(() => {
+        store.set('probe', 'issues', [...issues]);
+        store.set('probe', 'issue-log', Object.fromEntries(issueLog));
+        store.event('diagnostic', { issue: name });
+      });
     } catch {
       fatal();
     }
+  };
+  /** Conservative: active means current state or an observation by this process, never inferred recovery. */
+  const issueActive = (code: string): boolean =>
+    code === 'connection-stopped-review-required'
+      ? recovery.state === 'intervention-required'
+      : sessionIssues.has(code);
+  const issueDetail = (code: string) => {
+    const logged = issueLog.get(code);
+    return {
+      code,
+      count: logged?.count ?? null,
+      firstAt: logged?.firstAt ?? null,
+      lastAt: logged?.lastAt ?? null,
+    };
   };
   const diagnostics = new Writable({
     write(chunk: Buffer, _encoding, next) {
@@ -892,6 +923,10 @@ export function createRuntime(
           allowedJid: allowedJid ?? null,
           networkEnabled: options.connect,
           qrAvailable: qr !== undefined,
+          issueHistory: [...issues].map((code) => ({
+            ...issueDetail(code),
+            active: issueActive(code),
+          })),
         };
       case 'chats':
         return store.chats(command.limit, command.offset, command);
@@ -1436,6 +1471,7 @@ export function createRuntime(
         appState: 'unknown' as const,
         receivedPendingNotifications,
         issues: [...issues],
+        activeIssues: [...issues].filter(issueActive).map(issueDetail),
       };
     },
     stop: shutdown,
@@ -1458,6 +1494,30 @@ export function createRuntime(
       return closing;
     },
   };
+}
+
+type IssueRecord = { count: number; firstAt: number | null; lastAt: number };
+
+/** Malformed or unfamiliar entries are treated as untimed history rather than guessed. */
+function readIssueLog(value: unknown): Map<string, IssueRecord> {
+  const log = new Map<string, IssueRecord>();
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return log;
+  const time = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  for (const [code, entry] of Object.entries(value)) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const { count, firstAt, lastAt } = entry as Record<string, unknown>;
+    if (
+      typeof count === 'number' &&
+      Number.isSafeInteger(count) &&
+      count > 0 &&
+      time(lastAt) &&
+      (firstAt === null || (time(firstAt) && firstAt <= lastAt))
+    )
+      log.set(code, { count, firstAt, lastAt });
+  }
+  return log;
 }
 
 function transportClosed(ws: WASocket['ws']): Promise<void> {

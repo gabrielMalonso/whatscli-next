@@ -1340,3 +1340,132 @@ test('credential/key persistence failures fail closed rather than entering trans
     assert.doesNotMatch(child.stderr, /PRIVATE_/);
   }
 });
+
+test('issues keep timed history across restarts while activity tracks current state and this process only', async () => {
+  const directory = temporary();
+  const seed = new Store(directory);
+  // Recorded by an earlier build that kept codes only; one malformed log entry is ignored.
+  seed.set('probe', 'issues', ['initial-sync-timed-out']);
+  seed.set('probe', 'issue-log', {
+    'initial-sync-timed-out': { count: 'many', lastAt: 1 },
+  });
+  seed.close();
+  const decrypt = (f: ReturnType<typeof fixture>) => {
+    f.latest().config.logger!.warn('failed to decrypt message');
+  };
+  const status = async (f: ReturnType<typeof fixture>) =>
+    (
+      (await f.runtime.execute({ command: 'status' })) as {
+        issueHistory: unknown[];
+      }
+    ).issueHistory;
+  const first = fixture(directory);
+  try {
+    const t0 = first.clock.time;
+    assert.deepEqual(first.runtime.snapshot().issues, [
+      'initial-sync-timed-out',
+    ]);
+    assert.deepEqual(first.runtime.snapshot().activeIssues, []);
+    assert.deepEqual(await status(first), [
+      {
+        code: 'initial-sync-timed-out',
+        count: null,
+        firstAt: null,
+        lastAt: null,
+        active: false,
+      },
+    ]);
+    first.runtime.start();
+    first.drop(401);
+    first.clock.time += 1000;
+    decrypt(first);
+    first.clock.time += 1000;
+    decrypt(first);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const decryption = {
+      code: 'decryption-or-integrity-failure',
+      count: 2,
+      firstAt: t0 + 1000,
+      lastAt: t0 + 2000,
+    };
+    const stopped = {
+      code: 'connection-stopped-review-required',
+      count: 1,
+      firstAt: t0,
+      lastAt: t0,
+    };
+    assert.deepEqual(first.runtime.snapshot().activeIssues, [
+      stopped,
+      decryption,
+    ]);
+    // The stop no longer holds once recovery leaves intervention; SDK evidence has no end signal.
+    await first.runtime.execute({ command: 'reconnect' });
+    first.emit('connection.update', { connection: 'open' });
+    const open = first.runtime.snapshot();
+    assert.deepEqual(open.issues, [
+      'initial-sync-timed-out',
+      'connection-stopped-review-required',
+      'decryption-or-integrity-failure',
+    ]);
+    assert.deepEqual(open.activeIssues, [decryption]);
+    assert.deepEqual(
+      formatResponse('status', { ok: true, data: null, ...open }, 'compact'),
+      {
+        ok: true,
+        data: null,
+        connection: 'open',
+        receiveContinuity: open.receiveContinuity,
+        source: 'local',
+        coverage: 'partial',
+        appState: 'unknown',
+        receivedPendingNotifications: false,
+        activeIssues: [decryption],
+        inactiveIssues: 2,
+      },
+    );
+  } finally {
+    await first.runtime.close();
+  }
+  const second = fixture(directory);
+  try {
+    second.runtime.start();
+    assert.deepEqual(second.runtime.snapshot().activeIssues, []);
+    assert.deepEqual(await status(second), [
+      {
+        code: 'initial-sync-timed-out',
+        count: null,
+        firstAt: null,
+        lastAt: null,
+        active: false,
+      },
+      {
+        code: 'connection-stopped-review-required',
+        count: 1,
+        firstAt: 1700000000000,
+        lastAt: 1700000000000,
+        active: false,
+      },
+      {
+        code: 'decryption-or-integrity-failure',
+        count: 2,
+        firstAt: 1700000001000,
+        lastAt: 1700000002000,
+        active: false,
+      },
+    ]);
+    second.clock.time += 5000;
+    second.latest().config.logger!.warn('Timeout in AwaitingInitialSync');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // A code recorded before timing was kept never invents its first time or total.
+    assert.deepEqual(second.runtime.snapshot().activeIssues, [
+      {
+        code: 'initial-sync-timed-out',
+        count: 1,
+        firstAt: null,
+        lastAt: 1700000005000,
+      },
+    ]);
+  } finally {
+    await second.runtime.close();
+  }
+});

@@ -155,7 +155,9 @@ test(
       const status = await cli('status', '--output', mode);
       assert.equal(status.pid, a.status.pid);
       assert.deepEqual(build(status), { fingerprint: fingerprintA });
-      assert.deepEqual(status.recovery, a.status.recovery);
+      // Compact omits only the documented steady offline recovery default.
+      if (mode === 'full') assert.deepEqual(status.recovery, a.status.recovery);
+      else assert.equal('recovery' in status, false);
       assert.deepEqual(status.receiveContinuity, a.status.receiveContinuity);
       const existing = await cli('start', '--offline', '--output', mode);
       assert.equal(existing.alreadyRunning, true);

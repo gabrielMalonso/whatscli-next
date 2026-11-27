@@ -14,9 +14,16 @@ function measure(value: unknown) {
 }
 const reduction = (full: number, compact: number): number =>
   Number((((full - compact) / full) * 100).toFixed(2));
+/** Everything except `data`: running/connection state, recovery, issues and provenance. */
+function envelope(value: Record<string, unknown>) {
+  const { data: _data, ...rest } = value;
+  return measure(rest);
+}
 const scenarios = responseFixtures.map(({ name, action, response }) => {
-  const full = measure(formatResponse(action, response, 'full'));
-  const compact = measure(formatResponse(action, response, 'compact'));
+  const fullResponse = formatResponse(action, response, 'full');
+  const compactResponse = formatResponse(action, response, 'compact');
+  const full = measure(fullResponse);
+  const compact = measure(compactResponse);
   return {
     scenario: name,
     full,
@@ -24,6 +31,10 @@ const scenarios = responseFixtures.map(({ name, action, response }) => {
     reductionPercent: {
       bytes: reduction(full.bytes, compact.bytes),
       tokens: reduction(full.tokens, compact.tokens),
+    },
+    envelopeBytes: {
+      full: envelope(fullResponse).bytes,
+      compact: envelope(compactResponse).bytes,
     },
   };
 });

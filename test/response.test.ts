@@ -6,10 +6,14 @@ import { messageOutput } from '../src/output.js';
 import {
   conflict,
   history,
+  issueHistory,
   lid,
+  liveResponse,
+  observability,
   pn,
   publicResponse,
   responseFixtures,
+  status,
   uncertain,
 } from './fixtures/responses.js';
 
@@ -18,14 +22,51 @@ function rows(value: unknown): Record<string, unknown>[] {
   return value.map(object);
 }
 
+const steady = {
+  reason: null,
+  code: null,
+  attempt: 0,
+  nextRetryAt: null,
+};
+
+/** Checks the documented compact envelope: only steady recovery is omitted and inactive issues are counted. */
+function assertEnvelope(
+  compact: Record<string, unknown>,
+  full: Record<string, unknown>,
+): void {
+  const { data: _data, recovery, issues, activeIssues, ...evidence } = full;
+  for (const [field, value] of Object.entries(evidence))
+    assert.deepEqual(compact[field], value, `${field} kept`);
+  if ('recovery' in compact) assert.deepEqual(compact.recovery, recovery);
+  else {
+    const { since, ...current } = object(recovery);
+    assert.deepEqual(current, { state: full.connection, ...steady });
+    assert.equal(typeof since, 'number');
+  }
+  assert.ok(Array.isArray(issues) && Array.isArray(activeIssues));
+  assert.equal('issues' in compact, false);
+  assert.deepEqual(compact.activeIssues ?? [], activeIssues);
+  assert.notDeepEqual(compact.activeIssues, []);
+  assert.equal(
+    compact.inactiveIssues ?? 0,
+    issues.length - activeIssues.length,
+  );
+  assert.notEqual(compact.inactiveIssues, 0);
+  assert.deepEqual(
+    Object.keys(compact).filter(
+      (field) =>
+        !(field in full) && field !== 'inactiveIssues' && field !== 'data',
+    ),
+    [],
+  );
+}
+
 test('full keeps the existing projection; compact is pure and keeps envelope evidence', () => {
   for (const { action, response } of responseFixtures) {
     const before = JSON.stringify(response);
     assert.equal(formatResponse(action, response, 'full'), response);
     const compact = formatResponse(action, response, 'compact');
-    const { data: _full, ...envelope } = response;
-    const { data: _compact, ...compactEnvelope } = compact;
-    assert.deepEqual(compactEnvelope, envelope);
+    assertEnvelope(compact, response);
     assert.equal(JSON.stringify(response), before);
     assert.doesNotMatch(
       JSON.stringify(compact),
@@ -303,7 +344,9 @@ test('uncertain intent, every receipt stage, zero status and errors are preserve
       },
     ]) {
       const response = publicResponse(receipt);
-      assert.deepEqual(formatResponse(action, response, 'compact'), response);
+      const compact = formatResponse(action, response, 'compact');
+      assert.deepEqual(compact.data, response.data);
+      assertEnvelope(compact, response);
     }
     assert.deepEqual(
       formatResponse(action, publicResponse(null), 'compact').data,
@@ -341,4 +384,233 @@ test('Unicode, quotes, newlines and all content lengths are unchanged with no im
   assert.equal(json.split('\n').length, 1);
   const parsed = object(JSON.parse(json));
   assert.equal(rows(parsed.data)[0]?.text, text);
+});
+
+test('compact omits recovery only at the exact steady open/offline default', () => {
+  const base = object(liveResponse([]).recovery);
+  const cases: [Record<string, unknown>, unknown, boolean][] = [
+    [base, 'open', true],
+    [{ ...base, state: 'offline' }, 'offline', true],
+    [{ ...base, state: 'offline' }, 'open', false],
+    [base, 'close', false],
+    [{ ...base, attempt: 1 }, 'open', false],
+    [{ ...base, reason: 'manual-reconnect' }, 'open', false],
+    [{ ...base, code: 428 }, 'open', false],
+    [{ ...base, nextRetryAt: 1700000001000 }, 'open', false],
+    [{ ...base, since: null }, 'open', false],
+    [{ ...base, note: 'unfamiliar field' }, 'open', false],
+    [
+      {
+        state: 'connecting',
+        reason: 'startup',
+        code: null,
+        attempt: 0,
+        nextRetryAt: null,
+        since: 1,
+      },
+      'connecting',
+      false,
+    ],
+    [
+      {
+        state: 'waiting-retry',
+        reason: 'connection-closed',
+        code: 428,
+        attempt: 2,
+        nextRetryAt: 1700000004000,
+        since: 1,
+      },
+      'close',
+      false,
+    ],
+    [
+      {
+        state: 'intervention-required',
+        reason: 'logged-out',
+        code: 401,
+        attempt: 0,
+        nextRetryAt: null,
+        since: 1,
+      },
+      'close',
+      false,
+    ],
+  ];
+  for (const [recovery, connection, omitted] of cases) {
+    const response = { ...liveResponse(null), recovery, connection };
+    const compact = formatResponse('request', response, 'compact');
+    assert.equal(compact.connection, connection);
+    if (omitted) assert.equal('recovery' in compact, false);
+    else assert.deepEqual(compact.recovery, recovery);
+    assert.equal(
+      JSON.stringify(formatResponse('request', response, 'full')),
+      JSON.stringify(response),
+    );
+  }
+});
+
+test('compact lists active issues with timing and counts only inactive history', () => {
+  const active = {
+    code: 'decryption-or-integrity-failure',
+    count: 3,
+    firstAt: 1700000000000,
+    lastAt: 1700000060000,
+  };
+  const cases: [Record<string, unknown>, Record<string, unknown>][] = [
+    [{ issues: [], activeIssues: [] }, {}],
+    [
+      {
+        issues: ['decryption-or-integrity-failure', 'initial-sync-timed-out'],
+        activeIssues: [],
+      },
+      { inactiveIssues: 2 },
+    ],
+    [
+      {
+        issues: ['decryption-or-integrity-failure', 'initial-sync-timed-out'],
+        activeIssues: [active],
+      },
+      { activeIssues: [active], inactiveIssues: 1 },
+    ],
+    [
+      { issues: ['decryption-or-integrity-failure'], activeIssues: [active] },
+      { activeIssues: [active] },
+    ],
+    // Older daemon: no activity evidence, so history stays listed unchanged.
+    [
+      { issues: ['initial-sync-timed-out'] },
+      { issues: ['initial-sync-timed-out'] },
+    ],
+    [{ issues: [] }, {}],
+    // Inconsistent or malformed activity is never trusted to hide history.
+    [
+      { issues: ['initial-sync-timed-out'], activeIssues: [active] },
+      { issues: ['initial-sync-timed-out'], activeIssues: [active] },
+    ],
+    [
+      {
+        issues: ['decryption-or-integrity-failure'],
+        activeIssues: [active, active],
+      },
+      {
+        issues: ['decryption-or-integrity-failure'],
+        activeIssues: [active, active],
+      },
+    ],
+    [
+      { issues: ['decryption-or-integrity-failure'], activeIssues: null },
+      { issues: ['decryption-or-integrity-failure'], activeIssues: null },
+    ],
+  ];
+  for (const [issues, expected] of cases) {
+    const {
+      issues: _issues,
+      activeIssues: _active,
+      ...base
+    } = liveResponse(null);
+    const response = { ...base, ...issues };
+    const compact = formatResponse('request', response, 'compact');
+    assert.deepEqual(
+      Object.fromEntries(
+        ['issues', 'activeIssues', 'inactiveIssues']
+          .filter((field) => field in compact)
+          .map((field) => [field, compact[field]]),
+      ),
+      expected,
+    );
+    assert.equal(formatResponse('request', response, 'full'), response);
+  }
+});
+
+test('compact status summarizes observability and leaves the timed issue history to full output', () => {
+  for (const action of ['status', 'start']) {
+    const response = liveResponse(
+      action === 'start' ? { ...status, alreadyRunning: true } : status,
+    );
+    const before = JSON.stringify(response);
+    assert.equal(
+      JSON.stringify(formatResponse(action, response, 'full')),
+      before,
+    );
+    const compact = object(formatResponse(action, response, 'compact').data);
+    assert.deepEqual(compact.observability, {
+      configured: true,
+      enabled: true,
+      effective: true,
+      degraded: false,
+      dropped: 0,
+      uncertain: 0,
+      captureCompleteness: 'unknown',
+    });
+    assert.equal('issueHistory' in compact, false);
+    const {
+      observability: _observability,
+      issueHistory: _issueHistory,
+      ...rest
+    } = object(response.data);
+    for (const [field, value] of Object.entries(rest))
+      assert.deepEqual(compact[field], value, `${field} kept`);
+    assert.equal(JSON.stringify(response), before);
+  }
+  const failing = {
+    ...observability,
+    effective: false,
+    degraded: true,
+    dropped: 4,
+    uncertain: 1,
+    cleanupFailures: 2,
+    hashingFailures: 1,
+    preferenceWatchDegraded: true,
+  };
+  assert.deepEqual(
+    object(
+      formatResponse(
+        'status',
+        liveResponse({ ...status, observability: failing }),
+        'compact',
+      ).data,
+    ).observability,
+    {
+      configured: true,
+      enabled: true,
+      effective: false,
+      degraded: true,
+      dropped: 4,
+      uncertain: 1,
+      captureCompleteness: 'unknown',
+      cleanupFailures: 2,
+      hashingFailures: 1,
+      preferenceWatchDegraded: true,
+    },
+  );
+  // Unconfigured capture keeps its explicit null/false values.
+  assert.deepEqual(
+    object(
+      formatResponse(
+        'status',
+        liveResponse({
+          ...status,
+          observability: { ...observability, configured: null, enabled: false },
+        }),
+        'compact',
+      ).data,
+    ).observability,
+    {
+      configured: null,
+      enabled: false,
+      effective: true,
+      degraded: false,
+      dropped: 0,
+      uncertain: 0,
+      captureCompleteness: 'unknown',
+    },
+  );
+  // A stopped status from the CLI has no envelope or observability to compact.
+  const stopped = {
+    ok: true,
+    running: false,
+    data: { running: false, alreadyStopped: false },
+  };
+  assert.deepEqual(formatResponse('status', stopped, 'compact'), stopped);
+  assert.ok(issueHistory.every((entry) => entry.active === false));
 });

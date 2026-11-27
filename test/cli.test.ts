@@ -241,7 +241,9 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
   });
   for (const mode of ['full', 'compact']) {
     const status = await cli(directory, 'status', '--output', mode);
-    assert.deepEqual(status.recovery, first.recovery);
+    // Compact omits only the documented steady offline recovery default.
+    if (mode === 'full') assert.deepEqual(status.recovery, first.recovery);
+    else assert.equal('recovery' in status, false);
     assert.deepEqual(status.receiveContinuity, first.receiveContinuity);
   }
   const contact = await cli(directory, 'contact', '--jid', '123450001@lid');
