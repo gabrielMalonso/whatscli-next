@@ -299,12 +299,13 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
     '1',
   );
   assert.deepEqual(
-    (compactMessages.data as { messages: { id: string }[] }).messages.map(
-      (message) => message.id,
-    ),
-    ['example-1'],
+    (compactMessages.data as { jid: string; id: string }[]).map((message) => [
+      message.jid,
+      message.id,
+    ]),
+    [[jid, 'example-1']],
   );
-  assert.equal((compactMessages.data as { jid: string }).jid, jid);
+  assert.equal('jid' in compactMessages, false);
   const compactNextPage = await cli(
     directory,
     'messages',
@@ -317,7 +318,7 @@ test('offline CLI lifecycle, pagination, literal Unicode search, validation and 
     '--offset',
     '2',
   );
-  assert.deepEqual(compactNextPage.data, { jid, messages: [] });
+  assert.deepEqual(compactNextPage.data, []);
   const explicitFull = await cli(
     directory,
     'messages',

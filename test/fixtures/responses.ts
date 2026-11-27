@@ -184,7 +184,6 @@ export const responseFixtures: {
   name: string;
   action: string;
   response: Record<string, unknown>;
-  jid?: string;
 }[] = [
   {
     name: 'chats-states-pending',
@@ -194,7 +193,6 @@ export const responseFixtures: {
   {
     name: 'history-quotes-cards-deletions',
     action: 'messages',
-    jid: pn,
     response: publicResponse(history),
   },
   {
