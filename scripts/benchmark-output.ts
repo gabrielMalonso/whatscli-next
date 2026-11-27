@@ -14,9 +14,9 @@ function measure(value: unknown) {
 }
 const reduction = (full: number, compact: number): number =>
   Number((((full - compact) / full) * 100).toFixed(2));
-const scenarios = responseFixtures.map(({ name, action, response, jid }) => {
-  const full = measure(formatResponse(action, response, 'full', jid));
-  const compact = measure(formatResponse(action, response, 'compact', jid));
+const scenarios = responseFixtures.map(({ name, action, response }) => {
+  const full = measure(formatResponse(action, response, 'full'));
+  const compact = measure(formatResponse(action, response, 'compact'));
   return {
     scenario: name,
     full,

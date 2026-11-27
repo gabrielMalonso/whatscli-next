@@ -19,10 +19,10 @@ function rows(value: unknown): Record<string, unknown>[] {
 }
 
 test('full keeps the existing projection; compact is pure and keeps envelope evidence', () => {
-  for (const { action, response, jid } of responseFixtures) {
+  for (const { action, response } of responseFixtures) {
     const before = JSON.stringify(response);
-    assert.equal(formatResponse(action, response, 'full', jid), response);
-    const compact = formatResponse(action, response, 'compact', jid);
+    assert.equal(formatResponse(action, response, 'full'), response);
+    const compact = formatResponse(action, response, 'compact');
     const { data: _full, ...envelope } = response;
     const { data: _compact, ...compactEnvelope } = compact;
     assert.deepEqual(compactEnvelope, envelope);
@@ -85,27 +85,73 @@ test('chat true/false/null, zero/manual/unknown counters, activity and pending i
   assert.deepEqual(object(compactMutation.localChat).pending, full[2]?.pending);
 });
 
-test('history lifts only the exact chat and preserves direction, receipts, quote/card provenance and deletions', () => {
-  const data = object(
-    formatResponse('messages', publicResponse(history), 'compact', pn).data,
+/** Restores the documented compact absent = default contract for message rows. */
+function expandMessage(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    participant: null,
+    deletion: { status: 'unknown', source: null, observedAt: null },
+    stubType: null,
+    status: null,
+    quote: null,
+    contacts: null,
+    media: null,
+    ...row,
+  };
+}
+
+test('messages and search keep data as an array of rows with exact JIDs in both modes', () => {
+  const search = responseFixtures.find((value) => value.action === 'search')!;
+  for (const action of ['messages', 'search']) {
+    for (const response of [
+      publicResponse(history),
+      search.response,
+      publicResponse([]),
+    ]) {
+      const before = JSON.stringify(response);
+      const full = formatResponse(action, response, 'full');
+      assert.equal(JSON.stringify(full), before, 'full stays byte-identical');
+      const compact = formatResponse(action, response, 'compact');
+      assert.ok(Array.isArray(compact.data), `${action} compact data`);
+      assert.equal('jid' in compact, false, 'no hoisted envelope JID');
+      const fullRows = rows(response.data);
+      const compactRows = rows(compact.data);
+      assert.equal(compactRows.length, fullRows.length);
+      assert.deepEqual(
+        compactRows.map((row) => [row.jid, row.id, row.fromMe]),
+        fullRows.map((row) => [row.jid, row.id, row.fromMe]),
+      );
+      assert.deepEqual(compactRows.map(expandMessage), fullRows);
+      assert.equal(JSON.stringify(response), before);
+    }
+  }
+  assert.deepEqual(
+    formatResponse('messages', publicResponse([]), 'compact').data,
+    [],
   );
-  assert.equal(data.jid, pn);
-  const messages = rows(data.messages);
+});
+
+test('compact history preserves direction, receipts, quote/card provenance and deletion evidence', () => {
+  const messages = rows(
+    formatResponse('messages', publicResponse(history), 'compact').data,
+  );
   for (let i = 0; i < history.length; i++) {
     const compact = messages[i]!;
     const full = history[i]!;
-    assert.equal('jid' in compact, false);
+    assert.equal(compact.jid, pn);
     for (const field of [
       'id',
       'fromMe',
-      'participant',
       'timestamp',
       'text',
       'contentType',
-      'status',
     ] as const) {
       assert.deepEqual(compact[field], full[field]);
     }
+    // 1:1 fixtures carry no key participant or SDK status.
+    assert.equal(full.participant, null);
+    assert.equal('participant' in compact, false);
+    assert.equal(full.status, null);
+    assert.equal('status' in compact, false);
   }
   assert.deepEqual(messages[1]?.quote, history[1]?.quote);
   assert.deepEqual(messages[2]?.contacts, history[2]?.contacts);
@@ -113,8 +159,9 @@ test('history lifts only the exact chat and preserves direction, receipts, quote
   assert.deepEqual(messages[3]?.deletion, history[3]?.deletion);
   assert.equal(messages[3]?.text, null);
   assert.deepEqual(messages[4]?.deletion, history[4]?.deletion);
+  assert.equal(object(messages[4]?.deletion).status, 'unknown');
   assert.equal(messages[4]?.text, null);
-  assert.deepEqual(messages[0]?.deletion, { status: 'unknown' });
+  assert.equal('deletion' in messages[0]!, false);
   assert.equal('quote' in messages[0]!, false);
 
   const missingQuote = messageOutput({
@@ -134,27 +181,76 @@ test('history lifts only the exact chat and preserves direction, receipts, quote
   assert.equal(object(unavailable.quote).text, null);
 });
 
+test('compact omits only exact message defaults and keeps every informative value', () => {
+  const base = history[0]!;
+  const unknown = { status: 'unknown', source: null, observedAt: null };
+  const cases: [Record<string, unknown>, string[], string[]][] = [
+    [{ ...base, participant: '' }, ['participant'], []],
+    [
+      { ...base, participant: null, status: null },
+      ['participant', 'status'],
+      [],
+    ],
+    [{ ...base, participant: lid, status: 2 }, [], ['participant', 'status']],
+    [{ ...base, status: 0 }, [], ['status']],
+    [{ ...base, deletion: { ...unknown } }, ['deletion'], []],
+    [
+      { ...base, deletion: { ...unknown, observedAt: 1700000000000 } },
+      [],
+      ['deletion'],
+    ],
+    [
+      { ...base, deletion: { ...unknown, source: 'chat-delete-boundary' } },
+      [],
+      ['deletion'],
+    ],
+    [
+      { ...base, deletion: { ...unknown, note: 'unfamiliar field' } },
+      [],
+      ['deletion'],
+    ],
+    [{ ...base, deletion: { status: 'unknown' } }, [], ['deletion']],
+    [
+      {
+        ...base,
+        text: null,
+        contentType: null,
+        timestamp: null,
+        fromMe: null,
+      },
+      [],
+      ['text', 'contentType', 'timestamp', 'fromMe'],
+    ],
+  ];
+  for (const [row, omitted, kept] of cases) {
+    const compact = rows(
+      formatResponse('messages', publicResponse([row]), 'compact').data,
+    )[0]!;
+    for (const field of omitted)
+      assert.equal(field in compact, false, `${field} omitted`);
+    for (const field of kept) assert.deepEqual(compact[field], row[field]);
+    assert.equal(compact.jid, row.jid);
+  }
+});
+
 test('search preserves cross-JID order and group participants even for colliding message IDs', () => {
   const fixture = responseFixtures.find((value) => value.action === 'search')!;
   const full = rows(fixture.response.data);
-  const compact = rows(
-    formatResponse('search', fixture.response, 'compact').data,
-  );
-  assert.deepEqual(
-    compact.map((row) => [row.jid, row.id, row.fromMe, row.participant]),
-    full.map((row) => [row.jid, row.id, row.fromMe, row.participant]),
-  );
-  assert.equal(compact[2]?.participant, lid);
-  assert.ok(
-    Array.isArray(
-      formatResponse('messages', fixture.response, 'compact', pn).data,
-    ),
-    'mixed identities cannot inherit a JID',
-  );
-  assert.deepEqual(
-    formatResponse('messages', publicResponse([]), 'compact', pn).data,
-    { jid: pn, messages: [] },
-  );
+  for (const action of ['search', 'messages']) {
+    const compact = rows(
+      formatResponse(action, fixture.response, 'compact').data,
+    );
+    assert.deepEqual(
+      compact.map((row) => [row.jid, row.id, row.fromMe, row.participant]),
+      full.map((row) => [
+        row.jid,
+        row.id,
+        row.fromMe,
+        row.participant ?? undefined,
+      ]),
+    );
+    assert.equal(compact[2]?.participant, lid);
+  }
 });
 
 test('contact conflicts retain every exact mapping and per-field provenance, including older/different sources', () => {
@@ -241,10 +337,8 @@ test('uncertain intent, every receipt stage, zero status and errors are preserve
 test('Unicode, quotes, newlines and all content lengths are unchanged with no implicit truncation', () => {
   const text = 'Olá 👩🏽‍💻! "Sim"\n漢字\t<|endoftext|> ' + 'é'.repeat(10000);
   const response = publicResponse([{ ...history[0], text }]);
-  const json = JSON.stringify(
-    formatResponse('messages', response, 'compact', pn),
-  );
+  const json = JSON.stringify(formatResponse('messages', response, 'compact'));
   assert.equal(json.split('\n').length, 1);
   const parsed = object(JSON.parse(json));
-  assert.equal(rows(object(parsed.data).messages)[0]?.text, text);
+  assert.equal(rows(parsed.data)[0]?.text, text);
 });

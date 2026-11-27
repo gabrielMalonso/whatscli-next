@@ -208,7 +208,7 @@ async function main(): Promise<Record<string, unknown>> {
   if (helpRequested) {
     // Answer before option parsing, so a help flag never becomes INVALID_ARGUMENT.
     fields.action = 'help';
-    return formatResponse('help', help(), 'full', undefined);
+    return formatResponse('help', help(), 'full');
   }
   const { values, positionals } = options();
   const directory = dataDirectory({
@@ -228,7 +228,7 @@ async function main(): Promise<Record<string, unknown>> {
   fields.output = mode;
   const response = await execute(values, positionals, directory);
   Object.assign(fields, resultFields(response.data));
-  return formatResponse(positionals[0] ?? 'help', response, mode, values.jid);
+  return formatResponse(positionals[0] ?? 'help', response, mode);
 }
 
 async function execute(

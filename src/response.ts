@@ -20,24 +20,28 @@ function compactChat(value: unknown): unknown {
   return result;
 }
 
-function compactMessage(value: unknown, enclosingJid?: string): unknown {
+/** Compact message rows keep every field's type; only documented absent = default fields are omitted. */
+function compactMessage(value: unknown): unknown {
   const message = record(value);
   if (!message) return value;
   const result = { ...message };
-  // Only these optional components have an absent = null contract in compact output.
-  for (const field of ['quote', 'contacts', 'media', 'stubType']) {
+  // Only these optional fields have an absent = null contract in compact output.
+  for (const field of ['quote', 'contacts', 'media', 'stubType', 'status']) {
     if (message[field] === null) delete result[field];
   }
+  // Absent participant: the message key carried none (null or empty). Never inferred from the chat.
+  if (message.participant === null || message.participant === '')
+    delete result.participant;
+  // Absent deletion: no local deletion or boundary evidence. Any observed evidence stays complete.
   const deletion = record(message.deletion);
   if (
-    deletion?.status === 'unknown' &&
+    deletion !== undefined &&
+    Object.keys(deletion).length === 3 &&
+    deletion.status === 'unknown' &&
     deletion.source === null &&
     deletion.observedAt === null
-  ) {
-    result.deletion = { status: 'unknown' };
-  }
-  if (enclosingJid !== undefined && message.jid === enclosingJid)
-    delete result.jid;
+  )
+    delete result.deletion;
   return result;
 }
 
@@ -77,7 +81,6 @@ export function formatResponse(
   action: string,
   response: Record<string, unknown>,
   mode: OutputMode,
-  jid?: string,
 ): Record<string, unknown> {
   if (mode === 'full' || response.ok !== true) return response;
   let data = response.data;
@@ -89,14 +92,8 @@ export function formatResponse(
       data = compactChat(data);
       break;
     case 'messages':
-      // Lift only an exact shared JID. Search keeps each row's identity and original order.
-      if (Array.isArray(data))
-        data =
-          jid !== undefined && data.every((value) => record(value)?.jid === jid)
-            ? { jid, messages: data.map((value) => compactMessage(value, jid)) }
-            : data.map((value) => compactMessage(value));
-      break;
     case 'search':
+      // Same array type as full output; every row keeps its exact JID and original order.
       if (Array.isArray(data))
         data = data.map((value) => compactMessage(value));
       break;

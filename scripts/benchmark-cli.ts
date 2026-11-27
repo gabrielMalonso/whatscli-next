@@ -316,7 +316,6 @@ try {
               scenario.action,
               scenario.response,
               mode,
-              pn,
             );
             assert.deepEqual(payload, response);
           }
