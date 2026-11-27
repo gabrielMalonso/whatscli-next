@@ -11,15 +11,16 @@ Formatting happens after the response is produced, without database or network a
 
 ## Projections and inheritance
 
-Both modes preserve the response envelope: `ok`, correlation `id` when available, errors/codes, running/connection state, source/coverage/appState, notifications/issues, and `recovery`/`receiveContinuity`.
+Both modes preserve `ok`, correlation `id` when available, errors/codes, `running`/`pid`/`connection`, `source`/`coverage`/`appState`, `receivedPendingNotifications`, and `receiveContinuity`. Compact output omits a steady `recovery` and summarizes inactive issues; see [compact envelope defaults](#compact-envelope-defaults). Errors are never compacted.
 
 | Command                             | Compact differences                                                                                                                                                                                                                                                                                    |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `chats`, `chat`                     | Omit metadata `observedAt`, null name, and empty `pending`. Retain exact JID, activity timestamp/source, archived/unread/count, nonempty pending keys/values, and `sdkReported` with its explicit source, request key, and local capture time.                                                         |
 | `messages`, `search`                | `data` stays an array of message rows, as in full output, in the same order. Every row keeps its exact `jid`, `id`, and `fromMe`, plus timestamp and text/type. Apply the message defaults below.                                                                                                      |
 | `contact`, nested `resolve.contact` | Omit contact source when it matches the envelope source. Metadata `{value}` inherits source and observation time from its exact enclosing `contacts` record only when both match. Otherwise, retain all three. Mappings, conflicts, null phone, verification, and historical evidence remain complete. |
+| `status`, `start`                   | `data.observability` becomes a summary (see below) and `data.issueHistory` is omitted. Build, credentials, account, allowed JID, network and QR fields are unchanged.                                                                                                                                  |
 | Chat mutations                      | Apply the chat projection to `data.localChat`; preserve the complete request and note separating SDK state from independent observation.                                                                                                                                                               |
-| Other commands                      | Unchanged, including send/file/card/request intents, explicit card content, quote snapshots, routes, IDs, attempts, receipts, and error evidence.                                                                                                                                                      |
+| Other commands                      | `data` unchanged, including send/file/card/request intents, explicit card content, quote snapshots, routes, IDs, attempts, receipts, and error evidence.                                                                                                                                               |
 
 ### Compact message defaults
 
@@ -37,6 +38,48 @@ Read optional fields with a default (for example, `row.get("status")` in Python 
 There is no general omission of false, zero, null, or unknown values. Null chat states/counts, pending values, `status: 0`, unknown receipts, and `request.data: null` retain their meanings. An omitted chat observation time does not establish freshness, and full output cannot recover redacted content.
 
 Quotes and cards remain snapshots or shared content, not verified identity. Check [contact identity](identity.md) separately.
+
+### Compact envelope defaults
+
+Successful compact responses omit these envelope fields only at the exact values below. Every other value, including unfamiliar fields, stays as in full output.
+
+| Omitted field  | Full value                                                                                                                                | Meaning of absence                                                                                                                                                                          |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recovery`     | `{state, reason: null, code: null, attempt: 0, nextRetryAt: null, since}` where `state` equals `connection`, which is `open` or `offline` | No retry, intervention or cleanup is in progress. The entry time `since` is only in full output. Any other state, reason, code, attempt, retry time, or extra field keeps the whole object. |
+| `issues`       | Codes array, when `activeIssues` is present and consistent                                                                                | Replaced by `activeIssues` and `inactiveIssues`. The inactive codes and their timing are in full output (`issues`, and `status` `data.issueHistory`).                                       |
+| `activeIssues` | `[]`                                                                                                                                      | No issue is active (see [issue activity](#issue-history-and-activity)).                                                                                                                     |
+
+Compact output adds `inactiveIssues: <count>` when recorded issue codes are not active; it is absent when the count is 0. With no `recovery`, `issues`, `activeIssues` or `inactiveIssues`, the runtime is steady and has no recorded issues. A response from an older daemon has no `activeIssues`: compact output then keeps `issues` unchanged and omits it only when it is `[]`. An `activeIssues` value that is malformed or names a code missing from `issues` leaves both fields unchanged.
+
+### Compact status
+
+`data.observability` keeps `configured`, `enabled`, `effective`, `degraded`, `dropped`, `uncertain`, and `captureCompleteness`. It adds `cleanupFailures`, `hashingFailures`, and `preferenceWatchDegraded` only when they differ from `0`/`0`/`false`. Component flags, session, generation, retention counters, limits, directory, scope, buffer counters and sampler state are only in full output and in `observability status` (which is never compacted). `degraded` already aggregates the component flags. `data.issueHistory` is omitted; active issues remain in the envelope.
+
+### Issue history and activity
+
+`issues` keeps every issue code this data directory has recorded, in first-recorded order, across restarts. It is never cleared, so a code does not mean the problem is current. Each response also carries `activeIssues`, one entry per active code:
+
+```json
+{
+  "code": "decryption-or-integrity-failure",
+  "count": 3,
+  "firstAt": 1700000000000,
+  "lastAt": 1700000060000
+}
+```
+
+`status` adds `data.issueHistory`, the same entries for every code in `issues`, each with `active: true|false`.
+
+- `count` is the number of observations recorded with timestamps, and `firstAt`/`lastAt` are the first and latest such observations (local Unix ms). These persist across restarts.
+- A code recorded before timing was kept has `firstAt: null`; its true first time and total are unknown, and `count` covers only later observations. Until it recurs, `count` and `lastAt` are also null.
+- `connection-stopped-review-required` is active exactly while `recovery.state` is `intervention-required`.
+- Every other code (`decryption-or-integrity-failure`, `app-state-sync-incomplete`, `initial-sync-timed-out`, `history-completion-not-explicit`) is active once this runtime process (the envelope `pid`) has observed it. Nothing reports that these conditions ended, so they stay active until the process exits and are never cleared by elapsed time. Use `lastAt` to judge recency.
+
+An inactive code may still affect older local data, and an active code does not prove a current failure. Neither replaces the evidence in [command results](evidence.md).
+
+### Compact envelope and status change
+
+Breaking for compact consumers: compact responses used to repeat the full envelope. They now omit a steady `recovery`, replace `issues` with `activeIssues`/`inactiveIssues` when the daemon reports activity, and summarize `status.data.observability`. Read `recovery` and `activeIssues` with a default, as for message rows. Full output gains two additive fields from the daemon, `activeIssues` on every response and `data.issueHistory` on `status`; existing fields are unchanged. The compact envelope needs a daemon that reports `activeIssues`; with an older daemon a new CLI only omits steady `recovery` and empty `issues`.
 
 ### Compact message shape change (PR #53)
 

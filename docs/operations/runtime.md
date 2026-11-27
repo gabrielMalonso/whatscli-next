@@ -64,7 +64,7 @@ For `attempt`:
 
 `since` is a local Unix timestamp in milliseconds. It changes on every recovery transition, including each new retry attempt and a manual reconnect, so a stale `since` shows how long the runtime has been in one state.
 
-An open connection resets current recovery state. The `issues` field retains historical entries, including possible `connection-stopped-review-required` entries from earlier failures.
+An open connection resets current recovery state. The `issues` field retains historical entries, including possible `connection-stopped-review-required` entries from earlier failures. `activeIssues` lists only the codes that are active now, with their counts and observation times; see [issue history and activity](../user/output.md#issue-history-and-activity).
 
 ## Automatic retries
 

@@ -76,6 +76,94 @@ function compactContact(value: unknown, source: unknown): unknown {
   return result;
 }
 
+/** Exactly the recovery a runtime reports while its connection is steadily open or offline. */
+function steadyRecovery(recovery: unknown, connection: unknown): boolean {
+  const value = record(recovery);
+  return (
+    value !== undefined &&
+    (connection === 'open' || connection === 'offline') &&
+    Object.keys(value).length === 6 &&
+    value.state === connection &&
+    value.reason === null &&
+    value.code === null &&
+    value.attempt === 0 &&
+    value.nextRetryAt === null &&
+    typeof value.since === 'number'
+  );
+}
+
+/** Compact envelope omits only documented healthy defaults and summarizes inactive issue history. */
+function compactEnvelope(
+  response: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...response };
+  if (steadyRecovery(response.recovery, response.connection))
+    delete result.recovery;
+  const issues = response.issues;
+  if (
+    !Array.isArray(issues) ||
+    !issues.every((code) => typeof code === 'string')
+  )
+    return result;
+  if (!('activeIssues' in response)) {
+    // An older daemon reports no activity; its history stays listed rather than guessed.
+    if (issues.length === 0) delete result.issues;
+    return result;
+  }
+  const active = response.activeIssues;
+  const codes = Array.isArray(active)
+    ? active.map((value) => record(value)?.code)
+    : [];
+  const recorded = new Set(issues);
+  if (
+    !Array.isArray(active) ||
+    !codes.every((code) => typeof code === 'string' && recorded.has(code)) ||
+    new Set(codes).size !== codes.length
+  )
+    return result;
+  delete result.issues;
+  if (active.length === 0) delete result.activeIssues;
+  const inactive = recorded.size - codes.length;
+  if (inactive > 0) result.inactiveIssues = inactive;
+  return result;
+}
+
+/** Status keeps capture health and loss counters; full detail stays in full output and `observability status`. */
+function compactObservability(value: unknown): unknown {
+  const observability = record(value);
+  if (!observability) return value;
+  const summary: Record<string, unknown> = {};
+  for (const field of [
+    'configured',
+    'enabled',
+    'effective',
+    'degraded',
+    'dropped',
+    'uncertain',
+    'captureCompleteness',
+  ])
+    if (field in observability) summary[field] = observability[field];
+  for (const [field, healthy] of [
+    ['cleanupFailures', 0],
+    ['hashingFailures', 0],
+    ['preferenceWatchDegraded', false],
+  ] as const)
+    if (field in observability && observability[field] !== healthy)
+      summary[field] = observability[field];
+  return summary;
+}
+
+function compactStatus(value: unknown): unknown {
+  const status = record(value);
+  if (!status) return value;
+  const result = { ...status };
+  if ('observability' in status)
+    result.observability = compactObservability(status.observability);
+  // Active issues stay in the envelope; the timed history of every code is in full output.
+  if (Array.isArray(status.issueHistory)) delete result.issueHistory;
+  return result;
+}
+
 /** Pure presentation of an already-public response. No SDK, store, retry or tokenization work. */
 export function formatResponse(
   action: string,
@@ -85,6 +173,10 @@ export function formatResponse(
   if (mode === 'full' || response.ok !== true) return response;
   let data = response.data;
   switch (action) {
+    case 'status':
+    case 'start':
+      data = compactStatus(data);
+      break;
     case 'chats':
       if (Array.isArray(data)) data = data.map(compactChat);
       break;
@@ -119,5 +211,5 @@ export function formatResponse(
       break;
     }
   }
-  return { ...response, data };
+  return { ...compactEnvelope(response), data };
 }

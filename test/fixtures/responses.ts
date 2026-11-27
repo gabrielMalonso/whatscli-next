@@ -30,8 +30,122 @@ export function publicResponse(data: unknown): Record<string, unknown> {
     appState: 'unknown',
     receivedPendingNotifications: false,
     issues: [],
+    activeIssues: [],
   };
 }
+
+/** A connected runtime that recorded two issues in earlier processes; none is active now. */
+export function liveResponse(data: unknown): Record<string, unknown> {
+  return {
+    ...publicResponse(data),
+    connection: 'open',
+    recovery: {
+      state: 'open',
+      reason: null,
+      code: null,
+      attempt: 0,
+      nextRetryAt: null,
+      since: observedAt + 5000,
+    },
+    receiveContinuity: {
+      status: 'unproven',
+      lastInterruption: { at: observedAt, reason: 'runtime-start' },
+    },
+    receivedPendingNotifications: true,
+    issues: [
+      'decryption-or-integrity-failure',
+      'connection-stopped-review-required',
+    ],
+    activeIssues: [],
+  };
+}
+
+export const issueHistory = [
+  {
+    code: 'decryption-or-integrity-failure',
+    count: 14,
+    firstAt: observedAt - 86400000,
+    lastAt: observedAt - 3600000,
+    active: false,
+  },
+  {
+    code: 'connection-stopped-review-required',
+    count: null,
+    firstAt: null,
+    lastAt: null,
+    active: false,
+  },
+];
+
+export const observability = {
+  configured: true,
+  enabled: true,
+  effective: true,
+  degraded: false,
+  dropped: 0,
+  uncertain: 0,
+  cleanupFailures: 0,
+  hashingFailures: 0,
+  components: {
+    captureDegraded: false,
+    cleanupDegraded: false,
+    hashingDegraded: false,
+    retentionDegraded: false,
+  },
+  session: '0123456789abcdef0123456789abcdef',
+  generation: 3,
+  evicted: 0,
+  expired: 12,
+  limits: {
+    days: 5,
+    bytes: 8388608,
+    files: 32,
+    segments: 31,
+    segment: 262144,
+    line: 4096,
+    sampleMs: 60000,
+  },
+  directory: '/home/example/.local/share/whatscli-next/observability',
+  scope: 'process-counters',
+  captureCompleteness: 'unknown',
+  buffer: {
+    admitted: 1520,
+    captured: 1518,
+    deferred: 2,
+    invalidated: 0,
+    expired: 0,
+    overflow: 0,
+    schedulerDiscarded: 0,
+    lockAttempts: 1522,
+    busyAttempts: 2,
+    preparationFailures: 0,
+    maxPending: 3,
+    maxBytes: 1210,
+    pending: 0,
+    bytes: 0,
+    closed: false,
+    limits: { records: 16, bytes: 65536, retryMs: 25 },
+  },
+  samplerActive: true,
+  retentionActive: false,
+  preferenceWatchDegraded: false,
+};
+
+export const status = {
+  build: {
+    fingerprint:
+      'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+  },
+  observability,
+  hasLinkedCredentials: true,
+  registered: true,
+  accountJid: '12025550199:1@s.whatsapp.net',
+  accountLid: '123450099:1@lid',
+  allowedJid: null,
+  networkEnabled: true,
+  qrAvailable: false,
+  issueHistory,
+};
 
 function message(id: string, text: string, jid = pn): WAMessage {
   return {
@@ -213,5 +327,25 @@ export const responseFixtures: {
     name: 'request-uncertain',
     action: 'request',
     response: publicResponse(uncertain),
+  },
+  {
+    name: 'status-connected-historical-issues',
+    action: 'status',
+    response: liveResponse(status),
+  },
+  {
+    name: 'messages-empty-connected',
+    action: 'messages',
+    response: liveResponse([]),
+  },
+  {
+    name: 'request-null-connected',
+    action: 'request',
+    response: liveResponse(null),
+  },
+  {
+    name: 'history-connected',
+    action: 'messages',
+    response: liveResponse(history),
   },
 ];
