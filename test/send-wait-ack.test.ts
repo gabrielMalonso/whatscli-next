@@ -68,6 +68,8 @@ function fixture() {
   const events = new EventEmitter();
   const sends: Parameters<WASocket['sendMessage']>[] = [];
   let sendError = false;
+  let hold: Promise<void> | undefined;
+  let onSend: (() => void) | undefined;
   const runtime = createRuntime(
     { dataDir: directory, connect: true },
     () =>
@@ -79,6 +81,9 @@ function fixture() {
         },
         sendMessage: async (...args: Parameters<WASocket['sendMessage']>) => {
           sends.push(args);
+          onSend?.();
+          onSend = undefined;
+          if (hold) await hold;
           if (sendError) throw new Error('Fictional SDK failure');
           const [destination, content, config] = args;
           if ('document' in content)
@@ -117,6 +122,17 @@ function fixture() {
     request,
     failSend() {
       sendError = true;
+    },
+    /** Holds the next SDK send until released; `started` resolves once it is invoked. */
+    holdSend() {
+      let release!: () => void;
+      hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        onSend = resolve;
+      });
+      return { release, started };
     },
     receipt(id: string, status: number) {
       emit('messages.update', [
@@ -264,6 +280,31 @@ test('an observed error receipt or SDK failure ends the wait as error without re
       outcome: 'error',
     });
     assert.equal(f.sends.length, 2, 'each key is invoked exactly once');
+  } finally {
+    await f.close();
+  }
+});
+
+test('a same-key wait settles as soon as the in-flight call records an SDK failure', async () => {
+  const f = fixture();
+  try {
+    f.failSend();
+    const held = f.holdSend();
+    const first = f.runtime.execute(text()) as Promise<RequestRecord>;
+    await held.started;
+    const waiting = f.time.scheduled();
+    const replay = f.runtime.execute(text(5000)) as Promise<Waited>;
+    await waiting;
+    held.release();
+    assert.equal((await first).errorObserved, true);
+    const result = await replay;
+    assert.deepEqual(result.wait, {
+      requestedMs: 5000,
+      waitedMs: 0,
+      outcome: 'error',
+    });
+    assert.equal(f.time.pending(), 0);
+    assert.equal(f.sends.length, 1, 'the replay never invokes the SDK');
   } finally {
     await f.close();
   }

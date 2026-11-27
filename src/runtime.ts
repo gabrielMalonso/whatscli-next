@@ -1276,20 +1276,22 @@ export function createRuntime(
       return execution.run(state, async () => {
         let result: unknown;
         let code = 'OK';
+        const sending =
+          command.command === 'send' ||
+          command.command === 'send-file' ||
+          command.command === 'send-contact';
         try {
           result = await execute(command);
-          if (
-            (command.command === 'send' ||
-              command.command === 'send-file' ||
-              command.command === 'send-contact') &&
-            command.waitAckMs &&
-            result
-          )
+          // A concurrent same-key call may already be waiting on this record.
+          // perform() commits its final state outside persist(), so wake waiters here.
+          if (sending) settleAckWaits();
+          if (sending && command.waitAckMs && result)
             result =
               (await waitForAck(command.key, command.waitAckMs)) ?? result;
           return result;
         } catch (error) {
           code = errorResponse(error).code;
+          if (sending) settleAckWaits();
           throw error;
         } finally {
           observability.record('execution', {
