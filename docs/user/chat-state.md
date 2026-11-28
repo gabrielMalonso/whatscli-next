@@ -146,7 +146,7 @@ This means the response's collection version matched the submitted version, whil
 
 `request.appStateResponse` persists the collection, submitted version, optional server version, status and local `receivedAt` time. It is also available through `request --key KEY`, including after restart. `serverResponse` is `unknown` without recorded evidence, `response-received` for a response without an exact version match, or `version-matched` for a matching response. A bare or mismatched response is never upgraded to a matching one.
 
-`stateObservation` is `pending` for this request's outstanding observation, `superseded` when a newer intent for the same field is pending, `available` when the field has an observed boolean, or `unknown` when neither is available. An available state can contradict the request; it does not prove causation or current phone state.
+`stateObservation` is `pending` for this request's outstanding observation, `superseded` when a newer intent for the same field is pending, `available` when the field has an observed boolean, or `unknown` when neither is available. An available state can contradict the request; it does not prove causation or current phone state. This `superseded` is unrelated to the `pending.FIELD.superseded` marker of [pending intents on a linked PN](#pending-intents-on-a-linked-pn): an intent retired by an observation on its known LID still reports `stateObservation: pending`, because no newer intent replaced it; check that marker to tell the two apart.
 
 An SDK/local failure can coexist with a server response. Inspect `request.attempt` and `request.errorObserved` as well as the response. Never automatically retry an uncertain operation. Reusing the exact key retrieves evidence without another SDK invocation. Historical requests without recorded response metadata remain unknown; this change does not backfill them from requested values or local echoes. Message acceptance/delivery/read fields retain their separate meaning.
 
@@ -187,7 +187,7 @@ WhatsApp can move a person's conversation from a PN JID to its LID. A read/archi
 
 - the runtime independently observes the same field on the LID chat: an archive state, an unread counter, a positive manual unread marker, or a read established from [own-device receipts](#reading-received-messages-in-another-device), the same observations that resolve the LID's own pending intent; local echoes, metadata, intents and SDK returns do not count;
 - the LID's mapping to that PN is `known` at observation time;
-- the PN intent already existed when the observation was captured.
+- the PN intent already existed when the observation was captured. History-sync snapshots count as observations at the time they are processed, so a delayed history chunk can retire a PN intent saved shortly before it arrived, the same way it resolves the chat's own pending state.
 
 The PN chat then shows:
 
