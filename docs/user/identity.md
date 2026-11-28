@@ -88,7 +88,41 @@ For unknown or conflicting LIDs, `phone: null`.
 
 No association is inferred from display names or LID digits. Conflicts block first contact even when a phone lookup was positive.
 
-### Historical observation times
+### Look up contacts
+
+`contacts` finds exact PN and LID JIDs by an observed label or phone number. It is a local, offline lookup:
+
+```sh
+node dist/src/cli.js contacts --query 'Example' --limit 20
+node dist/src/cli.js contacts --query '+1 202 555 0101'
+```
+
+It is not addressing or authorization. A match is a candidate to inspect, never permission to send: sending still requires an exact JID, under the same rules as without the lookup. Two people can share a name, and labels are chosen by people, not verified.
+
+The query must have at least two characters. It matches, case- and accent-insensitively, a substring of an observed `name` (the account's own contact name), `verifiedName` (business name) or `notify` (push name chosen by the contact). A query made only of digits, spaces, `+`, `-`, `(`, `)` and `.`, with at least three digits, also matches those digits in a phone number: the number of a PN JID, or of the PN mapped to a LID. LID digits are never matched as a phone number, and group subjects are not contact labels.
+
+Each result is:
+
+| Field          | Meaning                                                                                                                     |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `jid`          | Exact PN or LID JID. A known PN/LID pair appears as two results; use the one you need exactly, typically the observed chat. |
+| `observedChat` | Whether a chat with this exact JID is stored locally.                                                                       |
+| `matchedBy`    | Fields that matched: `name`, `verifiedName`, `notify`, `phone`.                                                             |
+| `contact`      | The summary below.                                                                                                          |
+
+Results with an observed chat come first, most recently active first, then the rest, each in exact JID order. Page with `--limit` (at most 100) and `--offset`.
+
+### Contact summary
+
+`contacts` results and `chats --include contact` rows share this summary:
+
+- `phone`: the number of a PN JID, or of the PN mapped to a LID while `mapping` is `known`. Otherwise `null`.
+- `mapping`: the PN/LID association status, as in `contact`: `known`, `unknown` or `conflict`.
+- `labels`: every observed `name`, `verifiedName` and `notify` value, in that order, each with its `jid`, `source` and local `observedAt`. Labels come from the exact JID and, only while `mapping` is `known`, from its alias; the label's `jid` says which.
+
+With `conflict`, neither the alias's labels nor a phone number transfer to a LID. Several labels can disagree; all are listed. The first label is only a display hint. `contact --jid` keeps the complete evidence, including mapping sources and verification.
+
+## Historical observation times
 
 Legacy journal mappings retain their original observation times.
 

@@ -73,6 +73,7 @@ const actions = [
   'incoming',
   'search',
   'contact',
+  'contacts',
   'resolve',
   'group',
   'send',

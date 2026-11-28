@@ -7,6 +7,7 @@ node dist/src/cli.js chats --unread true --archived not-true --limit 50 --offset
 node dist/src/cli.js chats --unread true --archived false --limit 50 --offset 0
 node dist/src/cli.js chats --unread unknown --limit 50 --offset 0
 node dist/src/cli.js chats --archived unknown --limit 50 --offset 0
+node dist/src/cli.js chats --unread true --archived not-true --kind direct --include contact,last-message --limit 20
 node dist/src/cli.js chat --jid '12025550101@s.whatsapp.net'
 node dist/src/cli.js messages --jid '12025550101@s.whatsapp.net' --limit 20 --offset 0
 node dist/src/cli.js search --query 'example text' --jid '12025550101@s.whatsapp.net'
@@ -35,6 +36,52 @@ Search matches literal substrings of current message text and captions using Uni
 `chats` accepts independent `--unread true|false|unknown|not-true` and `--archived true|false|unknown|not-true` filters, combined with AND. Omit a filter to include all its states. `false` matches only explicit false state; `not-true` matches false or unknown state, so it is the recommended `--archived` value for triage queues: `--archived false` omits unread chats whose archive state was never reported. Each row still distinguishes them: `archived: false` is explicit, while `archived: null` without `matchedBy.archived` is unknown. By default boolean filters consider the latest pending intent for each field; matching rows identify those fields in `matchedBy` as `pending-intent`, while their observed values remain null. Add `--observed-only` to restrict boolean filters to known observed state; with it, `not-true` matches observed false or null observed state, including any pending mutation. `unknown` always matches null observed state, including pending mutations, and is distinct from `false`. A pending-intent match can therefore also appear in an unknown query. Inspect both unknown filters separately; a chat may match both.
 
 Verification and SDK send returns alone do not create listed conversations. PN and LID histories remain separate.
+
+## Chat kinds
+
+`--kind` keeps only chats of the listed kinds, comma-separated, combined with the state filters. It applies before limits and offsets, so excluded rows do not occupy page slots. Omit it, or pass `all`, to list every kind as before.
+
+| Kind        | Exact JID server                                               |
+| ----------- | -------------------------------------------------------------- |
+| `direct`    | `@s.whatsapp.net` (PN) and `@lid` (LID)                        |
+| `group`     | `@g.us`                                                        |
+| `broadcast` | `@broadcast`, including `status@broadcast` and broadcast lists |
+| `other`     | Any other server, such as `@newsletter`                        |
+
+`--kind direct` excludes status updates and groups; `--kind direct,group` excludes only broadcasts. The kind comes from the JID alone, never from names. A daemon built before `--kind` ignores it; the CLI then fails with `PROTOCOL` instead of returning unfiltered rows. Restart the daemon with the current build.
+
+## Triage enrichment
+
+`--include contact,last-message` (either or both) adds read-only fields to each `chats` row, so a triage page needs no `contact` or `messages` call per row just to know who wrote last. Rows without `--include` are unchanged.
+
+`contact` is the [contact identity](identity.md#look-up-contacts) summary for a PN or LID chat, and `null` for groups, broadcasts and other kinds:
+
+```json
+{
+  "phone": "+12025550101",
+  "mapping": "known",
+  "labels": [
+    {
+      "field": "name",
+      "value": "Example Contact",
+      "jid": "12025550101@s.whatsapp.net",
+      "source": "contacts.upsert",
+      "observedAt": 1700000000000
+    },
+    {
+      "field": "notify",
+      "value": "Example",
+      "jid": "123450001@lid",
+      "source": "contacts.update",
+      "observedAt": 1700000000000
+    }
+  ]
+}
+```
+
+`lastMessage` is `{id, fromMe, timestamp, contentType}` for the row `messages --jid JID --limit 1` returns first (newest sender timestamp, resolved edit envelopes excluded), or `null` when no message is stored. It carries no text or caption. `contentType` is null when no content is readable, for example after a deletion; read `messages` for details. `fromMe: true` means the newest stored message is from this account, which is often enough to skip an idle re-check, but history is partial: a newer incoming message may not be stored yet. A group's `lastMessage` does not identify its sender. It is a different value from `latestIncoming` (the latest stored incoming message, by arrival), which the read/archive guard uses.
+
+A daemon built before `--include` omits these fields; the CLI then fails with `PROTOCOL`.
 
 ## Ordering and pagination
 

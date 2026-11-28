@@ -1,9 +1,11 @@
 import {
+  chatKinds,
   contactJid,
   expectedAccount,
   internationalPhone,
   recipientJid,
 } from './identity.js';
+import type { ChatKind } from './identity.js';
 import { contactName } from './contact-card.js';
 import { CommandError } from './errors.js';
 
@@ -14,7 +16,12 @@ export type ChatFilters = {
   unread?: ChatStateFilter;
   archived?: ChatStateFilter;
   observedOnly?: boolean;
+  /** Absent means every kind. */
+  kinds?: ChatKind[];
 };
+/** Opt-in, read-only enrichment of chats rows. */
+export const chatIncludes = ['contact', 'last-message'] as const;
+export type ChatInclude = (typeof chatIncludes)[number];
 /** Upper bound for the optional, response-only acceptance wait on sends. */
 export const MAX_WAIT_ACK_MS = 30000;
 /** Response option only: never part of the immutable operation or its idempotency comparison. */
@@ -37,9 +44,15 @@ export type Command =
         | 'stop'
         | 'observability';
     }
-  | ({ command: 'chats'; limit: number; offset: number } & ChatFilters)
+  | ({
+      command: 'chats';
+      limit: number;
+      offset: number;
+      include?: ChatInclude[];
+    } & ChatFilters)
   | { command: 'chat'; jid: string }
   | { command: 'contact'; jid: string }
+  | { command: 'contacts'; query: string; limit: number; offset: number }
   | { command: 'resolve'; phone: string }
   | { command: 'messages'; jid: string; limit: number; offset: number }
   | { command: 'incoming'; jid: string; afterId: string | null; limit: number }
@@ -167,6 +180,8 @@ function chatFilters(value: Record<string, unknown>): ChatFilters {
       );
     filters[field] = state;
   }
+  if (value.kinds !== undefined)
+    filters.kinds = list(value.kinds, 'kinds', chatKinds);
   return filters;
 }
 
@@ -196,6 +211,36 @@ export function wireCommand(command: Command): Record<string, unknown> {
   return command;
 }
 
+/** A nonempty list of distinct known values, in canonical order. */
+function list<T extends string>(
+  value: unknown,
+  name: string,
+  allowed: readonly T[],
+): T[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => allowed.includes(item as T)) ||
+    new Set(value).size !== value.length
+  )
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      `${name} must be a nonempty list of distinct values: ${allowed.join(', ')}`,
+    );
+  return allowed.filter((item) => value.includes(item));
+}
+
+/** Lookup text for contacts: trimmed, at least two characters. */
+function contactQuery(value: unknown): string {
+  const query = string(value, 'query').trim();
+  if ([...query].length < 2)
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      'query must have at least two characters',
+    );
+  return query;
+}
+
 export function parseCommand(value: Record<string, unknown>): Command {
   switch (value.command) {
     case 'status':
@@ -212,6 +257,9 @@ export function parseCommand(value: Record<string, unknown>): Command {
         limit: integer(value.limit ?? 100, 1, 100),
         offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER),
         ...chatFilters(value),
+        ...(value.include === undefined
+          ? {}
+          : { include: list(value.include, 'include', chatIncludes) }),
       };
     case 'chat':
       return {
@@ -222,6 +270,13 @@ export function parseCommand(value: Record<string, unknown>): Command {
       return {
         command: value.command,
         jid: contactJid(string(value.jid, 'jid')),
+      };
+    case 'contacts':
+      return {
+        command: value.command,
+        query: contactQuery(value.query),
+        limit: integer(value.limit ?? 20, 1, 100),
+        offset: integer(value.offset ?? 0, 0, Number.MAX_SAFE_INTEGER),
       };
     case 'resolve':
       return {

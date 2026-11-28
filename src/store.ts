@@ -34,9 +34,9 @@ import {
   messageText,
 } from './output.js';
 import type { Deletion, QuoteReference } from './output.js';
-import { contactJid, isLid, isPn } from './identity.js';
+import { chatKind, contactJid, isLid, isPn } from './identity.js';
 import type { IdentitySource, RecipientCheck } from './identity.js';
-import type { ChatFilters, QuoteSelector } from './protocol.js';
+import type { ChatFilters, ChatInclude, QuoteSelector } from './protocol.js';
 import type { QuoteSnapshot } from './quoted-text.js';
 import { decode, decodeMessage, encode } from './store-codec.js';
 import { createSchema } from './store-schema.js';
@@ -304,6 +304,26 @@ type ContactRecord = {
   metadata: ContactMetadata;
 };
 
+/** Display fields, in display-hint order: the account's own name, business name, push name. */
+const labelFields = ['name', 'verifiedName', 'notify'] as const;
+export type ContactLabel = {
+  field: (typeof labelFields)[number];
+  value: string;
+  jid: string;
+  source: IdentitySource;
+  observedAt: number;
+};
+/** Lookup aid only: never a recipient identity, verification or authorization. */
+export type ContactSummary = {
+  phone: string | null;
+  mapping: 'known' | 'unknown' | 'conflict';
+  labels: ContactLabel[];
+};
+
+/** Case-, width- and accent-insensitive comparison form for contact lookup. */
+const fold = (value: string): string =>
+  value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+
 /** One SQLite writer holds a separate lifetime lock DB; the OS releases it on process death. */
 export class Store {
   readonly db: DatabaseSync;
@@ -368,6 +388,9 @@ export class Store {
             : null;
         return unread === null ? null : Number(unread);
       });
+      this.db.function('chat_kind', { deterministic: true }, (value) =>
+        chatKind(String(value)),
+      );
       this.recoverLegacy();
       this.initializeQueries();
       this.recoverMessageEdits();
@@ -749,7 +772,7 @@ export class Store {
       }));
     const pns = new Set(evidence.map((row) => row.pn));
     const lids = new Set(evidence.map((row) => row.lid));
-    const status =
+    const status: ContactSummary['mapping'] =
       direct.length === 0
         ? 'unknown'
         : pns.size === 1 && lids.size === 1
@@ -796,6 +819,127 @@ export class Store {
         )
         .get(pn, lid, lid, pn) !== undefined
     );
+  }
+
+  /**
+   * Observed display labels for a PN/LID chat, null for any other JID. Labels
+   * come from the exact JID and, only while the PN/LID mapping is known, its
+   * alias; phone only from a PN JID or a known mapping, never from LID digits.
+   */
+  contactSummary(jid: string): ContactSummary | null {
+    if (!isPn(jid) && !isLid(jid)) return null;
+    const view = this.contactView(jid);
+    return {
+      phone: view.phone,
+      mapping: view.mapping.status,
+      labels: labelFields.flatMap((field) =>
+        view.contacts.flatMap((record) => {
+          const label = record.metadata[field];
+          return label
+            ? [
+                {
+                  field,
+                  value: label.value,
+                  jid: record.jid,
+                  source: label.source,
+                  observedAt: label.observedAt,
+                },
+              ]
+            : [];
+        }),
+      ),
+    };
+  }
+
+  /** The row `messages --jid JID --limit 1` returns first, reduced to its key and type. */
+  lastMessage(jid: string) {
+    const [message] = this.messages(jid, 1, 0);
+    if (!message) return null;
+    const { id, fromMe, timestamp, contentType } = this.messageView(message);
+    return { id, fromMe, timestamp, contentType };
+  }
+
+  /**
+   * Read-only lookup over observed contact labels and phone numbers. A LID
+   * matches a phone query only through a known mapping. Results are exact
+   * PN/LID JIDs to inspect, never an addressing or authorization decision.
+   */
+  contactSearch(query: string, limit = 20, offset = 0) {
+    const text = fold(query.trim());
+    const digits = /^\+?[\d\s().-]+$/.test(query.trim())
+      ? query.replace(/\D/g, '')
+      : '';
+    const phoneQuery = digits.length >= 3 ? digits : null;
+    const candidates = new Set<string>();
+    for (const row of this.db
+      .prepare("SELECT json FROM values_store WHERE category='contact'")
+      .iterate()) {
+      const record = decode<ContactRecord>(String(row.json));
+      if (
+        labelFields.some((field) => {
+          const label = record.metadata[field];
+          return label !== undefined && fold(label.value).includes(text);
+        }) ||
+        (phoneQuery !== null &&
+          isPn(record.jid) &&
+          record.jid.split('@')[0]!.includes(phoneQuery))
+      )
+        candidates.add(record.jid);
+    }
+    if (phoneQuery !== null)
+      for (const row of this.db
+        .prepare(
+          `SELECT pn AS jid FROM identity_mappings WHERE instr(substr(pn,1,instr(pn,'@')-1),?)>0
+          UNION SELECT jid FROM chats WHERE jid GLOB '*@s.whatsapp.net' AND instr(substr(jid,1,instr(jid,'@')-1),?)>0`,
+        )
+        .iterate(phoneQuery, phoneQuery))
+        candidates.add(String(row.jid));
+    // A label or phone observed on one endpoint describes its alias only while the mapping is known.
+    for (const jid of [...candidates]) {
+      if (!isPn(jid) && !isLid(jid)) continue;
+      const { mapping } = this.contactView(jid);
+      if (mapping.status === 'known')
+        for (const alias of [mapping.pn, mapping.lid])
+          if (alias) candidates.add(alias);
+    }
+    const activity = this.db.prepare(
+      'SELECT activity_timestamp FROM chats WHERE jid=?',
+    );
+    const results = [...candidates].flatMap((jid) => {
+      const contact = this.contactSummary(jid);
+      if (!contact) return [];
+      const matchedBy: (ContactLabel['field'] | 'phone')[] = [
+        ...new Set(
+          contact.labels
+            .filter((label) => fold(label.value).includes(text))
+            .map((label) => label.field),
+        ),
+      ];
+      if (
+        phoneQuery !== null &&
+        contact.phone?.slice(1).includes(phoneQuery) === true
+      )
+        matchedBy.push('phone');
+      if (!matchedBy.length) return [];
+      const chat = activity.get(jid);
+      return [
+        {
+          jid,
+          observedChat: chat !== undefined,
+          matchedBy,
+          contact,
+          activity: chat ? Number(chat.activity_timestamp) || 0 : -1,
+        },
+      ];
+    });
+    // Observed conversations first, most recently active first; then exact JID order.
+    results.sort(
+      (a, b) =>
+        b.activity - a.activity || (a.jid < b.jid ? -1 : a.jid > b.jid ? 1 : 0),
+    );
+    return results
+      .slice(offset, offset + limit)
+      .map(({ activity: _activity, ...result }) => result);
   }
 
   chat(jid: string): Chat | undefined {
@@ -1647,7 +1791,12 @@ export class Store {
     }
   }
 
-  chats(limit = 100, offset = 0, filters: ChatFilters = {}) {
+  chats(
+    limit = 100,
+    offset = 0,
+    filters: ChatFilters = {},
+    include: readonly ChatInclude[] = [],
+  ) {
     const clauses: string[] = [];
     const states: (number | null)[] = [];
     for (const field of ['unread', 'archived'] as const) {
@@ -1667,6 +1816,13 @@ export class Store {
             : Number(filter),
       );
     }
+    const values: (number | string | null)[] = states;
+    if (filters.kinds) {
+      clauses.push(
+        `chat_kind(jid) IN (${filters.kinds.map(() => '?').join(',')})`,
+      );
+      values.push(...filters.kinds);
+    }
     return this.db
       .prepare(
         `SELECT jid FROM (
@@ -1684,9 +1840,17 @@ export class Store {
     ) ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
       ORDER BY activity_timestamp DESC,jid COLLATE BINARY ASC LIMIT ? OFFSET ?`,
       )
-      .all(...states, limit, offset)
+      .all(...values, limit, offset)
       .map((row) => {
         const chat = this.chatView(String(row.jid))!;
+        const enrichment = {
+          ...(include.includes('contact')
+            ? { contact: this.contactSummary(chat.jid!) }
+            : {}),
+          ...(include.includes('last-message')
+            ? { lastMessage: this.lastMessage(chat.jid!) }
+            : {}),
+        };
         const matchedBy: Partial<
           Record<'unread' | 'archived', 'pending-intent'>
         > = {};
@@ -1700,7 +1864,11 @@ export class Store {
           )
             matchedBy[field] = 'pending-intent';
         }
-        return Object.keys(matchedBy).length ? { ...chat, matchedBy } : chat;
+        return {
+          ...chat,
+          ...enrichment,
+          ...(Object.keys(matchedBy).length ? { matchedBy } : {}),
+        };
       });
   }
 
