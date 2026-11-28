@@ -41,14 +41,16 @@ Verification and SDK send returns alone do not create listed conversations. PN a
 
 `--kind` keeps only chats of the listed kinds, comma-separated, combined with the state filters. It applies before limits and offsets, so excluded rows do not occupy page slots. Omit it, or pass `all`, to list every kind as before.
 
-| Kind        | Exact JID server                                               |
-| ----------- | -------------------------------------------------------------- |
-| `direct`    | `@s.whatsapp.net` (PN) and `@lid` (LID)                        |
-| `group`     | `@g.us`                                                        |
-| `broadcast` | `@broadcast`, including `status@broadcast` and broadcast lists |
-| `other`     | Any other server, such as `@newsletter`                        |
+| Kind        | Exact JID                                                                 |
+| ----------- | ------------------------------------------------------------------------- |
+| `direct`    | An exact PN (`@s.whatsapp.net`) or LID (`@lid`) user JID                  |
+| `group`     | `@g.us`                                                                   |
+| `broadcast` | `@broadcast`, including `status@broadcast` and broadcast lists            |
+| `other`     | Anything else, such as `@newsletter` or a malformed or device-suffixed id |
 
-`--kind direct` excludes status updates and groups; `--kind direct,group` excludes only broadcasts. The kind comes from the JID alone, never from names. A daemon built before `--kind` ignores it; the CLI then fails with `PROTOCOL` instead of returning unfiltered rows. Restart the daemon with the current build.
+`--kind direct` excludes status updates and groups; `--kind direct,group` excludes only broadcasts. The kind comes from the JID alone, never from names.
+
+With `--kind` or `--include`, the CLI sends the socket command `filtered-chats` (plain `chats` rejects `kinds` and `include`). A daemon built before these options rejects that name, so the CLI fails with `PROTOCOL` and never returns unfiltered or unenriched rows as if the options applied. Restart the daemon with the current build. As a second check, the CLI also fails with `PROTOCOL` if a returned row has another kind or lacks an included field.
 
 ## Triage enrichment
 
@@ -79,9 +81,9 @@ Verification and SDK send returns alone do not create listed conversations. PN a
 }
 ```
 
-`lastMessage` is `{id, fromMe, timestamp, contentType}` for the row `messages --jid JID --limit 1` returns first (newest sender timestamp, resolved edit envelopes excluded), or `null` when no message is stored. It carries no text or caption. `contentType` is null when no content is readable, for example after a deletion; read `messages` for details. `fromMe: true` means the newest stored message is from this account, which is often enough to skip an idle re-check, but history is partial: a newer incoming message may not be stored yet. A group's `lastMessage` does not identify its sender. It is a different value from [`latestIncoming`](chat-state.md#guard-against-new-incoming-messages), the latest stored incoming message by arrival, which the read/archive guard uses.
+`lastMessage` is `{id, fromMe, timestamp, contentType}` for the newest stored message a person wrote in that exact chat, in `messages` order (newest sender timestamp, resolved edit envelopes excluded), or `null` when there is none. It skips reactions, protocol and edit envelopes (such as a disappearing-messages change), system stubs and group call offers, from either side. Incoming messages count as for [`latestIncoming`](chat-state.md#guard-against-new-incoming-messages), so missed calls and undecryptable messages count. A deleted message counts by its original content and keeps its author, with `contentType: null`. It carries no text or caption; read `messages` for content.
 
-A daemon built before `--include` omits these fields; the CLI then fails with `PROTOCOL`.
+`fromMe: true` means the newest stored person message is from this account. It does not prove the conversation is answered: history is partial, and a message can arrive after you looked. Decide whether a chat needs attention from `latestIncoming` (the latest stored incoming message, by arrival, also on every row) compared with the last incoming message you actually read, not from `lastMessage` alone. Use `lastMessage` to see who wrote last. A group's `lastMessage` does not identify its sender.
 
 ## Ordering and pagination
 

@@ -38,7 +38,7 @@ node dist/src/cli.js --output compact resolve --phone '+12025550101'
 node dist/src/cli.js --output compact contact --jid '123450001@lid'
 ```
 
-For triage, `--kind direct` keeps status updates and groups out of the page, and `--include contact,last-message` shows who each row is (observed labels and a phone number only from a PN or known mapping) and whether the newest stored message is yours (`lastMessage.fromMe`), without a `contact` or `messages` call per row. Use `contacts --query` to find a person by name or number. It returns candidate JIDs with their provenance, not a recipient; see [contact lookup](identity.md#look-up-contacts).
+For triage, `--kind direct` keeps status updates and groups out of the page, and `--include contact,last-message` shows who each row is (observed labels and a phone number only from a PN or known mapping) and who wrote the newest stored person message (`lastMessage.fromMe`), without a `contact` or `messages` call per row. Decide whether a row needs attention from its `latestIncoming.id` compared with the last incoming message you actually read, not from `lastMessage.fromMe` alone. Use `contacts --query` to find a person by name or number. It returns candidate JIDs with their provenance, not a recipient; see [contact lookup](identity.md#look-up-contacts).
 
 Use an exact observed JID or the exact PN JID returned by `resolve` with `data.status: confirmed` and a non-null `data.jid`. Names, LID digits, aliases, and shared contact cards cannot identify or authorize a recipient. Investigate conflicts before sending; see [recipient identity](identity.md).
 

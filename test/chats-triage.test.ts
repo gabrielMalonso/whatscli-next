@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
+import { proto } from 'baileys';
 import type { WAMessage } from 'baileys';
-import { parseCommand } from '../src/protocol.js';
+import { chatKind } from '../src/identity.js';
+import { parseCommand, wireCommand } from '../src/protocol.js';
 import { formatResponse } from '../src/response.js';
 import { Store } from '../src/store.js';
 import { publicResponse } from './fixtures/responses.js';
@@ -242,14 +244,14 @@ test('contacts lookup matches observed labels and known phone digits only, with 
     // Accent- and case-insensitive; the known LID alias inherits the PN label.
     const joao = search('JOAO');
     assert.deepEqual(
-      joao.map(({ jid, observedChat, matchedBy }) => ({
+      joao.map(({ jid, observedChat, matchedFields }) => ({
         jid,
         observedChat,
-        matchedBy,
+        matchedFields,
       })),
       [
-        { jid: lidJoao, observedChat: true, matchedBy: ['name', 'notify'] },
-        { jid: pnJoao, observedChat: true, matchedBy: ['name', 'notify'] },
+        { jid: lidJoao, observedChat: true, matchedFields: ['name', 'notify'] },
+        { jid: pnJoao, observedChat: true, matchedFields: ['name', 'notify'] },
       ],
     );
     assert.deepEqual(joao[0]?.contact, store.contactSummary(lidJoao));
@@ -259,14 +261,14 @@ test('contacts lookup matches observed labels and known phone digits only, with 
     );
     // The conflicting LID does not inherit "Beatriz Other"; the PN without a chat sorts last.
     assert.deepEqual(
-      search('bea').map(({ jid, observedChat, matchedBy }) => ({
+      search('bea').map(({ jid, observedChat, matchedFields }) => ({
         jid,
         observedChat,
-        matchedBy,
+        matchedFields,
       })),
       [
-        { jid: lidConflict, observedChat: true, matchedBy: ['notify'] },
-        { jid: pnBea, observedChat: false, matchedBy: ['name'] },
+        { jid: lidConflict, observedChat: true, matchedFields: ['notify'] },
+        { jid: pnBea, observedChat: false, matchedFields: ['name'] },
       ],
     );
     assert.deepEqual(
@@ -275,7 +277,10 @@ test('contacts lookup matches observed labels and known phone digits only, with 
     );
     // Phone digits reach a LID only through a known mapping.
     assert.deepEqual(
-      search('+1 202 555-0101').map(({ jid, matchedBy }) => [jid, matchedBy]),
+      search('+1 202 555-0101').map(({ jid, matchedFields }) => [
+        jid,
+        matchedFields,
+      ]),
       [
         [lidJoao, ['phone']],
         [pnJoao, ['phone']],
@@ -302,7 +307,7 @@ test('contacts lookup matches observed labels and known phone digits only, with 
 test('socket validation of kinds, include and contacts queries', () => {
   assert.deepEqual(
     parseCommand({
-      command: 'chats',
+      command: 'filtered-chats',
       kinds: ['group', 'direct'],
       include: ['last-message', 'contact'],
     }),
@@ -320,10 +325,25 @@ test('socket validation of kinds, include and contacts queries', () => {
     { kinds: ['person'] },
     { kinds: 'direct' },
     { include: ['text'] },
+    {},
   ])
+    assert.throws(() => parseCommand({ command: 'filtered-chats', ...value }), {
+      code: 'INVALID_ARGUMENT',
+    });
+  // Plain chats never silently carries the filters an older daemon would drop.
+  for (const value of [{ kinds: ['direct'] }, { include: ['contact'] }])
     assert.throws(() => parseCommand({ command: 'chats', ...value }), {
       code: 'INVALID_ARGUMENT',
     });
+  assert.deepEqual(
+    wireCommand({ command: 'chats', limit: 1, offset: 0, kinds: ['direct'] })
+      .command,
+    'filtered-chats',
+  );
+  assert.equal(
+    wireCommand({ command: 'chats', limit: 1, offset: 0 }).command,
+    'chats',
+  );
   assert.deepEqual(parseCommand({ command: 'contacts', query: ' Ana ' }), {
     command: 'contacts',
     query: 'Ana',
@@ -471,7 +491,11 @@ test('offline CLI triage: kind, include and contacts lookup through the daemon',
   assert.match(help.commands.chats!, /--kind/);
 });
 
-test('a daemon that ignores --kind or --include is reported as PROTOCOL, not as filtered rows', async (t) => {
+/** A fake daemon; `reply` decides the response for each wire request. */
+async function fakeDaemon(
+  t: { after: (fn: () => void) => void },
+  reply: (command: Record<string, unknown>) => Record<string, unknown>,
+) {
   const directory = temporary();
   const commands: Record<string, unknown>[] = [];
   const server = createServer((socket) => {
@@ -482,22 +506,46 @@ test('a daemon that ignores --kind or --include is reported as PROTOCOL, not as 
       if (!buffer.includes('\n')) return;
       const command = JSON.parse(buffer.trim()) as Record<string, unknown>;
       commands.push(command);
-      // An older daemon drops unknown fields and returns unfiltered, unenriched rows.
-      socket.end(
-        JSON.stringify({
-          ...publicResponse([
-            { jid: status, name: null, pending: {} },
-            { jid: lidNoName, name: null, pending: {} },
-          ]),
-          id: command.id,
-        }) + '\n',
-      );
+      socket.end(JSON.stringify({ ...reply(command), id: command.id }) + '\n');
     });
   });
   await new Promise<void>((resolve) =>
     server.listen(join(directory, 'control.sock'), resolve),
   );
   t.after(() => server.close());
+  return { directory, commands };
+}
+
+const unfiltered = publicResponse([
+  { jid: status, name: null, pending: {} },
+  { jid: lidNoName, name: null, pending: {} },
+]);
+
+test('a daemon without --kind/--include rejects filtered-chats, reported as PROTOCOL', async (t) => {
+  // An older daemon knows only plain chats and returns unfiltered, unenriched rows.
+  const { directory, commands } = await fakeDaemon(t, (command) =>
+    command.command === 'chats'
+      ? unfiltered
+      : { ok: false, code: 'INVALID_ARGUMENT', error: 'Unknown command' },
+  );
+  // Rejected on the wire name, so even an offset page that happens to match cannot pass.
+  for (const args of [
+    ['chats', '--kind', 'direct', '--offset', '1'],
+    ['chats', '--include', 'last-message'],
+  ]) {
+    const result = await cli(directory, ...args);
+    assert.equal(result.code, 'PROTOCOL', args.join(' '));
+    assert.equal(commands.at(-1)?.command, 'filtered-chats');
+  }
+  // Without the new options, the same daemon answers as before.
+  assert.equal((await cli(directory, 'chats')).ok, true);
+  assert.equal(commands.at(-1)?.command, 'chats');
+  assert.equal('kinds' in commands.at(-1)!, false);
+});
+
+test('rows that ignore --kind or --include are PROTOCOL, also through --expect-account', async (t) => {
+  // A daemon that accepts the request but does not apply it.
+  const { directory, commands } = await fakeDaemon(t, () => unfiltered);
   const filtered = await cli(directory, 'chats', '--kind', 'direct');
   assert.equal(filtered.ok, false);
   assert.equal(filtered.code, 'PROTOCOL');
@@ -512,7 +560,223 @@ test('a daemon that ignores --kind or --include is reported as PROTOCOL, not as 
   );
   assert.equal(enriched.code, 'PROTOCOL');
   assert.deepEqual(commands.at(-1)?.include, ['contact']);
-  // Without the new options, the same response is passed through unchanged.
-  assert.equal((await cli(directory, 'chats')).ok, true);
-  assert.equal('kinds' in commands.at(-1)!, false);
+  const expected = await cli(
+    directory,
+    '--expect-account',
+    '12025550199',
+    'chats',
+    '--kind',
+    'direct',
+  );
+  assert.equal(expected.code, 'PROTOCOL');
+  const wrapper = commands.at(-1) as {
+    command: string;
+    request: Record<string, unknown>;
+  };
+  assert.equal(wrapper.command, 'expect-account');
+  assert.equal(wrapper.request.command, 'filtered-chats');
+  assert.deepEqual(wrapper.request.kinds, ['direct']);
+});
+
+test('lastMessage skips own reactions, protocol rows and stubs; own deletions keep their author', () => {
+  const store = new Store(temporary());
+  try {
+    seed(store);
+    store.observeMessage(incoming(lidJoao, 'in-2', 500));
+    // The account reacts and changes disappearing messages: neither answers.
+    store.observeMessage({
+      key: { remoteJid: lidJoao, id: 'react-1', fromMe: true },
+      messageTimestamp: 510,
+      message: {
+        reactionMessage: {
+          key: { remoteJid: lidJoao, id: 'in-2', fromMe: false },
+          text: '👍',
+        },
+      },
+    });
+    store.observeMessage({
+      key: { remoteJid: lidJoao, id: 'proto-1', fromMe: true },
+      messageTimestamp: 520,
+      message: {
+        protocolMessage: {
+          type: proto.Message.ProtocolMessage.Type.EPHEMERAL_SETTING,
+          ephemeralExpiration: 86400,
+        },
+      },
+    });
+    store.observeMessage({
+      key: { remoteJid: lidJoao, id: 'stub-1', fromMe: true },
+      messageTimestamp: 530,
+      messageStubType: proto.WebMessageInfo.StubType.E2E_ENCRYPTED,
+    });
+    const last = () =>
+      new Map(
+        (
+          store.chats(100, 0, { kinds: ['direct'] }, ['last-message']) as Row[]
+        ).map((row) => [row.jid, row.lastMessage]),
+      ).get(lidJoao);
+    assert.deepEqual(last(), {
+      id: 'in-2',
+      fromMe: false,
+      timestamp: 500,
+      contentType: 'conversation',
+    });
+    assert.deepEqual(store.lastMessage(lidJoao), last());
+    // An own reply that is later deleted is still the account's message.
+    const reply = incoming(lidJoao, 'out-2', 540, true);
+    store.observeMessage(reply);
+    store.deleteMessages({ keys: [reply.key] });
+    assert.deepEqual(store.lastMessage(lidJoao), {
+      id: 'out-2',
+      fromMe: true,
+      timestamp: 540,
+      contentType: null,
+    });
+    assert.doesNotMatch(
+      JSON.stringify(store.lastMessage(lidJoao)),
+      /FICTIONAL_BODY/,
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('direct kind is only an exact PN or LID; device-suffixed and malformed ids are other', () => {
+  assert.equal(chatKind(pnJoao), 'direct');
+  assert.equal(chatKind(lidJoao), 'direct');
+  for (const jid of [
+    '12025550101:3@s.whatsapp.net',
+    '0@s.whatsapp.net',
+    '0123@lid',
+    newsletter,
+  ])
+    assert.equal(chatKind(jid), 'other', jid);
+  assert.equal(chatKind(status), 'broadcast');
+  const store = new Store(temporary());
+  try {
+    store.observeChat({ id: '12025550101:3@s.whatsapp.net', unreadCount: 1 });
+    store.observeChat({ id: pnJoao, unreadCount: 1 });
+    assert.deepEqual(
+      (store.chats(100, 0, { kinds: ['direct'] }, ['contact']) as Row[]).map(
+        (row) => row.jid,
+      ),
+      [pnJoao],
+    );
+    assert.deepEqual(
+      (store.chats(100, 0, { kinds: ['other'] }, ['contact']) as Row[]).map(
+        (row) => [row.jid, row.contact],
+      ),
+      [['12025550101:3@s.whatsapp.net', null]],
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('SQL contact lookup equals a brute-force oracle over summaries, including conflicts and paging', () => {
+  const store = new Store(temporary());
+  const names = ['Ana Exâmple', 'ANDRÉ Sample', 'Bea', 'Joana', 'Zé'];
+  try {
+    store.transaction(() => {
+      for (let i = 0; i < 120; i++) {
+        const pn = `120255${String(10000 + i)}@s.whatsapp.net`;
+        const lid = `${700000 + i}@lid`;
+        // Known pairs, unknown endpoints, and conflicts in both directions.
+        if (i % 5 !== 4) store.observeMapping(pn, lid, 'lid-mapping.update', i);
+        if (i % 7 === 0)
+          store.observeMapping(pn, `${800000 + i}@lid`, 'message-key', i);
+        if (i % 11 === 0)
+          store.observeMapping(
+            `120255${String(20000 + i)}@s.whatsapp.net`,
+            lid,
+            'contacts.update',
+            i,
+          );
+        if (i % 2 === 0)
+          store.observeContact(
+            { id: pn, name: `${names[i % names.length]} ${i}` },
+            'contacts.upsert',
+          );
+        if (i % 3 === 0)
+          store.observeContact(
+            { id: lid, notify: names[(i + 2) % names.length]! },
+            'contacts.update',
+          );
+        if (i % 4 === 0)
+          store.observeChat({
+            id: i % 8 ? lid : pn,
+            ...(i % 12 ? { conversationTimestamp: 1000 + (i % 9) } : {}),
+          });
+      }
+    });
+    const fold = (value: string) =>
+      value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+    const jids = new Set<string>();
+    for (const sql of [
+      "SELECT id AS jid FROM values_store WHERE category='contact'",
+      'SELECT pn AS jid FROM identity_mappings',
+      'SELECT lid AS jid FROM identity_mappings',
+      'SELECT jid FROM chats',
+    ])
+      for (const row of store.db.prepare(sql).all()) jids.add(String(row.jid));
+    const activity = new Map(
+      store.db
+        .prepare('SELECT jid,activity_timestamp FROM chats')
+        .all()
+        .map((row) => [String(row.jid), Number(row.activity_timestamp) || 0]),
+    );
+    const oracle = (query: string) => {
+      const text = fold(query.trim());
+      const digits = /^\+?[\d\s().-]+$/.test(query.trim())
+        ? query.replace(/\D/g, '')
+        : '';
+      return [...jids]
+        .flatMap((jid) => {
+          const contact = store.contactSummary(jid);
+          if (!contact) return [];
+          const matched =
+            contact.labels.some((label) => fold(label.value).includes(text)) ||
+            (digits.length >= 3 && !!contact.phone?.slice(1).includes(digits));
+          return matched ? [jid] : [];
+        })
+        .sort((a, b) => {
+          const x = activity.has(a) ? activity.get(a)! : -1;
+          const y = activity.has(b) ? activity.get(b)! : -1;
+          return (
+            Number(activity.has(b)) - Number(activity.has(a)) ||
+            y - x ||
+            (a < b ? -1 : a > b ? 1 : 0)
+          );
+        });
+    };
+    for (const query of [
+      'an',
+      'andre',
+      'exa',
+      'Zé',
+      'bea 1',
+      '2025510',
+      '+1 202 551 0003',
+      '700001',
+      '20020',
+      'no match here',
+    ]) {
+      const expected = oracle(query);
+      const actual = store.contactSearch(query, 100).map((row) => row.jid);
+      assert.deepEqual(actual, expected.slice(0, 100), query);
+      assert.deepEqual(
+        store.contactSearch(query, 7, 5).map((row) => row.jid),
+        expected.slice(5, 12),
+        query,
+      );
+      for (const row of store.contactSearch(query, 100))
+        assert.ok(row.matchedFields.length > 0, `${query} ${row.jid}`);
+    }
+    // LID digits alone never match, even though 700001@lid exists: every
+    // phone match comes from a PN number.
+    for (const row of store.contactSearch('700001', 100))
+      assert.ok(row.contact.phone?.includes('700001'), row.jid);
+  } finally {
+    store.close();
+  }
 });

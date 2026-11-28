@@ -18,7 +18,12 @@ import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { expectedAccount } from './identity.js';
 import { rpc, RpcError } from './rpc.js';
-import { chatIncludes, eventKind, object } from './protocol.js';
+import {
+  chatIncludes,
+  eventKind,
+  needsFilteredChats,
+  object,
+} from './protocol.js';
 import { chatKind, chatKinds } from './identity.js';
 import { MAX_WAIT_ACK_MS } from './protocol.js';
 import type { AckWaitOption, Command } from './protocol.js';
@@ -239,9 +244,9 @@ function help(): Record<string, unknown> {
       ifLatestIncomingOption:
         '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null) and no counted message in the chat is unavailable, checked in the daemon immediately before the intent is persisted and the patch is built. Otherwise PRECONDITION_FAILED and nothing changes: read incoming --jid JID --after THAT_ID, repeat with --after the last listed ID while truncated, then retry with the last ID of the final page. Latest means most recently stored by this runtime, not newest timestamp; a message that gets content later moves to a fresh position. Local coverage only. Excludes own messages, protocol stubs, edits and reactions; missed calls, call logs, unrecognized and undecryptable content count. Refused with unavailable-incoming while any counted message in the chat has available: false; do not proceed until those are available. On success feedback.latestIncomingChanged: true means a message arrived during or after the mutation; read incoming --after the guarded ID, never repeat the command. A daemon without the guard rejects it; a guarded success without latestIncomingChanged is reported as PROTOCOL. Part of the key intent; a replay never re-checks it. none cannot name a message whose ID is literally none.',
       kindOption:
-        '--kind (chats): comma-separated direct (@s.whatsapp.net, @lid), group (@g.us), broadcast (@broadcast, including status@broadcast), other; default all. Example: --kind direct excludes groups and status.',
+        '--kind (chats): comma-separated direct (exact PN or LID JID), group (@g.us), broadcast (@broadcast, including status@broadcast), other; default all. Example: --kind direct excludes groups and status.',
       includeOption:
-        '--include (chats): comma-separated contact, last-message. contact: {phone, mapping, labels[{field, value, jid, source, observedAt}]} for PN/LID rows, null otherwise; phone only from a PN JID or a known mapping, never from LID digits; labels are observed display hints, not identity. lastMessage: {id, fromMe, timestamp, contentType} of the first messages --jid row, or null; no text.',
+        '--include (chats): comma-separated contact, last-message. contact: {phone, mapping, labels[{field, value, jid, source, observedAt}]} for PN/LID rows, null otherwise; phone only from a PN JID or a known mapping, never from LID digits; labels are observed display hints, not identity. lastMessage: {id, fromMe, timestamp, contentType} of the newest stored person message (reactions, protocol and edit envelopes and stubs skipped), or null; no text. Decide attention from latestIncoming, not lastMessage.fromMe alone. A daemon without these options rejects them (PROTOCOL).',
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };
@@ -863,7 +868,19 @@ async function execute(
       'PROTOCOL',
       'The daemon rejected the request as an unknown command; it may predate --expect-account or another option of this command. Nothing was done; restart the daemon with this build',
     );
+  if (
+    needsFilteredChats(command) &&
+    response.ok === false &&
+    response.code === 'INVALID_ARGUMENT' &&
+    response.error === 'Unknown command'
+  )
+    // A daemon that predates --kind/--include rejects filtered-chats.
+    throw new CommandError(
+      'PROTOCOL',
+      'The daemon does not support chats --kind or --include; restart it with this build',
+    );
   if (command.command === 'chats' && response.ok === true)
+    // Defense in depth: every row must match the kinds and carry the included fields.
     checkChatsResponse(command, response.data);
   if (action === 'stop' && response.ok === true) {
     const deadline = Date.now() + 10000;

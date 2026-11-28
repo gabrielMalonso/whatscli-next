@@ -103,14 +103,14 @@ The query must have at least two characters. It matches, case- and accent-insens
 
 Each result is:
 
-| Field          | Meaning                                                                                                                     |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `jid`          | Exact PN or LID JID. A known PN/LID pair appears as two results; use the one you need exactly, typically the observed chat. |
-| `observedChat` | Whether a chat with this exact JID is stored locally.                                                                       |
-| `matchedBy`    | Fields that matched: `name`, `verifiedName`, `notify`, `phone`.                                                             |
-| `contact`      | The summary below.                                                                                                          |
+| Field           | Meaning                                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `jid`           | Exact PN or LID JID. A known PN/LID pair appears as two results; use the one you need exactly, typically the observed chat. |
+| `observedChat`  | Whether a chat with this exact JID is stored locally.                                                                       |
+| `matchedFields` | Fields that matched: `name`, `verifiedName`, `notify`, `phone`.                                                             |
+| `contact`       | The summary below.                                                                                                          |
 
-Results with an observed chat come first, most recently active first, then the rest, each in exact JID order. Page with `--limit` (at most 100) and `--offset`.
+Results with an observed chat come first, most recently active first, then the rest, each in exact JID order. Page with `--limit` (at most 100) and `--offset`. A daemon built before `contacts` rejects it as an unknown command.
 
 ### Contact summary
 
