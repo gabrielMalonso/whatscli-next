@@ -43,7 +43,9 @@ export type IdentitySource =
   | 'contacts.upsert'
   | 'contacts.update'
   | 'message-key'
-  | 'baileys.key-store';
+  | 'baileys.key-store'
+  // The server's answer to a send-route USync LID query, recorded as it was given.
+  | 'baileys.executeUSyncQuery/lid';
 export type RecipientCheck = {
   status: 'confirmed' | 'not-found' | 'unknown';
   source: 'baileys.onWhatsApp';

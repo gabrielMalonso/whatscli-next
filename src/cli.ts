@@ -247,6 +247,8 @@ function help(): Record<string, unknown> {
         '--kind (chats): comma-separated direct (exact PN or LID JID), group (@g.us), broadcast (@broadcast, including status@broadcast), other; default all. Example: --kind direct excludes groups and status.',
       includeOption:
         '--include (chats): comma-separated contact, last-message. contact: {phone, mapping, labels[{field, value, jid, source, observedAt}]} for PN/LID rows, null otherwise; phone only from a PN JID or a known mapping, never from LID digits; labels are observed display hints, not identity. lastMessage: {id, fromMe, timestamp, contentType} of the newest stored person message (reactions, protocol and edit envelopes and stubs skipped), or null; no text. Decide attention from latestIncoming, not lastMessage.fromMe alone. A daemon without these options rejects them (PROTOCOL).',
+      linkedPeerField:
+        "linkedPeer (envelope beside data on chat, messages and incoming for a PN or LID JID; absent for other JIDs). known: {mapping, jid, observedChat, hasMessages, activity, unread, archived, latestIncoming} from the peer JID's own local rows; unknown or conflict: {mapping, jid: null}. A hint, never merged: data stays under the requested JID; read the peer with its own --jid. Not recipient authorization.",
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };

@@ -28,7 +28,7 @@ The selected message range comes from local history and may not include the late
 
 Archive uses the same app-patch path. Different timing or decryption warnings do not establish stronger confirmation or explain a divergence.
 
-List selection uses pending intent values for boolean filters by default, without replacing observed values in `chatView`. `matchedBy` records only the fields selected through intent. Unknown filters and `observedOnly: true` use observed values, including null pending state. Both paths filter in SQL before ordering and pagination. A response does not discharge pending: pending means missing state observation, not missing IQ response.
+List selection uses pending intent values for boolean filters by default, without replacing observed values in `chatView`. `matchedBy` records only the fields selected through intent. Unknown filters and `observedOnly: true` use observed values, including null pending state. Both paths filter in SQL before ordering and pagination. A response does not discharge pending: pending means missing state observation, not missing IQ response. A PN intent marked `superseded` by an independent observation of the same field on its known LID (`supersedeLinkedPending` in `observeChat`, with PN pending keys captured beside the LID's) is excluded from intent matching in SQL only while that mapping stays known; its observed field stays null. See [pending intents on a linked PN](../user/chat-state.md#pending-intents-on-a-linked-pn).
 
 When changing this behavior, cover both mutation directions, event-buffer ordering, duplicate increments, history, restart, and exact-key replay in `test/read-unread.test.ts` and `test/pending.test.ts`.
 

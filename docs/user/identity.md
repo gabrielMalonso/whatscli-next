@@ -73,6 +73,9 @@ PN/LID associations come from:
 - SDK contact, history, and mapping events.
 - Alternate message keys.
 - The SDK mapping key store.
+- The server's answer to a direct PN send's [route query](sending.md#direct-pn-routes-and-receipts) (`source: baileys.executeUSyncQuery/lid`).
+
+A route query that returns one exact canonical LID for the requested PN records that pair, with the query time as `observedAt`, before the send is attempted. It is recorded even when it contradicts earlier evidence: the mapping then becomes `conflict` and the route stays `unproven` with `reason: conflicting-identities`. A failed, missing, malformed or ambiguous answer records nothing. A conflict created this way persists: no command removes mapping evidence, so every later direct send to that PN stays `unproven` with `conflicting-identities` (it goes to the exact PN, never to either LID), and `linkedPeer` on both endpoints reports only `conflict`. This happens, for example, when a number moves to a new account. Investigate with `contact --jid` before relying on either JID. Like other evidence, the pair proves an association at query time, not permanent ownership, and it never authorizes a send to the LID; `--allow-jid` and recipient checks stay exact.
 
 `mapping.status` can be:
 
@@ -121,6 +124,42 @@ Results with an observed chat come first, most recently active first, then the r
 - `labels`: every observed `name`, `verifiedName` and `notify` value, in that order, each with its `jid`, `source` and local `observedAt`. Labels come from the exact JID and, only while `mapping` is `known`, from its alias; the label's `jid` says which.
 
 With `conflict`, neither the alias's labels nor a phone number transfer to a LID. Several labels can disagree; all are listed. The first label is only a display hint. `contact --jid` keeps the complete evidence, including mapping sources and verification.
+
+### Linked peer hint
+
+The same person can have history under both a PN and a LID JID, for example after a PN send was routed to the LID. `chat`, `messages` and `incoming` stay exact, so `messages --jid PN` can be empty while the conversation continues under the LID. To make that visible without merging, these three commands add an envelope field `linkedPeer` beside `data` when the requested JID is a PN or LID:
+
+```json
+{
+  "ok": true,
+  "data": [],
+  "linkedPeer": {
+    "mapping": "known",
+    "jid": "123450001@lid",
+    "observedChat": true,
+    "hasMessages": true,
+    "activity": { "timestamp": 1700000300, "source": "message.messageTimestamp" },
+    "unread": true,
+    "archived": null,
+    "latestIncoming": { "id": "FICTIONAL-IN-009", "timestamp": 1700000300, "available": true }
+  }
+}
+```
+
+| Field            | Meaning                                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `mapping`        | The requested JID's mapping status, as in `contact`.                                                                           |
+| `jid`            | The other half of a `known` pair. `null` for `unknown` and `conflict`, which carry no other field.                             |
+| `observedChat`   | Whether a chat row is stored under the peer JID. An SDK send return alone does not create one.                                 |
+| `hasMessages`    | Whether any row is stored under the peer JID, including reactions and protocol rows; use `latestIncoming` for person messages. |
+| `activity`       | The peer chat's `activity`, as in `chats`, or `null` without a peer chat.                                                      |
+| `unread`         | The peer chat's observed `unread`, `null` when unknown, pending or without a peer chat.                                        |
+| `archived`       | The peer chat's observed `archived`, with the same null rules.                                                                 |
+| `latestIncoming` | The peer's own [latest incoming message](chat-state.md#guard-against-new-incoming-messages), or `null` when none.              |
+
+Every value comes from local rows stored under the peer's own exact JID. Nothing is combined: `data` is unchanged, both histories keep their own rows, and the mapping does not authorize sending to the peer. With `conflict` or `unknown` no peer value is shown, because there is no single peer. Other JIDs, such as groups, have no `linkedPeer`. A daemon built before this field omits it; treat absence as unknown.
+
+When `linkedPeer.mapping` is `known` and the peer has messages or activity, read it explicitly with `--jid` set to `linkedPeer.jid`, and report the two histories separately.
 
 ## Historical observation times
 

@@ -109,6 +109,7 @@ export function createRuntime(
   const execution = new AsyncLocalStorage<{
     invoked: boolean;
     replay: boolean;
+    envelope?: Record<string, unknown>;
   }>();
   function perform(
     ...args: Parameters<typeof performOperation>
@@ -333,11 +334,36 @@ export function createRuntime(
         !isLid(entry.lid)
       )
         return unprovenRoute(jid, clock.now(), 'invalid-response');
+      const observedAt = clock.now();
+      try {
+        // The server's exact PN -> LID answer is identity evidence like any other
+        // association: retained beside contradictions, never last-write-wins, so
+        // mapping status stays computed from all evidence. Only this proven pair.
+        store.transaction(() => {
+          store.observeMapping(
+            jid,
+            entry.lid,
+            'baileys.executeUSyncQuery/lid',
+            observedAt,
+          );
+          store.event('route-mapping', {
+            pn: jid,
+            lid: entry.lid,
+            source: 'baileys.executeUSyncQuery/lid',
+          });
+        });
+      } catch (cause) {
+        throw new CommandError(
+          'LOCAL_STATE',
+          'Route evidence could not be persisted; no send was attempted',
+          { cause },
+        );
+      }
       return {
         status: 'proven',
         jid: entry.lid,
         source: 'baileys.executeUSyncQuery/lid',
-        observedAt: clock.now(),
+        observedAt,
         limit: 'server-association-at-query-time',
       };
     },
@@ -583,6 +609,9 @@ export function createRuntime(
         unread: pending.unread?.key ?? null,
         archived: pending.archived?.key ?? null,
       };
+      // A conditional capture can activate later; a PN intent persisted after
+      // this capture must not be superseded by it.
+      const peerPendingKeys = store.peerPendingKeys(jid);
       const order = ++captureOrder;
       const raw = { ...chat };
       delete raw.conditional;
@@ -614,6 +643,7 @@ export function createRuntime(
               snapshot ? 'snapshot' : 'update',
               pendingKeys,
               failedReplayTimes,
+              peerPendingKeys,
             );
           }),
         );
@@ -900,6 +930,15 @@ export function createRuntime(
       persist(() => store.deleteMessages(event)),
     );
   }
+  /**
+   * Adds the envelope's `linkedPeer` hint, read in the same synchronous step as
+   * the command's data. Never merges histories or changes `data`.
+   */
+  function linkPeer(jid: string): void {
+    const context = execution.getStore();
+    const linkedPeer = store.linkedPeer(jid);
+    if (context && linkedPeer) context.envelope = { linkedPeer };
+  }
   async function execute(command: Command): Promise<unknown> {
     switch (command.command) {
       case 'observability':
@@ -941,6 +980,7 @@ export function createRuntime(
           command.include,
         );
       case 'chat':
+        linkPeer(command.jid);
         return store.chatView(command.jid);
       case 'contact':
         return store.contactView(command.jid);
@@ -986,8 +1026,10 @@ export function createRuntime(
         };
       }
       case 'incoming':
+        linkPeer(command.jid);
         return store.incomingView(command.jid, command.afterId, command.limit);
       case 'messages':
+        linkPeer(command.jid);
         return store
           .messages(command.jid, command.limit, command.offset)
           .map((message) => store.messageView(message));
@@ -1459,10 +1501,22 @@ export function createRuntime(
     directory: store.directory,
     build: buildFingerprint,
     observability,
-    execute(command: Command, context: ObsFields = {}) {
+    /**
+     * `envelope`, when given, receives response envelope fields beside `data`
+     * (currently `linkedPeer` for chat, messages and incoming).
+     */
+    execute(
+      command: Command,
+      context: ObsFields = {},
+      envelope?: Record<string, unknown>,
+    ) {
       processObservation.reconcile();
       if (command.command === 'observability') return execute(command);
-      const state = { invoked: false, replay: false };
+      const state: {
+        invoked: boolean;
+        replay: boolean;
+        envelope?: Record<string, unknown>;
+      } = { invoked: false, replay: false };
       const started = performance.now();
       const fields = commandFields(observability, command);
       return execution.run(state, async () => {
@@ -1480,6 +1534,8 @@ export function createRuntime(
           if (sending && command.waitAckMs && result)
             result =
               (await waitForAck(command.key, command.waitAckMs)) ?? result;
+          if (envelope && state.envelope)
+            Object.assign(envelope, state.envelope);
           return result;
         } catch (error) {
           code = errorResponse(error).code;
@@ -1490,7 +1546,9 @@ export function createRuntime(
             ...fields,
             ...context,
             ...resultFields(result, observability),
-            ...('key' in command && command.command !== 'request' ? state : {}),
+            ...('key' in command && command.command !== 'request'
+              ? { invoked: state.invoked, replay: state.replay }
+              : {}),
             durationMs: performance.now() - started,
             code,
             ok: code === 'OK',
