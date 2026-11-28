@@ -16,6 +16,8 @@ Startup recovers owned, private stale sockets while preserving active sockets an
 
 Each CLI invocation starts a new Node process without loading the SDK, Store, or connection runtime. RPC uses one newline-delimited response, an inclusive 8 MiB response cap, and a single transport attempt. Fragment assembly scans each decoded fragment once, then joins and parses the first complete line.
 
+A command with `--expect-account` travels as `{"command": "expect-account", "expectAccount": DIGITS, "request": COMMAND}`, where `COMMAND` is the ordinary request. The daemon, like the JSONL probe, compares it with the linked credentials' own PN JID before the shutdown check and before any read, persist or SDK call. A daemon built before the check rejects the wrapper as an unknown command instead of dropping the expectation, and the CLI reports that as `PROTOCOL`. A plain command carrying `expectAccount` is rejected.
+
 Full and compact output use the same socket payload. Smaller pages reduce transport volume.
 
 The flat socket/JSONL request reserves `id` for correlation. Downloads use a separate `messageId`:

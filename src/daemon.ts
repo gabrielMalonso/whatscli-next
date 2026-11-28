@@ -116,6 +116,9 @@ async function main(): Promise<void> {
             ...wireFields(runtime.observability, id),
           };
           capture = request.command.command !== 'observability';
+          // Before anything else: a request for another account does nothing here.
+          if (request.expectAccount !== undefined)
+            runtime.checkAccount(request.expectAccount);
           if (stopping && request.command.command !== 'status')
             throw new CommandError('PRECONDITION_FAILED', 'Daemon is stopping');
           const data = await runtime.execute(

@@ -71,6 +71,8 @@ async function main(): Promise<void> {
           ...wireFields(runtime.observability, id),
         };
         capture = request.command.command !== 'observability';
+        if (request.expectAccount !== undefined)
+          runtime.checkAccount(request.expectAccount);
         const data = await runtime.execute(
           request.command,
           wireFields(runtime.observability, id),

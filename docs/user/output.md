@@ -102,16 +102,17 @@ Failures return `ok: false`, a safe human-readable `error`, and a string `code`.
 
 CLI commands exit 0 on success and 1 on failure. The probe continues after individual error responses and may exit 0. Socket/probe correlation is preserved when parsed, otherwise null; local CLI errors do not invent an RPC ID.
 
-| Code                  | Reporting boundary                                                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `INVALID_ARGUMENT`    | Invalid options, identity/card/key input, request/file size or shape, or socket path.                                                   |
-| `KEY_CONFLICT`        | A durable key was reused with a different exact recipient, kind, content, or arguments.                                                 |
-| `PRECONDITION_FAILED` | Unsatisfied connection, pairing/recovery, target/restriction, identity/message/media, privacy, configuration, or shutdown precondition. |
-| `LOCAL_STATE`         | Classified local persistence, configuration, or backup failure; other I/O errors may remain `UNKNOWN`.                                  |
-| `NOT_RUNNING`         | RPC connection returned ENOENT/ECONNREFUSED. This alone does not prove the old process finished cleanup.                                |
-| `TIMEOUT`             | Response wait expired without cancelling runtime work.                                                                                  |
-| `PROTOCOL`            | Invalid, mismatched, oversized, or incomplete RPC response.                                                                             |
-| `UNKNOWN`             | No classified cause at this boundary, including unclassified SDK, filesystem, or startup failures.                                      |
+| Code                  | Reporting boundary                                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_ARGUMENT`    | Invalid options, identity/card/key input, request/file size or shape, or socket path.                                                          |
+| `KEY_CONFLICT`        | A durable key was reused with a different exact recipient, kind, content, or arguments.                                                        |
+| `PRECONDITION_FAILED` | Unsatisfied connection, pairing/recovery, target/restriction, identity/message/media, privacy, configuration, or shutdown precondition.        |
+| `ACCOUNT_MISMATCH`    | `--expect-account` differs from the daemon's linked account, or no account is linked. No chat state, request key or WhatsApp call was touched. |
+| `LOCAL_STATE`         | Classified local persistence, configuration, or backup failure; other I/O errors may remain `UNKNOWN`.                                         |
+| `NOT_RUNNING`         | RPC connection returned ENOENT/ECONNREFUSED. This alone does not prove the old process finished cleanup.                                       |
+| `TIMEOUT`             | Response wait expired without cancelling runtime work.                                                                                         |
+| `PROTOCOL`            | Invalid, mismatched, oversized, or incomplete RPC response, or a daemon that predates `--expect-account` refused it.                           |
+| `UNKNOWN`             | No classified cause at this boundary, including unclassified SDK, filesystem, or startup failures.                                             |
 
 ### Error disclosure and compatibility
 
