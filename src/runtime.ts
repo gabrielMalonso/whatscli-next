@@ -36,7 +36,12 @@ import type {
   RecoveryState,
   RetryReason,
 } from './health.js';
-import { internationalPhone, isLid, recipientJid } from './identity.js';
+import {
+  accountUser,
+  internationalPhone,
+  isLid,
+  recipientJid,
+} from './identity.js';
 import type { RecipientCheck } from './identity.js';
 import { perform as performOperation } from './operations.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -1523,6 +1528,22 @@ export function createRuntime(
         issues: [...issues],
         activeIssues: [...issues].filter(issueActive).map(issueDetail),
       };
+    },
+    /**
+     * Refuse a request meant for another account before any read, persist or
+     * SDK call. Compares only the PN user part of the linked account's own JID.
+     */
+    checkAccount(expected: string): void {
+      if (!hasLinkedCredentials(auth.state.creds))
+        throw new CommandError(
+          'ACCOUNT_MISMATCH',
+          'No WhatsApp account is linked in this data directory; nothing was done',
+        );
+      if (accountUser(auth.state.creds.me?.id) !== expected)
+        throw new CommandError(
+          'ACCOUNT_MISMATCH',
+          'The linked WhatsApp account is not the expected account; nothing was done',
+        );
     },
     stop: shutdown,
     close() {

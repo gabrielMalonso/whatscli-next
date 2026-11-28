@@ -16,6 +16,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
+import { expectedAccount } from './identity.js';
 import { rpc, RpcError } from './rpc.js';
 import { eventKind, object } from './protocol.js';
 import { MAX_WAIT_ACK_MS } from './protocol.js';
@@ -60,17 +61,25 @@ if (selectors.length === 1) {
     // Invalid selectors are reported as JSON by main, without touching another account.
   }
 }
-const call = (directory: string, command: Command, timeout?: number) =>
+const call = (
+  directory: string,
+  command: Command,
+  timeout?: number,
+  expectAccount?: string,
+) =>
   rpc(
     directory,
     command,
     timeout,
     observer && !suppress ? { observer, root } : undefined,
+    true,
+    expectAccount,
   );
 
 const optionSpec = {
   'data-dir': { type: 'string' },
   account: { type: 'string' },
+  'expect-account': { type: 'string' },
   offline: { type: 'boolean' },
   'allow-jid': { type: 'string' },
   jid: { type: 'string' },
@@ -116,6 +125,15 @@ function options() {
       tokens: true,
       options: optionSpec,
     });
+    if (
+      parsed.tokens.filter(
+        (token) => token.kind === 'option' && token.name === 'expect-account',
+      ).length > 1
+    )
+      throw new CommandError(
+        'INVALID_ARGUMENT',
+        'Use --expect-account once; it cannot be repeated',
+      );
     if (
       parsed.tokens.filter(
         (token) =>
@@ -200,6 +218,8 @@ function help(): Record<string, unknown> {
           '[--from UTC_ISO] [--to UTC_ISO] [--command ACTION] [--origin ORIGIN] [--code CODE] [--correlation ID] [--limit 100] [--cursor CURSOR]',
       },
       globalOption: '--account NAME | --data-dir PATH',
+      expectAccountOption:
+        '--expect-account PHONE_DIGITS|PN_JID (every command that talks to the daemon). The daemon compares the phone-number user part of its linked account JID, ignoring any device suffix, before any read, write or SDK call; otherwise ACCOUNT_MISMATCH (including when no account is linked) and nothing is done. A LID is not accepted. Success output is unchanged. A daemon that predates the check rejects it (PROTOCOL); restart it with this build. Refused by start and observability; help ignores it; status and stop still report running: false without a daemon. Replaces a separate status call before each command.',
       outputOption: '--output compact|full (default: full)',
       waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
       ifLatestIncomingOption:
@@ -252,6 +272,7 @@ async function execute(
       if (
         key !== 'data-dir' &&
         key !== 'account' &&
+        key !== 'expect-account' &&
         key !== 'output' &&
         !allowed.includes(key)
       )
@@ -266,6 +287,19 @@ async function execute(
       'Unexpected positional arguments; use named options',
     );
   if (action === 'help') return help();
+  // Validated before any I/O. Local-only commands cannot check the linked account.
+  const expectAccount =
+    values['expect-account'] === undefined
+      ? undefined
+      : expectedAccount(values['expect-account']);
+  if (
+    expectAccount !== undefined &&
+    (action === 'start' || action === 'observability')
+  )
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      `--expect-account is not valid for ${action}; check the account with status --expect-account`,
+    );
   if (action === 'observability') {
     const subcommand = positionals[1] ?? 'status';
     if (subcommand === 'query') {
@@ -710,7 +744,7 @@ async function execute(
     });
   let response: Record<string, unknown>;
   try {
-    response = await call(directory, command);
+    response = await call(directory, command, undefined, expectAccount);
   } catch (error) {
     if (
       error instanceof RpcError &&
@@ -737,6 +771,17 @@ async function execute(
     throw new CommandError(
       'PROTOCOL',
       'The daemon did not confirm the incoming-message guard; the change may have been applied unguarded. Inspect request --key and restart the daemon with this build',
+    );
+  if (
+    expectAccount !== undefined &&
+    response.ok === false &&
+    response.code === 'INVALID_ARGUMENT' &&
+    response.error === 'Unknown command'
+  )
+    // A daemon that predates the check refuses the wrapper before executing anything.
+    throw new CommandError(
+      'PROTOCOL',
+      'The daemon rejected the request as an unknown command; it may predate --expect-account or another option of this command. Nothing was done; restart the daemon with this build',
     );
   if (action === 'stop' && response.ok === true) {
     const deadline = Date.now() + 10000;

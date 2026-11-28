@@ -2,6 +2,7 @@ export type ErrorCode =
   | 'INVALID_ARGUMENT'
   | 'KEY_CONFLICT'
   | 'PRECONDITION_FAILED'
+  | 'ACCOUNT_MISMATCH'
   | 'LOCAL_STATE'
   | 'UNKNOWN'
   | 'NOT_RUNNING'

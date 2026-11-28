@@ -49,3 +49,28 @@ export type RecipientCheck = {
   source: 'baileys.onWhatsApp';
   observedAt: number;
 };
+
+/**
+ * The phone-number user part of a linked account's own PN JID, ignoring any
+ * device suffix. A LID or any other form yields null: no phone is inferred.
+ */
+export function accountUser(jid: string | null | undefined): string | null {
+  return (
+    /^([1-9]\d{7,14})(?::\d+)?@s\.whatsapp\.net$/.exec(jid ?? '')?.[1] ?? null
+  );
+}
+
+/**
+ * Normalize an account expectation to the PN user part. Accepts bare digits
+ * (optionally with +) or the account's PN JID with or without a device
+ * suffix. A LID is refused rather than compared with a phone number.
+ */
+export function expectedAccount(value: string): string {
+  const user = /^\+?([1-9]\d{7,14})$/.exec(value)?.[1] ?? accountUser(value);
+  if (!user)
+    throw new CommandError(
+      'INVALID_ARGUMENT',
+      'expect-account must be the account phone number (international digits) or its @s.whatsapp.net JID; a LID is not accepted',
+    );
+  return user;
+}

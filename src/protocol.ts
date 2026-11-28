@@ -1,4 +1,9 @@
-import { contactJid, internationalPhone, recipientJid } from './identity.js';
+import {
+  contactJid,
+  expectedAccount,
+  internationalPhone,
+  recipientJid,
+} from './identity.js';
 import { contactName } from './contact-card.js';
 import { CommandError } from './errors.js';
 
@@ -444,7 +449,25 @@ export class RequestError extends CommandError {
   }
 }
 
-export function parseRequest(line: string): { id: string; command: Command } {
+/**
+ * The socket spelling of a request. An account expectation wraps the command
+ * under its own name, so a daemon without the check rejects it as an unknown
+ * command instead of ignoring the field.
+ */
+/** The single place that builds wire requests: guarded names first, then the account wrapper. */
+export function wireRequest(
+  command: Command,
+  expectAccount?: string,
+): Record<string, unknown> {
+  const wire = wireCommand(command);
+  return expectAccount === undefined
+    ? wire
+    : { command: 'expect-account', expectAccount, request: wire };
+}
+
+export type Request = { id: string; command: Command; expectAccount?: string };
+
+export function parseRequest(line: string): Request {
   let id: string | null = null;
   let action = 'unknown';
   try {
@@ -466,7 +489,31 @@ export function parseRequest(line: string): { id: string; command: Command } {
     id = string(value.id, 'id');
     if (id.length > 200)
       throw new CommandError('INVALID_ARGUMENT', 'id exceeds 200 characters');
-    return { id, command: parseCommand(value) };
+    if (value.command !== 'expect-account') {
+      // A field an older daemon would ignore; it must travel in the wrapper.
+      if (value.expectAccount !== undefined)
+        throw new CommandError(
+          'INVALID_ARGUMENT',
+          'expectAccount requires the expect-account request wrapper',
+        );
+      return { id, command: parseCommand(value) };
+    }
+    if (
+      !value.request ||
+      typeof value.request !== 'object' ||
+      Array.isArray(value.request)
+    )
+      throw new CommandError(
+        'INVALID_ARGUMENT',
+        'expect-account requires a request object',
+      );
+    const inner = object(value.request);
+    if (typeof inner.command === 'string') action = inner.command;
+    const expectAccount = expectedAccount(
+      string(value.expectAccount, 'expectAccount'),
+    );
+    // The inner request is a plain command: nesting another wrapper is an unknown command.
+    return { id, command: parseCommand(inner), expectAccount };
   } catch (error) {
     throw new RequestError(
       id,

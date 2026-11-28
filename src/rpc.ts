@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
 import { resolve as resolvePath } from 'node:path';
-import { object, wireCommand } from './protocol.js';
+import { object, wireRequest } from './protocol.js';
 import type { Command } from './protocol.js';
 import { socketPath } from './paths.js';
 import { CommandError, errorResponse } from './errors.js';
@@ -33,6 +33,7 @@ export async function rpc(
   timeoutMs = 120000,
   context?: { observer: Observability; root: string },
   capture = true,
+  expectAccount?: string,
 ): Promise<Record<string, unknown>> {
   const id = context
     ? `${context.root}.${randomBytes(16).toString('hex')}`
@@ -42,7 +43,14 @@ export async function rpc(
   let response: Record<string, unknown> | undefined;
   let code = 'UNKNOWN';
   try {
-    response = await exchange(directory, command, timeoutMs, id, bytes);
+    response = await exchange(
+      directory,
+      command,
+      timeoutMs,
+      id,
+      bytes,
+      expectAccount,
+    );
     code = response.ok ? 'OK' : obsCode(response.code);
     return response;
   } catch (error) {
@@ -76,6 +84,7 @@ async function exchange(
   timeoutMs: number,
   id: string,
   bytesObserved: { requestBytes: number; responseBytes: number },
+  expectAccount?: string,
 ): Promise<Record<string, unknown>> {
   directory = resolvePath(directory);
   const path = socketPath(directory);
@@ -92,7 +101,8 @@ async function exchange(
     }
     throw error;
   }
-  const line = JSON.stringify({ ...wireCommand(command), id }) + '\n';
+  const line =
+    JSON.stringify({ ...wireRequest(command, expectAccount), id }) + '\n';
   if (Buffer.byteLength(line) > 131072)
     throw new CommandError('INVALID_ARGUMENT', 'Request exceeds 128 KiB');
   return new Promise((resolve, reject) => {

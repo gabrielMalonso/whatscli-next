@@ -12,6 +12,22 @@ node dist/src/cli.js --output compact status
 
 Confirm the account JID with its owner. Network operations require linked credentials and `connection: open`. Check the responding build fingerprint when changing installations; `alreadyRunning: true` does not upgrade the daemon. See [runtime recovery](../operations/runtime.md) for connection problems.
 
+### Several accounts
+
+When one caller drives several data directories, pass the expected account on every command instead of running `status` before each one:
+
+```sh
+node dist/src/cli.js --account example --expect-account 12025550199 --output compact chats --unread true
+```
+
+The daemon compares the phone-number part of its linked account JID with the expectation before it reads, writes or calls WhatsApp. Pass the international digits (with or without `+`) or the account's own `@s.whatsapp.net` JID; a device suffix such as `:7` is ignored. A LID is not accepted, and no phone number is derived from one.
+
+- **Match:** the response is unchanged.
+- **`ACCOUNT_MISMATCH`:** the directory is linked to another account, or to none yet. No chat state, request key or WhatsApp call was touched, and the key stays unused. Fix the selector; do not retry with another key.
+- **`PROTOCOL`:** the daemon predates the check and refused the request before running it. Restart it with the current build.
+
+`start` and `observability` reject the option, because they act on local files without asking the daemon; after `start`, check with `status --expect-account` and require `running: true` as well as `ok: true`, because a stopped daemon is reported without any account check. `help` ignores it. Without a running daemon, `status` and `stop` still report `running: false` without checking the account.
+
 ## Select the exact conversation
 
 ```sh
