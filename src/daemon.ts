@@ -6,7 +6,7 @@ import { installConsoleDiagnostics, writeDiagnostic } from './diagnostics.js';
 import { parseRequest, RequestError } from './protocol.js';
 import { dataDirectory, socketPath } from './paths.js';
 import { createRuntime } from './runtime.js';
-import { CommandError, errorResponse } from './errors.js';
+import { CommandError, errorResponse, errorSummary } from './errors.js';
 import { obsAction, obsCode } from './observability.js';
 import { commandFields, wireFields } from './observability-context.js';
 import type { ObsFields } from './observability.js';
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
     })();
     stopping.catch((error) => {
       writeDiagnostic({
-        ...errorResponse(error),
+        ...errorSummary(error),
         level: 'lifecycle',
         event: 'shutdown-failed',
       });
@@ -250,6 +250,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  writeDiagnostic(errorResponse(error));
+  writeDiagnostic(errorSummary(error));
   process.exitCode = 1;
 });

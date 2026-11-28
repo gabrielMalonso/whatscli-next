@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import type { StatementSync } from 'node:sqlite';
 import {
   getContentType,
   jidNormalizedUser,
@@ -76,8 +77,22 @@ export type Operation =
       phone: string;
       vcard: string;
     }
-  | { kind: 'archive'; jid: string; value: boolean }
-  | { kind: 'mark-read'; jid: string; value: boolean };
+  | ({ kind: 'archive'; jid: string; value: boolean } & IncomingGuard)
+  | ({ kind: 'mark-read'; jid: string; value: boolean } & IncomingGuard);
+
+/**
+ * Optional chat-mutation precondition, part of the immutable intent: the ID of
+ * the latest locally stored incoming user message the caller saw, or null when
+ * it saw none. Absent means unguarded.
+ */
+export type IncomingGuard = { ifLatestIncoming?: string | null };
+/** available: false while the content could still arrive (undecrypted or missing, not deleted). */
+export type LatestIncoming = {
+  id: string;
+  timestamp: number | null;
+  available: boolean;
+};
+type IncomingRow = LatestIncoming & { json: string };
 
 export function isSendOperation(
   operation: Operation,
@@ -193,6 +208,85 @@ function isReaction(message: WAMessage): boolean {
   );
 }
 
+const missedCalls = new Set<number>([
+  proto.WebMessageInfo.StubType.CALL_MISSED_VOICE,
+  proto.WebMessageInfo.StubType.CALL_MISSED_VIDEO,
+  proto.WebMessageInfo.StubType.CALL_MISSED_GROUP_VOICE,
+  proto.WebMessageInfo.StubType.CALL_MISSED_GROUP_VIDEO,
+]);
+
+/** Message keys that carry no content of their own. */
+const envelopeKeys = new Set([
+  'messageContextInfo',
+  'senderKeyDistributionMessage',
+]);
+
+function hasStubType(message: WAMessage): boolean {
+  // UNKNOWN (0) is not a system stub; treat it like an absent stub type.
+  return message.messageStubType != null && message.messageStubType !== 0;
+}
+
+/**
+ * Incoming protocol envelopes (edits, revokes, ephemeral settings, key
+ * shares and the stubs a server emits after own sends) and reactions.
+ */
+function isIncomingNoise(message: WAMessage): boolean {
+  if (message.key.fromMe !== false || hasStubType(message)) return false;
+  const content = normalizeMessageContent(message.message);
+  return (
+    !!content &&
+    (isMessageEdit(message) ||
+      !!content.protocolMessage ||
+      !!content.reactionMessage ||
+      !!content.encReactionMessage)
+  );
+}
+
+/**
+ * A message the other side of the chat may expect an answer to, for the
+ * mutation guard. Excluded: the account's own messages from any device,
+ * noise (see isIncomingNoise), system stubs, and in groups only, group call
+ * offers and content-free envelopes. Everything else counts, so the guard
+ * fails closed: any unrecognized content type (including call logs), missed
+ * calls, content the runtime could not decrypt or no longer has, and
+ * content-free envelopes outside groups.
+ */
+function isIncomingUserMessage(message: WAMessage): boolean {
+  if (message.key.fromMe !== false || isIncomingNoise(message)) return false;
+  if (hasStubType(message))
+    return (
+      message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT ||
+      missedCalls.has(message.messageStubType!)
+    );
+  if (!message.key.remoteJid?.endsWith('@g.us')) return true;
+  const keys = contentKeys(message);
+  // The SDK emits {call} for group call offers.
+  return keys.length > 0 && !(keys.length === 1 && keys[0] === 'call');
+}
+
+/** Undecrypted, or missing without a stub; the content could still arrive. */
+function contentMissing(message: WAMessage): boolean {
+  if (message.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT)
+    return true;
+  return !hasStubType(message) && contentKeys(message).length === 0;
+}
+
+/** Content fields of a message, without envelope-only fields. */
+function contentKeys(message: WAMessage): string[] {
+  return Object.entries(normalizeMessageContent(message.message) ?? {})
+    .filter(([key, value]) => value != null && !envelopeKeys.has(key))
+    .map(([key]) => key);
+}
+
+/**
+ * Guard visibility of an incoming row: 0 does not count, 1 counts without
+ * readable content yet, 2 counts with content (or deleted, which is final).
+ */
+function incomingLevel(message: WAMessage, deleted: boolean): 0 | 1 | 2 {
+  if (!isIncomingUserMessage(message)) return 0;
+  return !deleted && contentMissing(message) ? 1 : 2;
+}
+
 type ContactMetadata = Partial<
   Record<
     'name' | 'notify' | 'username' | 'verifiedName' | 'status',
@@ -214,6 +308,7 @@ type ContactRecord = {
 export class Store {
   readonly db: DatabaseSync;
   private readonly lock: DatabaseSync;
+  private readonly statements = new Map<string, StatementSync>();
   readonly directory: string;
 
   constructor(directory: string) {
@@ -261,6 +356,7 @@ export class Store {
       this.recoverLegacy();
       this.initializeQueries();
       this.recoverMessageEdits();
+      this.recordMissingArrivals();
     } catch (error) {
       opened?.close();
       this.lock.close();
@@ -729,6 +825,7 @@ export class Store {
       ...(readObservation ? { readObservation } : {}),
       ...(readReconciliation ? { readReconciliation } : {}),
       ...(Object.keys(sdkReported).length ? { sdkReported } : {}),
+      latestIncoming: this.latestIncoming(jid),
       observedAt: row.observed_at,
       activity: {
         timestamp: row.activity_timestamp,
@@ -1840,7 +1937,10 @@ export class Store {
       // The all:true event carries no server time/range. A late old/undated arrival is uncertain.
       this.markDeleted(message.key, 'chat-delete-boundary', barrier);
     }
-    if (this.deletion(message.key)) {
+    // Classify before a deletion clears the body.
+    const deleted = !!this.deletion(message.key);
+    const level = fromMe ? 0 : incomingLevel(merged, deleted);
+    if (deleted) {
       this.retainAudit(message.key, merged);
       merged.message = null;
       delete merged.messageStubParameters;
@@ -1849,6 +1949,7 @@ export class Store {
     const inserted = this.db
       .prepare('INSERT OR REPLACE INTO messages VALUES (?,?,?,?,?,?)')
       .run(jid, id, Number(fromMe), participantSlot, timestamp, encode(merged));
+    if (!fromMe) this.recordArrival(jid, id, participantSlot, level);
     if (previousRow)
       this.db
         .prepare('DELETE FROM message_text WHERE message_rowid=?')
@@ -1912,6 +2013,269 @@ export class Store {
       )
       .all(jid, limit, offset)
       .map((row) => this.visibleMessage(decodeMessage(String(row.json))));
+  }
+
+  /**
+   * Arrival positions are kept across rewrites (receipts, re-deliveries), but
+   * a row whose visibility rises (content arrives for a placeholder, or an
+   * excluded key now counts) moves to a fresh position, so it reads as newer
+   * than everything an agent could have seen before it had content.
+   */
+  private recordArrival(
+    jid: string,
+    id: string,
+    participant: string,
+    level: 0 | 1 | 2,
+  ): void {
+    const arrival = this.statement(
+      'SELECT sequence,first_sequence,excluded,unavailable FROM message_arrivals WHERE jid=? AND id=? AND participant=?',
+    ).get(jid, id, participant);
+    const previous = !arrival
+      ? undefined
+      : Number(arrival.excluded)
+        ? 0
+        : Number(arrival.unavailable)
+          ? 1
+          : 2;
+    if (previous === level) return;
+    if (previous !== undefined && level < previous) {
+      this.statement(
+        'UPDATE message_arrivals SET excluded=?,unavailable=? WHERE sequence=?',
+      ).run(
+        Number(level === 0),
+        Number(level === 1),
+        Number(arrival!.sequence),
+      );
+      return;
+    }
+    if (arrival)
+      this.statement('DELETE FROM message_arrivals WHERE sequence=?').run(
+        Number(arrival.sequence),
+      );
+    // A moved row keeps its first position, where listings anchor on its ID.
+    const inserted = this.statement(
+      'INSERT INTO message_arrivals(jid,id,participant,excluded,unavailable,first_sequence) VALUES (?,?,?,?,?,?)',
+    ).run(
+      jid,
+      id,
+      participant,
+      Number(level === 0),
+      Number(level === 1),
+      arrival ? Number(arrival.first_sequence ?? arrival.sequence) : null,
+    );
+    if (!arrival)
+      this.statement(
+        'UPDATE message_arrivals SET first_sequence=sequence WHERE sequence=?',
+      ).run(Number(inserted.lastInsertRowid));
+  }
+
+  private statement(sql: string): StatementSync {
+    let statement = this.statements.get(sql);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      this.statements.set(sql, statement);
+    }
+    return statement;
+  }
+
+  /**
+   * Local coverage only: incoming user messages in this exact chat JID, by
+   * current arrival position (listings anchor at each ID's first position).
+   * Positions are stable across receipts and same-content re-deliveries,
+   * move forward once when a message gains content, and are independent of sender
+   * timestamps, which have second resolution, can be earlier than an already
+   * stored message, or be missing. Other JIDs of the same person and
+   * unsynchronized history are not consulted.
+   */
+  private *incomingByArrival(
+    jid: string,
+    order: 'newest-first' | 'oldest-first' = 'newest-first',
+    after = 0,
+    onlyUnavailable = false,
+  ): Generator<IncomingRow> {
+    // Deleted bodies are cleared; classify them by the retained private audit copy.
+    // The exclusion flag is an index hint; every candidate is classified here.
+    const rows = this.statement(
+      `SELECT m.id,m.timestamp,m.json,COALESCE(d.audit_json,m.json) AS original,
+      d.id IS NOT NULL AS deleted
+      FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
+      AND m.from_me=0 AND m.participant=a.participant
+      LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
+      AND d.from_me=0 AND d.participant=m.participant
+      WHERE a.jid=? AND a.excluded=0 AND a.sequence>?${onlyUnavailable ? ' AND a.unavailable=1' : ''}
+      ORDER BY a.sequence ${order === 'newest-first' ? 'DESC' : 'ASC'}`,
+    ).iterate(jid, after);
+    for (const row of rows) {
+      const original = decodeMessage(String(row.original));
+      if (!isIncomingUserMessage(original)) continue;
+      const available = Number(row.deleted) === 1 || !contentMissing(original);
+      if (onlyUnavailable && available) continue;
+      yield {
+        id: String(row.id),
+        timestamp: Number(row.timestamp) || null,
+        available,
+        json: String(row.json),
+      };
+    }
+  }
+
+  latestIncoming(jid: string): LatestIncoming | null {
+    for (const { json: _json, ...message } of this.incomingByArrival(jid))
+      return message;
+    return null;
+  }
+
+  /**
+   * Incoming user messages positioned after the named one, oldest first,
+   * bounded; from the first stored one when it is null or not stored. The
+   * anchor is the earliest first position with that ID, so a row that moved
+   * when it gained content still anchors where it was first stored: paging by
+   * the last listed ID never skips a message, and lists the moved one again.
+   */
+  private incomingAfterRows(
+    jid: string,
+    after: string | null,
+    limit: number,
+  ): { rows: IncomingRow[]; truncated: boolean; afterStored: boolean } {
+    const anchor =
+      after === null
+        ? null
+        : this.statement(
+            'SELECT MIN(COALESCE(first_sequence,sequence)) AS sequence FROM message_arrivals WHERE jid=? AND id=?',
+          ).get(jid, after)?.sequence;
+    const afterStored = anchor != null;
+    const rows: IncomingRow[] = [];
+    for (const row of this.incomingByArrival(
+      jid,
+      'oldest-first',
+      afterStored ? Number(anchor) : 0,
+    )) {
+      if (rows.length === limit) return { rows, truncated: true, afterStored };
+      rows.push(row);
+    }
+    return { rows, truncated: false, afterStored };
+  }
+
+  newerIncoming(
+    jid: string,
+    expected: string | null,
+    limit = 20,
+  ): {
+    messages: LatestIncoming[];
+    truncated: boolean;
+    expectedStored: boolean;
+  } {
+    const { rows, truncated, afterStored } = this.incomingAfterRows(
+      jid,
+      expected,
+      limit,
+    );
+    return {
+      messages: rows.map(({ json: _json, ...message }) => message),
+      truncated,
+      expectedStored: afterStored,
+    };
+  }
+
+  /** Counted incoming messages that have no readable content yet, oldest first. */
+  unavailableIncoming(
+    jid: string,
+    limit = 20,
+  ): { messages: LatestIncoming[]; truncated: boolean } {
+    const messages: LatestIncoming[] = [];
+    for (const { json: _json, ...message } of this.incomingByArrival(
+      jid,
+      'oldest-first',
+      0,
+      true,
+    )) {
+      if (messages.length === limit) return { messages, truncated: true };
+      messages.push(message);
+    }
+    return { messages, truncated: false };
+  }
+
+  /** Read-only public listing for the guard's follow-up: full message projections. */
+  incomingView(jid: string, after: string | null, limit: number) {
+    const { rows, truncated, afterStored } = this.incomingAfterRows(
+      jid,
+      after,
+      limit,
+    );
+    return {
+      jid,
+      after,
+      afterStored,
+      messages: rows.map((row) => ({
+        ...this.messageView(this.visibleMessage(decodeMessage(row.json))),
+        available: row.available,
+      })),
+      truncated,
+      latestIncoming: this.latestIncoming(jid),
+      coverage: 'local',
+    };
+  }
+
+  /**
+   * Give rows that lack an arrival (an existing directory, or rows written by
+   * an older build) one after every recorded arrival, oldest timestamp first.
+   * Equal counts mean every incoming row has one (neither table loses rows).
+   */
+  private recordMissingArrivals(): void {
+    const count = (sql: string) => Number(this.db.prepare(sql).get()?.n ?? 0);
+    if (
+      count('SELECT COUNT(*) AS n FROM messages WHERE from_me=0') ===
+      count('SELECT COUNT(*) AS n FROM message_arrivals')
+    )
+      return;
+    this.transaction(() => {
+      let after = count(
+        'SELECT COALESCE(MAX(sequence),0) AS n FROM message_arrivals',
+      );
+      this.db
+        .prepare(
+          `INSERT INTO message_arrivals(jid,id,participant)
+          SELECT m.jid,m.id,m.participant FROM messages m WHERE m.from_me=0
+          AND NOT EXISTS (SELECT 1 FROM message_arrivals a
+            WHERE a.jid=m.jid AND a.id=m.id AND a.participant=m.participant)
+          ORDER BY m.timestamp=0,m.timestamp,m.rowid`,
+        )
+        .run();
+      this.db.exec(
+        'UPDATE message_arrivals SET first_sequence=sequence WHERE first_sequence IS NULL',
+      );
+      // Classify the new arrivals in bounded batches. Undated rows were placed
+      // last above, so an unknown time never sorts as the oldest arrival.
+      const batch = this.db.prepare(
+        `SELECT a.sequence,COALESCE(d.audit_json,m.json) AS json,
+        d.id IS NOT NULL AS deleted
+        FROM message_arrivals a JOIN messages m ON m.jid=a.jid AND m.id=a.id
+        AND m.from_me=0 AND m.participant=a.participant
+        LEFT JOIN message_deletions d ON d.jid=m.jid AND d.id=m.id
+        AND d.from_me=0 AND d.participant=m.participant
+        WHERE a.sequence>? ORDER BY a.sequence LIMIT 500`,
+      );
+      const mark = this.db.prepare(
+        'UPDATE message_arrivals SET excluded=?,unavailable=? WHERE sequence=?',
+      );
+      for (;;) {
+        const rows = batch.all(after);
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const level = incomingLevel(
+            decodeMessage(String(row.json)),
+            Number(row.deleted) === 1,
+          );
+          if (level !== 2)
+            mark.run(
+              Number(level === 0),
+              Number(level === 1),
+              Number(row.sequence),
+            );
+        }
+        after = Number(rows.at(-1)!.sequence);
+      }
+    });
   }
 
   /** Receipt updates can reorder equal-second rowids; keep the whole newest boundary. */
@@ -2435,7 +2799,19 @@ export class Store {
     }
     const previous = this.message(key);
     // Status/content edits do not establish a newly active conversation.
-    if (previous) this.observeMessage({ ...previous, ...update, key }, false);
+    if (previous) {
+      const merged = { ...previous, ...update, key };
+      // Content delivered to an undecrypted placeholder replaces it, as an upsert would.
+      if (
+        update.message &&
+        update.messageStubType === undefined &&
+        previous.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT
+      ) {
+        delete merged.messageStubType;
+        delete merged.messageStubParameters;
+      }
+      this.observeMessage(merged, false);
+    }
     if (update.status != null) this.receipt(key, update.status);
   }
 

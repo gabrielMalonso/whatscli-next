@@ -35,7 +35,13 @@ function sameOperation(prior: Operation, operation: Operation): boolean {
       );
     case 'archive':
     case 'mark-read':
-      return operation.kind === prior.kind && prior.value === operation.value;
+      // The guard is part of the intent: a replay naming another latest
+      // incoming message describes a different decision, not a retry.
+      return (
+        operation.kind === prior.kind &&
+        prior.value === operation.value &&
+        prior.ifLatestIncoming === operation.ifLatestIncoming
+      );
   }
 }
 

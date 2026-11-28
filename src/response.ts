@@ -189,6 +189,13 @@ export function formatResponse(
       if (Array.isArray(data))
         data = data.map((value) => compactMessage(value));
       break;
+    case 'incoming': {
+      // Same row shape as messages and search: every row keeps its own jid.
+      const listing = record(data);
+      if (listing && Array.isArray(listing.messages))
+        data = { ...listing, messages: listing.messages.map(compactMessage) };
+      break;
+    }
     case 'contact':
       data = compactContact(data, response.source);
       break;

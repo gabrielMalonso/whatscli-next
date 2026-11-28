@@ -69,6 +69,7 @@ const actions = [
   'chats',
   'chat',
   'messages',
+  'incoming',
   'search',
   'contact',
   'resolve',

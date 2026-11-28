@@ -106,6 +106,7 @@ const optionSpec = {
   output: { type: 'string' },
   name: { type: 'string' },
   'wait-ack-ms': { type: 'string' },
+  'if-latest-incoming': { type: 'string' },
 } as const;
 
 function options() {
@@ -172,6 +173,8 @@ function help(): Record<string, unknown> {
         resolve: '--phone +INTERNATIONAL_DIGITS',
         contact: '--jid PN_OR_LID_JID',
         messages: '--jid JID [--limit 20] [--offset 0]',
+        incoming:
+          '--jid JID [--after MESSAGE_ID|none] [--limit 20] (read-only; incoming user messages stored after that one, oldest first)',
         search: '--query TEXT [--jid JID] [--limit 20] [--offset 0]',
         send: '--jid JID --key KEY --text TEXT [--quote-id MESSAGE_ID --quote-from-me true|false [--quote-participant JID]] [--wait-ack-ms MS]',
         'send-file':
@@ -180,10 +183,10 @@ function help(): Record<string, unknown> {
           '--jid JID --key KEY --name NAME --phone +INTERNATIONAL_DIGITS [--wait-ack-ms MS]',
         download:
           '--jid JID --id MESSAGE_ID --out PATH [--from-me true|false] [--participant JID]',
-        archive: '--jid JID --key KEY',
-        unarchive: '--jid JID --key KEY',
-        read: '--jid JID --key KEY',
-        unread: '--jid JID --key KEY',
+        archive: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        unarchive: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        read: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
+        unread: '--jid JID --key KEY [--if-latest-incoming MESSAGE_ID|none]',
         request: '--key KEY',
         events:
           '[--after SEQUENCE] [--tail 1-100] [--kind KIND] (ascending; --tail returns the latest N)',
@@ -199,6 +202,8 @@ function help(): Record<string, unknown> {
       globalOption: '--account NAME | --data-dir PATH',
       outputOption: '--output compact|full (default: full)',
       waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
+      ifLatestIncomingOption:
+        '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null) and no counted message in the chat is unavailable, checked in the daemon immediately before the intent is persisted and the patch is built. Otherwise PRECONDITION_FAILED and nothing changes: read incoming --jid JID --after THAT_ID, repeat with --after the last listed ID while truncated, then retry with the last ID of the final page. Latest means most recently stored by this runtime, not newest timestamp; a message that gets content later moves to a fresh position. Local coverage only. Excludes own messages, protocol stubs, edits and reactions; missed calls, call logs, unrecognized and undecryptable content count. Refused with unavailable-incoming while any counted message in the chat has available: false; do not proceed until those are available. On success feedback.latestIncomingChanged: true means a message arrived during or after the mutation; read incoming --after the guarded ID, never repeat the command. A daemon without the guard rejects it; a guarded success without latestIncomingChanged is reported as PROTOCOL. Part of the key intent; a replay never re-checks it. none cannot name a message whose ID is literally none.',
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };
@@ -524,6 +529,18 @@ async function execute(
         offset: Number(values.offset ?? 0),
       };
       break;
+    case 'incoming':
+      only('jid', 'after', 'limit');
+      command = {
+        command: action,
+        jid: jid(),
+        afterId:
+          values.after === undefined || values.after === 'none'
+            ? null
+            : required(values.after, 'after'),
+        limit: Number(values.limit ?? 20),
+      };
+      break;
     case 'search':
       only('jid', 'query', 'limit', 'offset');
       command = {
@@ -625,7 +642,7 @@ async function execute(
     case 'unarchive':
     case 'read':
     case 'unread':
-      only('jid', 'key');
+      only('jid', 'key', 'if-latest-incoming');
       command = {
         command: ['archive', 'unarchive'].includes(action)
           ? 'archive'
@@ -633,6 +650,17 @@ async function execute(
         jid: jid(),
         key: key(),
         value: action === 'archive' || action === 'read',
+        ...(values['if-latest-incoming'] === undefined
+          ? {}
+          : {
+              ifLatestIncoming:
+                values['if-latest-incoming'] === 'none'
+                  ? null
+                  : required(
+                      values['if-latest-incoming'],
+                      'if-latest-incoming',
+                    ),
+            }),
       };
       break;
     case 'request':
@@ -696,6 +724,20 @@ async function execute(
       };
     throw error;
   }
+  if (
+    (command.command === 'archive' || command.command === 'mark-read') &&
+    command.ifLatestIncoming !== undefined &&
+    response.ok === true &&
+    typeof (
+      response.data as
+        { feedback?: { latestIncomingChanged?: unknown } } | null | undefined
+    )?.feedback?.latestIncomingChanged !== 'boolean'
+  )
+    // Defense in depth: a daemon without the guard rejects the guarded wire name.
+    throw new CommandError(
+      'PROTOCOL',
+      'The daemon did not confirm the incoming-message guard; the change may have been applied unguarded. Inspect request --key and restart the daemon with this build',
+    );
   if (action === 'stop' && response.ok === true) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {

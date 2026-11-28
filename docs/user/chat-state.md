@@ -9,6 +9,99 @@ node dist/src/cli.js read      --jid '12025550101@s.whatsapp.net' --key 'example
 node dist/src/cli.js unread    --jid '12025550101@s.whatsapp.net' --key 'example-unread-001'
 ```
 
+## Guard against new incoming messages
+
+Add `--if-latest-incoming` so a conversation is not marked read or archived over a reply that arrived after you last looked:
+
+```sh
+node dist/src/cli.js --output compact chat --jid '12025550101@s.whatsapp.net'
+# data.latestIncoming: {"id":"FICTIONAL-IN-002","timestamp":1700000020,"available":true} or null
+node dist/src/cli.js read --jid '12025550101@s.whatsapp.net' --key 'example-read-002' \
+  --if-latest-incoming 'FICTIONAL-IN-002'
+node dist/src/cli.js archive --jid '12025550101@s.whatsapp.net' --key 'example-archive-002' \
+  --if-latest-incoming none
+```
+
+The daemon compares the value with the latest locally stored incoming user message in that exact chat JID. It checks immediately before it persists the intent and builds the patch from stored messages, and nothing can be stored between those steps. Name the last incoming message whose content you actually read, never one with `available: false`. `none` requires that no such message is stored, so a message whose ID is literally `none` cannot be named. The option works the same way on `unarchive` and `unread`.
+
+`available` is `false` while a counted message has no readable content but could still get it: it is undecryptable (`CIPHERTEXT`) or its content is missing. The guard refuses with `reason: "unavailable-incoming"` while any counted incoming message in the chat is unavailable, even one stored before the message you name. It lists them in `details.unavailableIncoming`, oldest first, up to 20, with `unavailableTruncated`. Read them once `available` is `true`. A message that never decrypts keeps refusing; then decide without the guard, and say so in your report.
+
+### When the guard refuses
+
+Otherwise the command returns `PRECONDITION_FAILED`, persists no intent and invokes nothing. The key stays unused:
+
+```json
+{
+  "ok": false,
+  "code": "PRECONDITION_FAILED",
+  "error": "Incoming messages were stored after the one this command names; nothing was changed. Read them with incoming --after before deciding again",
+  "details": {
+    "precondition": "if-latest-incoming",
+    "reason": "newer-incoming",
+    "expected": "FICTIONAL-IN-002",
+    "expectedStored": true,
+    "latestIncoming": { "id": "FICTIONAL-IN-004", "timestamp": 1700000010, "available": true },
+    "newerIncoming": [
+      { "id": "FICTIONAL-IN-003", "timestamp": 1700000040, "available": true },
+      { "id": "FICTIONAL-IN-004", "timestamp": 1700000010, "available": true }
+    ],
+    "truncated": false,
+    "unavailableIncoming": [],
+    "unavailableTruncated": false,
+    "coverage": "local"
+  }
+}
+```
+
+`newerIncoming` lists the incoming user messages stored after the expected one, in the order they were stored (oldest first), up to 20. The message stored right after the one you saw always comes first, even when history sync stored older messages later. That is why `latestIncoming` (`FICTIONAL-IN-004` above) can be an old history message while the live reply (`FICTIONAL-IN-003`) is listed first. `expectedStored: false` means the expected ID has no stored arrival in this chat, as with `none`, so the list starts from the first stored message. The anchor is where the message with that ID was first stored, even if it later moved after gaining content. A listing after such a message therefore includes everything stored since, and the moved message itself again. Message IDs do not repeat in practice. If two group members ever shared one, paging from it could return a page you already read; stop when a page repeats.
+
+### Read what arrived after a message
+
+`incoming` is a read-only listing of the same set, with full message projections:
+
+```sh
+node dist/src/cli.js --output compact incoming --jid '12025550101@s.whatsapp.net' \
+  --after 'FICTIONAL-IN-002' --limit 20
+```
+
+It returns `{jid, after, afterStored, messages, truncated, latestIncoming, coverage: "local"}`. `messages` are oldest first, in the `messages` projection plus `available`; `--after none` or no `--after` starts from the first stored message. Unlike `messages`, it needs no `--offset` paging to find listed IDs. `messages` orders by sender timestamp and puts rows with `timestamp: null` last.
+
+To decide again after a refusal, or after `latestIncomingChanged: true`, follow this procedure. It reaches every message stored after the one you named:
+
+1. Run `incoming --after` with the ID you named (`none` if you named none) and read every listed message.
+2. While `truncated` is `true`, run it again with `--after` set to the last listed ID.
+3. When `truncated` is `false`, the last listed ID is the current `latestIncoming.id`. Do not proceed while any listed message has `available: false`; it is refused anyway. Decide, then retry with a new guard naming that ID.
+
+A refusal with `reason: "newer-incoming"`, `expectedStored: true` and an empty `newerIncoming` means you named a stored message that is not an incoming user message. Read `latestIncoming` with `incoming --after none` or `messages`, and retry with `latestIncoming.id`. With `reason: "unavailable-incoming"`, wait until every message in `unavailableIncoming` is available, then follow the procedure from the ID you named.
+
+### What counts
+
+An incoming user message is a message with `fromMe: false` stored under that exact JID. These do not count:
+
+- the account's own messages from any device;
+- protocol envelopes, such as edits, revokes, ephemeral settings, key shares, and the text-less `protocolMessage` stubs the server can emit shortly after the account's own sends;
+- reactions, matching the SDK's unread behavior;
+- system stubs, such as group changes and encryption notices;
+- in groups only, call offers and content-free envelopes.
+
+Everything else counts, so the guard fails closed. This includes missed calls, call logs, content types the CLI does not recognize, undecryptable or otherwise unavailable content, and content-free envelopes outside groups. A direct message with no content the pinned SDK can read counts as `available: false`; if its type is newer than the SDK it may never become available, and the guard keeps refusing on that chat until you decide without it. Deleted messages are classified by their original content and are `available`, because their content will not return. An edit keeps the original message ID, so it never blocks the guard, even when it changes the meaning of a message you already read. `chat`, `chats` rows and the mutation's `localChat` expose the same value as `latestIncoming: {id, timestamp, available} | null`.
+
+"Latest" means stored most recently by this runtime, not the newest sender timestamp. Each incoming message keeps the position at which it was first stored. Receipts, status updates and re-deliveries of the same content after a reconnection do not move it. A message that gets content later moves to a fresh position, so it reads as newer than everything stored meanwhile. That covers an undecryptable placeholder whose content arrives under the same ID, and a key that starts counting, such as a content-free group envelope that gets content. A message that arrives later therefore blocks the guard even when it shares the same second as the one you saw, carries an earlier timestamp, or has none (`timestamp: null`). Usually this is also the newest incoming row in `messages`. History sync can store older messages after a live reply. Then `latestIncoming` names an old message, the guard refuses a guard naming the live reply, and the procedure above lists both, oldest-stored first. This does not hold when the live reply was unavailable and moved after gaining content: history stored before that move is ordered before it, so after any message becomes available, list `incoming --after` from the last message you read before it rather than naming it directly. When a data directory is first opened by a build with this guard, existing messages are ordered by timestamp, with undated ones last. Rows written later by an older build are placed after every recorded arrival. If a directory alternates between builds with and without the guard, rows the older build rewrote can keep stale hints. The guard still classifies every candidate it reads, but such a row may not move when its content changes.
+
+### After a successful guarded command
+
+The check covers only the patch it builds. After persisting the intent, the SDK can wait for a network app-state resync before it sends that patch. A reply stored during that wait, or after it, is not covered, and the command still returns its normal result. Guarded commands therefore add `feedback.latestIncomingChanged`. It is `true` when the chat's latest incoming message at response time differs from the guarded value, including on a replay of the key. Then `feedback.newerIncoming` and `feedback.truncated` list what was stored after the guarded message, in the same form as a refusal.
+
+Treat `true` as a message that arrived during or after the mutation. Follow the procedure above, then decide whether the chat needs attention, for example `unread` with a new key. Do not repeat the original command.
+
+### Limits and compatibility
+
+Coverage is local and partial. The guard cannot see messages the runtime has not stored yet, messages stored under another JID of the same person (PN or LID), or history that never synced. A pass therefore means no newer reply was observed locally; it does not prove none exists.
+
+The guard is part of the key's immutable intent. A replay of a persisted key with the same value returns the original request without re-checking, even if newer messages have arrived since; it never fails a mutation that was already invoked. Reusing the key with a different value, or adding or dropping the guard, returns `KEY_CONFLICT`, because it describes a different decision.
+
+On the socket, guarded commands use the names `guarded-archive` and `guarded-mark-read` with `ifLatestIncoming` (a message ID or `null`). The plain `archive` and `mark-read` names reject `ifLatestIncoming`. A daemon built before the guard rejects the guarded names as unknown commands, so a newer CLI cannot have its guard silently dropped. As a second check, the CLI reports a guarded success without `feedback.latestIncomingChanged` as `PROTOCOL`. Inspect the key with `request --key`, because the change may have been applied unguarded, and restart the daemon with the current build.
+
 ## How state changes work
 
 These commands use `chatModify` with a stored last-message key/timestamp.
