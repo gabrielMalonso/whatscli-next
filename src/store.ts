@@ -2080,8 +2080,9 @@ export class Store {
 
   /**
    * Local coverage only: incoming user messages in this exact chat JID, by
-   * first-stored order. Arrival order is stable across row rewrites
-   * (receipts, re-deliveries, decryption retries) and independent of sender
+   * current arrival position (listings anchor at each ID's first position).
+   * Positions are stable across receipts and same-content re-deliveries,
+   * move forward once when a message gains content, and are independent of sender
    * timestamps, which have second resolution, can be earlier than an already
    * stored message, or be missing. Other JIDs of the same person and
    * unsynchronized history are not consulted.
