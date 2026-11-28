@@ -49,3 +49,22 @@ export function errorSummary(error: unknown): {
   const { ok, error: message, code } = errorResponse(error);
   return { ok, error: message, code };
 }
+
+/** Runtime process exit statuses. Only 1 marks a failure where a supervisor restart can help. */
+export const runtimeExit = {
+  stopped: 0,
+  failed: 1,
+  usage: 64,
+  inUse: 69,
+  intervention: 77,
+} as const;
+
+/** Classify a runtime startup or shutdown failure for supervisors such as systemd. */
+export function runtimeExitCode(error: unknown): number {
+  if (!(error instanceof CommandError)) return runtimeExit.failed;
+  if (error.code === 'INVALID_ARGUMENT') return runtimeExit.usage;
+  if (error.details?.reason === 'data-directory-in-use')
+    return runtimeExit.inUse;
+  if (error.code === 'PRECONDITION_FAILED') return runtimeExit.intervention;
+  return runtimeExit.failed;
+}

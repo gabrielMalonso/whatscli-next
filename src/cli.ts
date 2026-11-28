@@ -22,7 +22,13 @@ import { eventKind, object } from './protocol.js';
 import { MAX_WAIT_ACK_MS } from './protocol.js';
 import type { AckWaitOption, Command } from './protocol.js';
 import { formatResponse } from './response.js';
-import { CommandError, errorResponse } from './errors.js';
+import {
+  CommandError,
+  errorResponse,
+  errorSummary,
+  runtimeExitCode,
+} from './errors.js';
+import { writeDiagnostic } from './diagnostics.js';
 import {
   checkPrivatePath,
   ensurePrivateDirectory,
@@ -42,6 +48,8 @@ const argumentsBeforeTerminator = process.argv.slice(
   2,
   process.argv.indexOf('--', 2) < 0 ? undefined : process.argv.indexOf('--', 2),
 );
+// --foreground exits with runtime statuses that supervisors can act on, even for option errors.
+const foreground = argumentsBeforeTerminator.includes('--foreground');
 const selectors = argumentsBeforeTerminator.flatMap<
   { path: string } | { account: string }
 >((arg, index, args) => {
@@ -81,6 +89,7 @@ const optionSpec = {
   account: { type: 'string' },
   'expect-account': { type: 'string' },
   offline: { type: 'boolean' },
+  foreground: { type: 'boolean' },
   'allow-jid': { type: 'string' },
   jid: { type: 'string' },
   key: { type: 'string' },
@@ -179,7 +188,8 @@ function help(): Record<string, unknown> {
       name: 'whatscli-next',
       output: 'JSON',
       commands: {
-        start: '[--offline] [--allow-jid JID]',
+        start:
+          '[--foreground] [--offline] [--allow-jid JID] (--foreground runs the daemon in this process until it stops; lifecycle lines on stderr, one JSON result on stdout at exit)',
         status: '',
         stop: '',
         backup: '--out NEW_PRIVATE_DIRECTORY (sensitive SQLite only)',
@@ -387,8 +397,31 @@ async function execute(
     }
   }
   if (action === 'start') {
-    only('offline', 'allow-jid');
+    only('offline', 'allow-jid', 'foreground');
     socketPath(directory);
+    if (values.foreground) {
+      // The writer lock refuses a second runtime exactly as for the background daemon.
+      const { runDaemon } = await import('./daemon.js');
+      let stopped: Promise<string>;
+      try {
+        ({ stopped } = await runDaemon({
+          dataDir: directory,
+          offline: values.offline === true,
+          allowJid: values['allow-jid'],
+        }));
+      } catch (error) {
+        // The same startup error line the background daemon writes to daemon.log.
+        writeDiagnostic(errorSummary(error));
+        throw error;
+      }
+      // A cleanup failure is already logged as shutdown-failed.
+      const reason = await stopped;
+      return {
+        ok: true,
+        running: false,
+        data: { running: false, foreground: true, reason },
+      };
+    }
     const checkConfiguration = (status: Record<string, unknown>): void => {
       const data = object(status.data);
       if (
@@ -802,10 +835,14 @@ async function execute(
   return response;
 }
 
-async function finish(result: Record<string, unknown>): Promise<void> {
+async function finish(
+  result: Record<string, unknown>,
+  error?: unknown,
+): Promise<void> {
   const line = JSON.stringify(result) + '\n';
   process.stdout.write(line);
-  if (result.ok === false) process.exitCode = 1;
+  if (result.ok === false)
+    process.exitCode = foreground ? runtimeExitCode(error) : 1;
   if (!suppress && observer) {
     const correlation = observer.opaque('correlation', root);
     observer.record('command', {
@@ -822,4 +859,4 @@ async function finish(result: Record<string, unknown>): Promise<void> {
 }
 main()
   .then(finish)
-  .catch((error) => finish(errorResponse(error)));
+  .catch((error) => finish(errorResponse(error), error));

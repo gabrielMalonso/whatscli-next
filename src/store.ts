@@ -341,9 +341,24 @@ export class Store {
     this.lock = openDatabase('writer-lock.sqlite');
     let opened: DatabaseSync | undefined;
     try {
-      this.lock.exec(
-        'PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner (id INTEGER);',
-      );
+      try {
+        this.lock.exec(
+          'PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS owner (id INTEGER);',
+        );
+      } catch (error) {
+        // SQLITE_BUSY: another live runtime holds this directory's lifetime writer lock.
+        if (
+          error instanceof Error &&
+          'errcode' in error &&
+          (error.errcode as number) % 256 === 5
+        )
+          throw new CommandError(
+            'PRECONDITION_FAILED',
+            'Data directory is locked by another runtime; stop it before starting a new one',
+            { cause: error, details: { reason: 'data-directory-in-use' } },
+          );
+        throw error;
+      }
       this.db = opened = openDatabase('probe.sqlite');
       createSchema(this.db);
       this.db.function('chat_unread', { deterministic: true }, (value) => {

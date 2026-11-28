@@ -127,6 +127,8 @@ Neither a null nor an absent fingerprint identifies the current checkout. See [u
 
 For local inspection without contacting WhatsApp, use `start --offline`.
 
+To keep the daemon in the foreground for a service manager such as `systemd --user`, use `start --foreground`; see [running under a supervisor](../operations/systemd.md).
+
 Changing network mode or `--allow-jid EXACT_JID` requires a normal stop before restarting. The allowlist restricts operations to one exact JID; it does not grant permission to send.
 
 Continue with the [documentation index](../README.md) for command workflows or [runtime and recovery](../operations/runtime.md) for connection issues.
