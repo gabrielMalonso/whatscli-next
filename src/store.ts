@@ -128,10 +128,55 @@ export type RequestRecord = {
   );
 };
 
-export type PendingChatState = {
-  archived?: { key: string; value: boolean };
-  unread?: { key: string; value: boolean };
+/**
+ * An independent observation of the same field on the PN's known LID peer.
+ * The PN chat itself is still unobserved; this only retires the requested
+ * value from queue matching. It is not a server response or a PN observation.
+ */
+export type PendingSuperseded = {
+  jid: string;
+  source: 'linked-peer-observation';
+  mapping: 'known';
+  observedAt: number;
 };
+type PendingIntent = {
+  key: string;
+  value: boolean;
+  superseded?: PendingSuperseded;
+};
+export type PendingChatState = {
+  archived?: PendingIntent;
+  unread?: PendingIntent;
+};
+/** Pending keys of a LID's known PN peer when a chat observation was captured. */
+export type PeerPendingKeys = {
+  jid: string;
+} & Record<keyof PendingChatState, string | null>;
+
+/**
+ * A visibility hint for the other half of a known PN/LID pair. Only local
+ * values observed under the peer's own exact JID; nothing is combined.
+ */
+export type LinkedPeer =
+  | { mapping: 'unknown' | 'conflict'; jid: null }
+  | {
+      mapping: 'known';
+      jid: string;
+      observedChat: boolean;
+      hasMessages: boolean;
+      activity: { timestamp: unknown; source: unknown } | null;
+      unread: boolean | null;
+      archived: boolean | null;
+      latestIncoming: LatestIncoming | null;
+    };
+
+/**
+ * SQL for the LID of chat `c` when its PN/LID mapping is known (each endpoint
+ * has exactly that one partner), as in contactView. NULL otherwise.
+ */
+const knownLidSql = `(SELECT m.lid FROM identity_mappings m WHERE m.pn=c.jid
+  AND NOT EXISTS (SELECT 1 FROM identity_mappings o WHERE o.pn=m.pn AND o.lid<>m.lid)
+  AND NOT EXISTS (SELECT 1 FROM identity_mappings o WHERE o.lid=m.lid AND o.pn<>m.pn) LIMIT 1)`;
 
 type ReceiptUnreadRange = {
   // Earlier persisted ranges omitted this and required an observed-zero baseline.
@@ -1001,7 +1046,7 @@ export class Store {
       .get(jid);
     if (!row) return null;
     const chat = decode<Chat>(String(row.json));
-    const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
+    const pending = this.effectivePending(jid);
     const sdkReported = this.get<SdkChatState>('sdk-chat-state', jid) ?? {};
     const readObservation = this.get('chat-read-observation', jid);
     const readReconciliation = this.get<ReadReconciliation>(
@@ -1023,6 +1068,122 @@ export class Store {
         source: row.activity_source,
       },
     };
+  }
+
+  /**
+   * Pending intents as stored, except that a superseded marker counts only
+   * while the PN's mapping to that exact LID is still known. A later conflict
+   * or change returns the intent to ordinary pending.
+   */
+  private effectivePending(jid: string): PendingChatState {
+    const pending = this.get<PendingChatState>('pending-chat', jid) ?? {};
+    if (!pending.unread?.superseded && !pending.archived?.superseded)
+      return pending;
+    const peer = this.knownPeer(jid);
+    for (const field of ['unread', 'archived'] as const) {
+      const entry = pending[field];
+      if (entry?.superseded && entry.superseded.jid !== peer) {
+        const { key, value } = entry;
+        pending[field] = { key, value };
+      }
+    }
+    return pending;
+  }
+
+  /** The other half of a PN/LID pair while its mapping is known, else null. */
+  knownPeer(jid: string): string | null {
+    if (!isPn(jid) && !isLid(jid)) return null;
+    const { mapping } = this.contactView(jid);
+    if (mapping.status !== 'known') return null;
+    return (isPn(jid) ? mapping.lid : mapping.pn) ?? null;
+  }
+
+  /**
+   * Visibility hint for `chat`, `messages` and `incoming` on a PN or LID JID.
+   * Only the mapping status unless it is known; the peer's own local values
+   * otherwise. Histories stay under their own JIDs. Undefined for other JIDs.
+   */
+  linkedPeer(jid: string): LinkedPeer | undefined {
+    if (!isPn(jid) && !isLid(jid)) return undefined;
+    const { mapping } = this.contactView(jid);
+    const peer =
+      mapping.status === 'known'
+        ? isPn(jid)
+          ? mapping.lid
+          : mapping.pn
+        : null;
+    if (!peer)
+      return {
+        mapping: mapping.status === 'conflict' ? 'conflict' : 'unknown',
+        jid: null,
+      };
+    const chat = this.chatView(peer);
+    return {
+      mapping: 'known',
+      jid: peer,
+      observedChat: chat !== null,
+      hasMessages: this.messages(peer, 1, 0).length > 0,
+      activity: chat?.activity ?? null,
+      unread: chat?.unread ?? null,
+      archived: chat?.archived ?? null,
+      latestIncoming: this.latestIncoming(peer),
+    };
+  }
+
+  /**
+   * Pending keys of a LID's known PN peer, captured with a chat observation;
+   * null when there is no known PN peer at capture time.
+   */
+  peerPendingKeys(jid: string): PeerPendingKeys | null {
+    if (!isLid(jid)) return null;
+    const pn = this.knownPeer(jid);
+    if (!pn) return null;
+    const pending = this.get<PendingChatState>('pending-chat', pn) ?? {};
+    return {
+      jid: pn,
+      unread: pending.unread?.key ?? null,
+      archived: pending.archived?.key ?? null,
+    };
+  }
+
+  /**
+   * An independent observation of a LID chat's own read/archive field retires
+   * the same field's pending intent on its known PN peer from queue matching.
+   * The PN's observed field stays null and its request record is untouched.
+   * Never on unknown or conflicting mappings; never for a newer PN intent.
+   */
+  private supersedeLinkedPending(
+    lid: string,
+    fields: readonly (keyof PendingChatState)[],
+    // undefined: an immediate observation; null: no known peer at capture.
+    captured?: PeerPendingKeys | null,
+  ): void {
+    if (!isLid(lid) || fields.length === 0 || captured === null) return;
+    const pn = this.knownPeer(lid);
+    if (!pn || (captured && captured.jid !== pn)) return;
+    const pending = this.get<PendingChatState>('pending-chat', pn);
+    if (!pending) return;
+    let changed = false;
+    for (const field of fields) {
+      const entry = pending[field];
+      if (!entry || entry.superseded?.jid === lid) continue;
+      // An intent persisted after the observation was captured stays pending.
+      if (captured && captured[field] !== entry.key) continue;
+      entry.superseded = {
+        jid: lid,
+        source: 'linked-peer-observation',
+        mapping: 'known',
+        observedAt: Date.now(),
+      };
+      changed = true;
+      this.event('chat-pending-superseded', {
+        jid: pn,
+        field,
+        key: entry.key,
+        peer: lid,
+      });
+    }
+    if (changed) this.set('pending-chat', pn, pending);
   }
 
   invalidateChatState(key: string, operation: Operation): void {
@@ -1350,6 +1511,7 @@ export class Store {
       | 'buffered-snapshot' = 'snapshot',
     pendingKeys?: Partial<Record<keyof PendingChatState, string | null>>,
     failedReplayTimes?: ReadonlySet<number>,
+    peerPendingKeys?: PeerPendingKeys | null,
   ): void {
     const jid = chat.id;
     if (!jid) {
@@ -1447,6 +1609,17 @@ export class Store {
       Object.keys(sdkReported).length ? sdkReported : null,
     );
     this.set('pending-chat', jid, Object.keys(pending).length ? pending : null);
+    // The same observations that resolve this chat's own pending fields.
+    this.supersedeLinkedPending(
+      jid,
+      [
+        ...(typeof chat.archived === 'boolean' ? (['archived'] as const) : []),
+        ...(isUnreadCount(chat.unreadCount) || chat.markedAsUnread === true
+          ? (['unread'] as const)
+          : []),
+      ],
+      peerPendingKeys,
+    );
     // SDK event-buffer conditions are functions, not persisted state.
     delete merged.conditional;
     this.db
@@ -1858,17 +2031,27 @@ export class Store {
     return this.db
       .prepare(
         `SELECT jid FROM (
-      SELECT c.jid,c.activity_timestamp,
-        CASE WHEN json_type(p.json,'$.unread')='object' THEN NULL ELSE chat_unread(c.json) END AS unread,
-        CASE WHEN json_type(p.json,'$.archived')='object' THEN NULL
-          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived,
-        CASE WHEN json_type(p.json,'$.unread')='object' THEN
-          CASE WHEN json_type(p.json,'$.unread.value') IN ('true','false') THEN json_extract(p.json,'$.unread.value') ELSE NULL END
-          ELSE chat_unread(c.json) END AS unread_requested,
-        CASE WHEN json_type(p.json,'$.archived')='object' THEN
-          CASE WHEN json_type(p.json,'$.archived.value') IN ('true','false') THEN json_extract(p.json,'$.archived.value') ELSE NULL END
-          WHEN json_type(c.json,'$.archived') IN ('true','false') THEN json_extract(c.json,'$.archived') ELSE NULL END AS archived_requested
-      FROM chats c LEFT JOIN values_store p ON p.category='pending-chat' AND p.id=c.jid
+      SELECT jid,activity_timestamp,
+        CASE WHEN json_type(pending,'$.unread')='object' THEN NULL ELSE chat_unread(json) END AS unread,
+        CASE WHEN json_type(pending,'$.archived')='object' THEN NULL
+          WHEN json_type(json,'$.archived') IN ('true','false') THEN json_extract(json,'$.archived') ELSE NULL END AS archived,
+        CASE WHEN json_type(pending,'$.unread')='object' THEN
+          -- A superseded intent no longer matches as requested state; the
+          -- chat's own observed value is still unknown.
+          CASE WHEN json_extract(pending,'$.unread.superseded.jid')=known_lid THEN NULL
+          WHEN json_type(pending,'$.unread.value') IN ('true','false') THEN json_extract(pending,'$.unread.value') ELSE NULL END
+          ELSE chat_unread(json) END AS unread_requested,
+        CASE WHEN json_type(pending,'$.archived')='object' THEN
+          CASE WHEN json_extract(pending,'$.archived.superseded.jid')=known_lid THEN NULL
+          WHEN json_type(pending,'$.archived.value') IN ('true','false') THEN json_extract(pending,'$.archived.value') ELSE NULL END
+          WHEN json_type(json,'$.archived') IN ('true','false') THEN json_extract(json,'$.archived') ELSE NULL END AS archived_requested
+      FROM (
+        SELECT c.jid,c.json,c.activity_timestamp,p.json AS pending,
+          CASE WHEN json_type(p.json,'$.unread.superseded')='object'
+            OR json_type(p.json,'$.archived.superseded')='object'
+            THEN ${knownLidSql} END AS known_lid
+        FROM chats c LEFT JOIN values_store p ON p.category='pending-chat' AND p.id=c.jid
+      )
     ) ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
       ORDER BY activity_timestamp DESC,jid COLLATE BINARY ASC LIMIT ? OFFSET ?`,
       )
@@ -1888,7 +2071,8 @@ export class Store {
         > = {};
         for (const field of ['unread', 'archived'] as const) {
           const filter = filters[field];
-          const pending = chat.pending[field]?.value;
+          const intent = chat.pending[field];
+          const pending = intent?.superseded ? undefined : intent?.value;
           if (
             !filters.observedOnly &&
             typeof pending === 'boolean' &&

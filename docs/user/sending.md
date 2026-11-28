@@ -87,6 +87,8 @@ The runtime queries the pinned SDK for each new PN send rather than treating cac
 
 Groups and explicit LID sends require no PN route lookup. Routing never creates or merges PN/LID histories. Replayed keys perform no new lookup. Legacy requests have no route evidence, and later mappings never backfill it.
 
+The server's PN → LID answer is also recorded as [identity evidence](identity.md#association-evidence) with source `baileys.executeUSyncQuery/lid`, so later `contact`, `contacts` and [`linkedPeer`](identity.md#linked-peer-hint) reads can use it. The send's message is stored under the LID destination; `messages --jid PN` stays empty for it, and its `linkedPeer` points to the LID.
+
 Proven-route receipts must match the recorded destination and message ID, `fromMe: true`, and no group participant. Supported device suffix normalization preserves the JID domain; PN and LID digits are never interchangeable. Unproven routes retain the exact-original-destination receipt rule. Later mappings neither rewrite routes nor retract receipts. Unmatched legacy receipts remain in `events` without promoting the request.
 
 ## Download media

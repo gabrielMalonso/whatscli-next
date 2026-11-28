@@ -35,7 +35,7 @@ Search matches literal substrings of current message text and captions using Uni
 
 `chats` accepts independent `--unread true|false|unknown|not-true` and `--archived true|false|unknown|not-true` filters, combined with AND. Omit a filter to include all its states. `false` matches only explicit false state; `not-true` matches false or unknown state, so it is the recommended `--archived` value for triage queues: `--archived false` omits unread chats whose archive state was never reported. Each row still distinguishes them: `archived: false` is explicit, while `archived: null` without `matchedBy.archived` is unknown. By default boolean filters consider the latest pending intent for each field; matching rows identify those fields in `matchedBy` as `pending-intent`, while their observed values remain null. Add `--observed-only` to restrict boolean filters to known observed state; with it, `not-true` matches observed false or null observed state, including any pending mutation. `unknown` always matches null observed state, including pending mutations, and is distinct from `false`. A pending-intent match can therefore also appear in an unknown query. Inspect both unknown filters separately; a chat may match both.
 
-Verification and SDK send returns alone do not create listed conversations. PN and LID histories remain separate.
+Verification and SDK send returns alone do not create listed conversations. PN and LID histories remain separate. `chat`, `messages` and `incoming` on a PN or LID add a [`linkedPeer`](identity.md#linked-peer-hint) hint when the other half of the pair is known; read that JID explicitly rather than treating an empty result as the whole conversation.
 
 ## Chat kinds
 

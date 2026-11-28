@@ -146,14 +146,17 @@ export async function runDaemon(
             runtime.checkAccount(request.expectAccount);
           if (stopping && request.command.command !== 'status')
             throw new CommandError('PRECONDITION_FAILED', 'Daemon is stopping');
+          const envelope: Record<string, unknown> = {};
           const data = await runtime.execute(
             request.command,
             wireFields(runtime.observability, id),
+            envelope,
           );
           respond({
             id,
             ok: true,
             data,
+            ...envelope,
             running: true,
             pid: process.pid,
             ...runtime.snapshot(),

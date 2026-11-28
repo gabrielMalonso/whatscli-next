@@ -96,7 +96,7 @@ Treat `true` as a message that arrived during or after the mutation. Follow the 
 
 ### Limits and compatibility
 
-Coverage is local and partial. The guard cannot see messages the runtime has not stored yet, messages stored under another JID of the same person (PN or LID), or history that never synced. A pass therefore means no newer reply was observed locally; it does not prove none exists.
+Coverage is local and partial. The guard cannot see messages the runtime has not stored yet, messages stored under another JID of the same person (PN or LID), or history that never synced. A pass therefore means no newer reply was observed locally; it does not prove none exists. When `chat --jid` shows a [`linkedPeer`](identity.md#linked-peer-hint) with `mapping: known`, compare `linkedPeer.latestIncoming` too, and read and decide on the peer chat with its own `--jid` and guard; the guard never covers the peer.
 
 The guard is part of the key's immutable intent. A replay of a persisted key with the same value returns the original request without re-checking, even if newer messages have arrived since; it never fails a mutation that was already invoked. Reusing the key with a different value, or adding or dropping the guard, returns `KEY_CONFLICT`, because it describes a different decision.
 
@@ -180,6 +180,41 @@ The ordinary `archived`/`unread` fields retain independent-observation semantics
 Boolean and `not-true` list filters also consider the latest pending intent by default, so `chats --unread true --archived not-true` can include a conversation just marked unread or unarchived through the CLI. Such rows retain null observed fields and include `matchedBy`, for example `{"unread":"pending-intent"}`. This describes requested state, even if no server response exists; it is not confirmed state. `--observed-only` excludes these matches from boolean filters; with it, `not-true` includes every chat without observed true state. `unknown` always matches missing observed state, so a pending conversation can also appear in an unknown query. Inspect pending keys and response evidence before acting; queue membership is not permission to repeat an uncertain operation.
 
 Full and compact output both preserve `sdkReported`. Pending indicates missing sufficient observation, not a failed action or a promise that confirmation will arrive. Waiting, querying the original key, or resynchronizing cannot guarantee an observation. Phone or browser confirmation remains separate evidence.
+
+## Pending intents on a linked PN
+
+WhatsApp can move a person's conversation from a PN JID to its LID. A read/archive intent on the PN chat then never receives an observation under the PN, and its requested value would keep the PN in triage queues indefinitely. The CLI therefore marks such an intent superseded when all of these hold:
+
+- the runtime independently observes the same field on the LID chat: an archive state, an unread counter, a positive manual unread marker, or a read established from [own-device receipts](#reading-received-messages-in-another-device), the same observations that resolve the LID's own pending intent; local echoes, metadata, intents and SDK returns do not count;
+- the LID's mapping to that PN is `known` at observation time;
+- the PN intent already existed when the observation was captured.
+
+The PN chat then shows:
+
+```json
+{
+  "jid": "12025550101@s.whatsapp.net",
+  "unread": null,
+  "pending": {
+    "unread": {
+      "key": "example-unread-001",
+      "value": true,
+      "superseded": {
+        "jid": "123450001@lid",
+        "source": "linked-peer-observation",
+        "mapping": "known",
+        "observedAt": 1700000000000
+      }
+    }
+  }
+}
+```
+
+What changes: the superseded intent no longer matches boolean or `not-true` filters as `pending-intent`, so `chats --unread true` drops the ghost row; `matchedBy` no longer names that field. The event journal records `chat-pending-superseded` with the PN, field, key and LID.
+
+What does not change: the PN's own `unread`/`archived` stay `null`, because nothing was observed under the PN and no LID value is copied to it. The row still matches `unknown` filters and `not-true` filters through its unknown state, like any unobserved chat. The request record, `appStateResponse`, `sdkReported` and the mutation's `stateObservation` stay as recorded; no server response is invented and the original request is not confirmed. Read the LID chat for the person's current state.
+
+The marker counts only while the mapping to that exact LID stays `known`. If later evidence makes it `conflict`, the intent is ordinary pending again. A new intent on the PN replaces it, and an observation under the PN itself resolves it as before. Unknown and conflicting mappings never supersede, a PN observation never supersedes a LID intent, and existing behavior without mappings is unchanged.
 
 ## Interpreting unread observations
 
