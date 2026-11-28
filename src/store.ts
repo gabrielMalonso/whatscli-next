@@ -412,6 +412,10 @@ export class Store {
       this.db.function('chat_kind', { deterministic: true }, (value) =>
         chatKind(String(value)),
       );
+      // The same exact PN/LID test as contactSummary, so SQL pages agree with it.
+      this.db.function('contact_jid', { deterministic: true }, (value) =>
+        typeof value === 'string' && (isPn(value) || isLid(value)) ? 1 : 0,
+      );
       this.db.function('contact_fold', { deterministic: true }, (value) =>
         typeof value === 'string' ? fold(value) : null,
       );
@@ -941,7 +945,7 @@ export class Store {
         )
         SELECT k.jid,c.jid IS NOT NULL AS observed FROM candidates k
         LEFT JOIN chats c ON c.jid=k.jid
-        WHERE k.jid GLOB '*@s.whatsapp.net' OR k.jid GLOB '*@lid'
+        WHERE contact_jid(k.jid)
         ORDER BY c.jid IS NULL,COALESCE(c.activity_timestamp,0) DESC,k.jid COLLATE BINARY ASC
         LIMIT $limit OFFSET $offset`,
       )

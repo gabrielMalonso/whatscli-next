@@ -708,6 +708,13 @@ test('SQL contact lookup equals a brute-force oracle over summaries, including c
             ...(i % 12 ? { conversationTimestamp: 1000 + (i % 9) } : {}),
           });
       }
+      // Stored ids that are not exact PNs (too short, device-suffixed) share
+      // the digits of canonical PNs but are never results; pages stay full.
+      for (const id of [
+        '1202551@s.whatsapp.net',
+        '12025510001:2@s.whatsapp.net',
+      ])
+        store.observeChat({ id, conversationTimestamp: 2000 });
     });
     const fold = (value: string) =>
       value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
@@ -756,6 +763,7 @@ test('SQL contact lookup equals a brute-force oracle over summaries, including c
       'Zé',
       'bea 1',
       '2025510',
+      '1202551',
       '+1 202 551 0003',
       '700001',
       '20020',
