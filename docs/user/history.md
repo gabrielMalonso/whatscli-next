@@ -79,7 +79,7 @@ Verification and SDK send returns alone do not create listed conversations. PN a
 }
 ```
 
-`lastMessage` is `{id, fromMe, timestamp, contentType}` for the row `messages --jid JID --limit 1` returns first (newest sender timestamp, resolved edit envelopes excluded), or `null` when no message is stored. It carries no text or caption. `contentType` is null when no content is readable, for example after a deletion; read `messages` for details. `fromMe: true` means the newest stored message is from this account, which is often enough to skip an idle re-check, but history is partial: a newer incoming message may not be stored yet. A group's `lastMessage` does not identify its sender. It is a different value from `latestIncoming` (the latest stored incoming message, by arrival), which the read/archive guard uses.
+`lastMessage` is `{id, fromMe, timestamp, contentType}` for the row `messages --jid JID --limit 1` returns first (newest sender timestamp, resolved edit envelopes excluded), or `null` when no message is stored. It carries no text or caption. `contentType` is null when no content is readable, for example after a deletion; read `messages` for details. `fromMe: true` means the newest stored message is from this account, which is often enough to skip an idle re-check, but history is partial: a newer incoming message may not be stored yet. A group's `lastMessage` does not identify its sender. It is a different value from [`latestIncoming`](chat-state.md#guard-against-new-incoming-messages), the latest stored incoming message by arrival, which the read/archive guard uses.
 
 A daemon built before `--include` omits these fields; the CLI then fails with `PROTOCOL`.
 
