@@ -280,8 +280,21 @@ export async function runDaemon(
     });
     chmodSync(path, 0o600);
     socketInode = lstatSync(path).ino;
+    // Keep listening after the first signal: a repeated Ctrl-C or SIGTERM must not
+    // take Node's default action and abort SDK cleanup and database closure.
+    let signalled = false;
     for (const signal of ['SIGINT', 'SIGTERM'] as const)
-      process.once(signal, () => {
+      process.on(signal, () => {
+        if (signalled) {
+          writeDiagnostic({
+            level: 'lifecycle',
+            event: 'signal',
+            signal,
+            ignored: true,
+          });
+          return;
+        }
+        signalled = true;
         writeDiagnostic({ level: 'lifecycle', event: 'signal', signal });
         void shutdown(signal);
       });

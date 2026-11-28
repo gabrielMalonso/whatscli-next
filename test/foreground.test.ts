@@ -144,6 +144,12 @@ test(
       });
       child.kill('SIGTERM');
       assert.deepEqual(await cleaning, ['cleanup-started', undefined]);
+      // A repeated signal during cleanup is logged and ignored, never fatal.
+      child.kill('SIGINT');
+      await until(
+        () => output.stderr.includes('"signal":"SIGINT"'),
+        'the repeated signal line',
+      );
       const stopping = single((await invoke(directory, 'status')).stdout);
       assert.equal(stopping.running, true, 'status stays reachable');
       assert.equal((stopping.recovery as { state: string }).state, 'stopping');
@@ -181,6 +187,7 @@ test(
       },
       { event: 'signal', signal: 'SIGTERM' },
       { event: 'shutdown-started', reason: 'SIGTERM' },
+      { event: 'signal', signal: 'SIGINT', ignored: true },
       { event: 'shutdown-complete', reason: 'SIGTERM' },
       { event: 'exit', pid: child.pid, code: 0 },
     ]);
