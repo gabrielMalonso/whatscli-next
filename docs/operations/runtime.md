@@ -166,7 +166,7 @@ During outages:
 
 ## Daemon log
 
-A background `start` appends the daemon's stderr to the private `daemon.log` in the data directory. Each line is one JSON object whose first field, `at`, is an ISO-8601 UTC timestamp. Lifecycle lines carry `level: "lifecycle"` and one `event`:
+A background `start` appends the daemon's stderr to the private `daemon.log` in the data directory. [`start --foreground`](systemd.md) writes the same lines to its own stderr instead and does not use `daemon.log`. Each line is one JSON object whose first field, `at`, is an ISO-8601 UTC timestamp. Lifecycle lines carry `level: "lifecycle"` and one `event`:
 
 | `event`             | Fields                                                     | Meaning                                                                                                                                           |
 | ------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -178,6 +178,8 @@ A background `start` appends the daemon's stderr to the private `daemon.log` in 
 | `shutdown-complete` | `reason`                                                   | SDK cleanup, database closure and socket removal finished.                                                                                        |
 | `shutdown-failed`   | `code`                                                     | Cleanup failed; the process exits with code 1.                                                                                                    |
 | `exit`              | `pid`, `code`                                              | The process is exiting with that code.                                                                                                            |
+
+A startup failure writes one error line (`ok: false`, `error`, `code`) before `exit`. A data directory held by another runtime is refused before any connection with `Data directory is locked by another runtime; stop it before starting a new one`. The background daemon exits with code 1 for every failure; `start --foreground` uses the classified [exit statuses](systemd.md#exit-status).
 
 Lines without `level: "lifecycle"` are the existing diagnostics and errors described in [Privacy](privacy.md#diagnostics). A log that ends without an `exit` line means the process was killed without running its exit handlers, for example by `SIGKILL` or an out-of-memory or cgroup kill. A `signal` line followed by `shutdown-complete` and `exit` shows an orderly signal-driven stop rather than a crash.
 
@@ -202,6 +204,8 @@ Older daemons may close their control socket before cleanup finishes. During an 
 `start` with `alreadyRunning: true` returns the existing daemon. It does not replace or upgrade it.
 
 Compare `status.data.build.fingerprint` with the intended build. See [builds and upgrades](release.md).
+
+To run one daemon per account under `systemd --user`, see [running under a supervisor](systemd.md).
 
 ### Preserve session data
 

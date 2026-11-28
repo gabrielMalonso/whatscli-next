@@ -1,6 +1,7 @@
-import { chmodSync, lstatSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, realpathSync, unlinkSync } from 'node:fs';
 import { connect, createServer } from 'node:net';
 import type { Socket } from 'node:net';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { installConsoleDiagnostics, writeDiagnostic } from './diagnostics.js';
 import { parseRequest, RequestError } from './protocol.js';
@@ -12,36 +13,54 @@ import { commandFields, wireFields } from './observability-context.js';
 import type { ObsFields } from './observability.js';
 
 process.umask(0o077);
-installConsoleDiagnostics();
-// A missing exit line after the last entry means the process was killed (for example SIGKILL).
-process.once('exit', (code) => {
-  writeDiagnostic({
-    level: 'lifecycle',
-    event: 'exit',
-    pid: process.pid,
-    code,
-  });
-});
 
-async function main(): Promise<void> {
-  if (!['linux', 'darwin'].includes(process.platform))
-    throw new Error('Only Linux and macOS are supported');
-  const { values } = parseArgs({
-    options: {
-      'data-dir': { type: 'string' },
-      offline: { type: 'boolean', default: false },
-      'allow-jid': { type: 'string' },
-    },
+let lifecycleInstalled = false;
+/** Route dependency console output to stderr diagnostics and record the process exit once. */
+function installLifecycle(): void {
+  if (lifecycleInstalled) return;
+  lifecycleInstalled = true;
+  installConsoleDiagnostics();
+  // A missing exit line after the last entry means the process was killed (for example SIGKILL).
+  process.once('exit', (code) => {
+    writeDiagnostic({
+      level: 'lifecycle',
+      event: 'exit',
+      pid: process.pid,
+      code,
+    });
   });
-  const directory = dataDirectory({ path: values['data-dir'] });
+}
+
+export type DaemonOptions = {
+  dataDir: string;
+  offline: boolean;
+  allowJid?: string | undefined;
+};
+
+/** Why an orderly shutdown ran after the daemon became ready. */
+export type StopReason = 'stop-command' | 'SIGINT' | 'SIGTERM';
+
+/**
+ * Run the daemon in this process. Resolves once it is ready (after the `ready` lifecycle line);
+ * `stopped` settles after an orderly shutdown, or rejects if cleanup failed.
+ * Startup failures reject; classify them with runtimeExitCode.
+ */
+export async function runDaemon(
+  options: DaemonOptions,
+): Promise<{ stopped: Promise<StopReason> }> {
+  installLifecycle();
+  if (!['linux', 'darwin'].includes(process.platform))
+    throw new CommandError(
+      'PRECONDITION_FAILED',
+      'Only Linux and macOS are supported',
+    );
+  const directory = options.dataDir;
   const path = socketPath(directory);
   // The lifetime writer lock is acquired before any connection or stale socket cleanup.
   const runtime = createRuntime({
     dataDir: directory,
-    connect: !values.offline,
-    ...(values['allow-jid'] === undefined
-      ? {}
-      : { allowedJid: values['allow-jid'] }),
+    connect: !options.offline,
+    ...(options.allowJid === undefined ? {} : { allowedJid: options.allowJid }),
     lifecycle: writeDiagnostic,
   });
   // The writer lock is held: record which process and build own this data directory.
@@ -50,7 +69,7 @@ async function main(): Promise<void> {
     event: 'startup',
     pid: process.pid,
     build: runtime.build,
-    network: !values.offline,
+    network: !options.offline,
   });
   installConsoleDiagnostics(() =>
     runtime.observability.record('diagnostic', { label: 'dependency' }),
@@ -58,6 +77,12 @@ async function main(): Promise<void> {
   const clients = new Set<Socket>();
   const active = new Set<Promise<void>>();
   let stopping: Promise<void> | undefined;
+  let settleStopped!: (reason: StopReason, done: Promise<void>) => void;
+  const stopped = new Promise<StopReason>((resolve, reject) => {
+    settleStopped = (reason, done) => done.then(() => resolve(reason), reject);
+  });
+  // Callers observe cleanup failure; it is also logged as shutdown-failed.
+  stopped.catch(() => {});
   let socketInode: number | undefined;
   const server = createServer((client) => {
     clients.add(client);
@@ -185,6 +210,7 @@ async function main(): Promise<void> {
         reason,
       });
     })();
+    if (reason !== 'startup-failed') settleStopped(reason, stopping);
     stopping.catch((error) => {
       writeDiagnostic({
         ...errorSummary(error),
@@ -203,18 +229,30 @@ async function main(): Promise<void> {
         stale.uid !== process.getuid?.() ||
         stale.mode & 0o077
       )
-        throw new Error(
+        throw new CommandError(
+          'PRECONDITION_FAILED',
           'Existing control path is not an owned private socket; preserving it',
         );
       await new Promise<void>((resolve, reject) => {
         const probe = connect(path);
         probe.setTimeout(500, () => {
           probe.destroy();
-          reject(new Error('Existing socket did not respond; preserving it'));
+          reject(
+            new CommandError(
+              'PRECONDITION_FAILED',
+              'Existing socket did not respond; preserving it',
+            ),
+          );
         });
         probe.once('connect', () => {
           probe.destroy();
-          reject(new Error('Existing socket is active; preserving it'));
+          reject(
+            new CommandError(
+              'PRECONDITION_FAILED',
+              'Existing socket is active; preserving it',
+              { details: { reason: 'data-directory-in-use' } },
+            ),
+          );
         });
         probe.once('error', (error) => {
           probe.destroy();
@@ -223,7 +261,10 @@ async function main(): Promise<void> {
         });
       });
       if (lstatSync(path).ino !== stale.ino)
-        throw new Error('Control socket changed; preserving it');
+        throw new CommandError(
+          'PRECONDITION_FAILED',
+          'Control socket changed; preserving it',
+        );
       unlinkSync(path);
     } catch (error) {
       if (!(
@@ -250,9 +291,39 @@ async function main(): Promise<void> {
     await shutdown('startup-failed');
     throw error;
   }
+  return { stopped };
 }
 
-main().catch((error) => {
-  writeDiagnostic(errorSummary(error));
-  process.exitCode = 1;
-});
+/** The internal entry used by the background `start`: same lifecycle, stderr to daemon.log. */
+async function main(): Promise<void> {
+  installLifecycle();
+  const { values } = parseArgs({
+    options: {
+      'data-dir': { type: 'string' },
+      offline: { type: 'boolean', default: false },
+      'allow-jid': { type: 'string' },
+    },
+  });
+  // Cleanup failure is logged as shutdown-failed and exits with code 1.
+  await runDaemon({
+    dataDir: dataDirectory({ path: values['data-dir'] }),
+    offline: values.offline,
+    allowJid: values['allow-jid'],
+  });
+}
+
+const entry = process.argv[1];
+if (
+  entry !== undefined &&
+  (() => {
+    try {
+      return pathToFileURL(realpathSync(entry)).href === import.meta.url;
+    } catch {
+      return false;
+    }
+  })()
+)
+  main().catch((error) => {
+    writeDiagnostic(errorSummary(error));
+    process.exitCode = 1;
+  });

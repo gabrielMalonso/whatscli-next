@@ -15,6 +15,7 @@ Start with [Getting started](user/getting-started.md) to install and pair whatsc
 ## Running an account
 
 - [Runtime and recovery](operations/runtime.md): connection states, retries, shutdown, and receiving limits.
+- [Running under a supervisor](operations/systemd.md): `start --foreground`, readiness, exit statuses, and a systemd user unit.
 - [Privacy](operations/privacy.md): trusted paths, permissions, and diagnostics.
 - [Backup and recovery](operations/backup.md): SQLite snapshots and offline recovery.
 - [Observability](operations/observability.md): opt-in local capture and queries.
