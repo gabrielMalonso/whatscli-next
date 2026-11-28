@@ -8,10 +8,38 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** Labels drop their observation time; a label from the row's own JID also drops its jid. */
+function compactContactSummary(value: unknown, jid: unknown): unknown {
+  const contact = record(value);
+  if (!contact || !Array.isArray(contact.labels)) return value;
+  return {
+    ...contact,
+    labels: contact.labels.map((value) => {
+      const label = record(value);
+      if (!label) return value;
+      const result = { ...label };
+      delete result.observedAt;
+      if (label.jid === jid) delete result.jid;
+      return result;
+    }),
+  };
+}
+
+function compactContactResult(value: unknown): unknown {
+  const result = record(value);
+  if (!result) return value;
+  return {
+    ...result,
+    contact: compactContactSummary(result.contact, result.jid),
+  };
+}
+
 function compactChat(value: unknown): unknown {
   const chat = record(value);
   if (!chat) return value;
   const result = { ...chat };
+  if ('contact' in chat)
+    result.contact = compactContactSummary(chat.contact, chat.jid);
   // Activity carries ordering evidence; the metadata observation clock is available in full.
   delete result.observedAt;
   if (chat.name === null) delete result.name;
@@ -198,6 +226,9 @@ export function formatResponse(
     }
     case 'contact':
       data = compactContact(data, response.source);
+      break;
+    case 'contacts':
+      if (Array.isArray(data)) data = data.map(compactContactResult);
       break;
     case 'resolve': {
       const resolution = record(data);

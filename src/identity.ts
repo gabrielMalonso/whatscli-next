@@ -74,3 +74,15 @@ export function expectedAccount(value: string): string {
     );
   return user;
 }
+
+/** Chat kinds by exact JID form. Never inferred from names or digits. */
+export const chatKinds = ['direct', 'group', 'broadcast', 'other'] as const;
+export type ChatKind = (typeof chatKinds)[number];
+export function chatKind(jid: string): ChatKind {
+  // Only exact PN and LID user JIDs; device-suffixed or malformed ids are other.
+  if (isPn(jid) || isLid(jid)) return 'direct';
+  if (jid.endsWith('@g.us')) return 'group';
+  // Includes status@broadcast and broadcast lists.
+  if (jid.endsWith('@broadcast')) return 'broadcast';
+  return 'other';
+}

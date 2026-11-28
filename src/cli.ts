@@ -18,7 +18,13 @@ import { parseArgs } from 'node:util';
 import { dataDirectory, socketPath } from './paths.js';
 import { expectedAccount } from './identity.js';
 import { rpc, RpcError } from './rpc.js';
-import { eventKind, object } from './protocol.js';
+import {
+  chatIncludes,
+  eventKind,
+  needsFilteredChats,
+  object,
+} from './protocol.js';
+import { chatKind, chatKinds } from './identity.js';
 import { MAX_WAIT_ACK_MS } from './protocol.js';
 import type { AckWaitOption, Command } from './protocol.js';
 import { formatResponse } from './response.js';
@@ -125,6 +131,7 @@ const optionSpec = {
   name: { type: 'string' },
   'wait-ack-ms': { type: 'string' },
   'if-latest-incoming': { type: 'string' },
+  include: { type: 'string' },
 } as const;
 
 function options() {
@@ -196,10 +203,12 @@ function help(): Record<string, unknown> {
         'pair qr': '',
         'pair code': '--phone INTERNATIONAL_DIGITS',
         chats:
-          '[--unread true|false|unknown|not-true] [--archived true|false|unknown|not-true] [--observed-only] [--limit 100] [--offset 0]',
+          '[--unread true|false|unknown|not-true] [--archived true|false|unknown|not-true] [--observed-only] [--kind all|direct,group,broadcast,other] [--include contact,last-message] [--limit 100] [--offset 0]',
         chat: '--jid JID',
         resolve: '--phone +INTERNATIONAL_DIGITS',
         contact: '--jid PN_OR_LID_JID',
+        contacts:
+          '--query TEXT [--limit 20] [--offset 0] (read-only lookup of observed labels and known phone numbers; never addressing or authorization)',
         messages: '--jid JID [--limit 20] [--offset 0]',
         incoming:
           '--jid JID [--after MESSAGE_ID|none] [--limit 20] (read-only; incoming user messages stored after that one, oldest first)',
@@ -234,6 +243,10 @@ function help(): Record<string, unknown> {
       waitAckOption: `--wait-ack-ms 0..${MAX_WAIT_ACK_MS} (send, send-file, send-contact; default 0 responds at SDK return). Waits for locally observed server acceptance or an observed error, never resends; data.wait.outcome is accepted, error, timeout or interrupted. Agents: 5000. request --key remains the source of truth for later acceptance, delivery and read.`,
       ifLatestIncomingOption:
         '--if-latest-incoming MESSAGE_ID|none (archive, unarchive, read, unread). Proceeds only if chat --jid data.latestIncoming.id is that ID (none: null) and no counted message in the chat is unavailable, checked in the daemon immediately before the intent is persisted and the patch is built. Otherwise PRECONDITION_FAILED and nothing changes: read incoming --jid JID --after THAT_ID, repeat with --after the last listed ID while truncated, then retry with the last ID of the final page. Latest means most recently stored by this runtime, not newest timestamp; a message that gets content later moves to a fresh position. Local coverage only. Excludes own messages, protocol stubs, edits and reactions; missed calls, call logs, unrecognized and undecryptable content count. Refused with unavailable-incoming while any counted message in the chat has available: false; do not proceed until those are available. On success feedback.latestIncomingChanged: true means a message arrived during or after the mutation; read incoming --after the guarded ID, never repeat the command. A daemon without the guard rejects it; a guarded success without latestIncomingChanged is reported as PROTOCOL. Part of the key intent; a replay never re-checks it. none cannot name a message whose ID is literally none.',
+      kindOption:
+        '--kind (chats): comma-separated direct (exact PN or LID JID), group (@g.us), broadcast (@broadcast, including status@broadcast), other; default all. Example: --kind direct excludes groups and status.',
+      includeOption:
+        '--include (chats): comma-separated contact, last-message. contact: {phone, mapping, labels[{field, value, jid, source, observedAt}]} for PN/LID rows, null otherwise; phone only from a PN JID or a known mapping, never from LID digits; labels are observed display hints, not identity. lastMessage: {id, fromMe, timestamp, contentType} of the newest stored person message (reactions, protocol and edit envelopes and stubs skipped), or null; no text. Decide attention from latestIncoming, not lastMessage.fromMe alone. A daemon without these options rejects them (PROTOCOL).',
       helpOption: '--help | -h (anywhere before --; same reference as help)',
     },
   };
@@ -553,7 +566,35 @@ async function execute(
         );
       break;
     case 'chats': {
-      only('limit', 'offset', 'unread', 'archived', 'observed-only');
+      only(
+        'limit',
+        'offset',
+        'unread',
+        'archived',
+        'observed-only',
+        'kind',
+        'include',
+      );
+      const listOption = <T extends string>(
+        name: 'kind' | 'include',
+        allowed: readonly T[],
+      ): T[] | undefined => {
+        const value = values[name];
+        if (value === undefined || (name === 'kind' && value === 'all'))
+          return undefined;
+        const items = value.split(',');
+        if (
+          !items.every((item) => allowed.includes(item as T)) ||
+          new Set(items).size !== items.length
+        )
+          throw new CommandError(
+            'INVALID_ARGUMENT',
+            `--${name} must be ${name === 'kind' ? 'all or ' : ''}a comma-separated list of ${allowed.join(', ')}`,
+          );
+        return items as T[];
+      };
+      const kinds = listOption('kind', chatKinds);
+      const include = listOption('include', chatIncludes);
       command = {
         command: 'chats',
         limit: Number(values.limit ?? 100),
@@ -561,6 +602,8 @@ async function execute(
         ...(values['observed-only'] === undefined
           ? {}
           : { observedOnly: values['observed-only'] }),
+        ...(kinds ? { kinds } : {}),
+        ...(include ? { include } : {}),
       };
       for (const field of ['unread', 'archived'] as const) {
         const state = values[field];
@@ -582,6 +625,15 @@ async function execute(
     case 'contact':
       only('jid');
       command = { command: action, jid: jid() };
+      break;
+    case 'contacts':
+      only('query', 'limit', 'offset');
+      command = {
+        command: action,
+        query: required(values.query, 'query'),
+        limit: Number(values.limit ?? 20),
+        offset: Number(values.offset ?? 0),
+      };
       break;
     case 'resolve':
       only('phone');
@@ -816,6 +868,20 @@ async function execute(
       'PROTOCOL',
       'The daemon rejected the request as an unknown command; it may predate --expect-account or another option of this command. Nothing was done; restart the daemon with this build',
     );
+  if (
+    needsFilteredChats(command) &&
+    response.ok === false &&
+    response.code === 'INVALID_ARGUMENT' &&
+    response.error === 'Unknown command'
+  )
+    // A daemon that predates --kind/--include rejects filtered-chats.
+    throw new CommandError(
+      'PROTOCOL',
+      'The daemon does not support chats --kind or --include; restart it with this build',
+    );
+  if (command.command === 'chats' && response.ok === true)
+    // Defense in depth: every row must match the kinds and carry the included fields.
+    checkChatsResponse(command, response.data);
   if (action === 'stop' && response.ok === true) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
@@ -833,6 +899,33 @@ async function execute(
     );
   }
   return response;
+}
+
+/** A daemon built before --kind/--include ignores them; never present its rows as filtered or enriched. */
+function checkChatsResponse(
+  command: Extract<Command, { command: 'chats' }>,
+  data: unknown,
+): void {
+  if (!Array.isArray(data)) return;
+  const fields = (command.include ?? []).map((item) =>
+    item === 'contact' ? 'contact' : 'lastMessage',
+  );
+  for (const value of data) {
+    const row: Record<string, unknown> =
+      value !== null && typeof value === 'object' ? value : {};
+    if (
+      (command.kinds &&
+        !(
+          typeof row.jid === 'string' &&
+          command.kinds.includes(chatKind(row.jid))
+        )) ||
+      fields.some((field) => !(field in row))
+    )
+      throw new CommandError(
+        'PROTOCOL',
+        'The daemon did not apply --kind or --include; restart it with this build',
+      );
+  }
 }
 
 async function finish(

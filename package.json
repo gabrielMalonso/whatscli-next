@@ -32,6 +32,7 @@
     "benchmark:store": "pnpm build && node dist/scripts/benchmark-store.js",
     "benchmark:cli": "pnpm build && node dist/scripts/benchmark-cli.js",
     "benchmark:output": "pnpm build && node dist/scripts/benchmark-output.js",
+    "benchmark:contacts": "pnpm build && node dist/scripts/benchmark-contacts.js",
     "probe": "node dist/src/probe.js",
     "whatscli": "node dist/src/cli.js",
     "lint": "eslint --max-warnings 0 \"{src,scripts,test}/**/*.ts\" eslint.config.mjs",

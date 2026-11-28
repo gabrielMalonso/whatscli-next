@@ -934,11 +934,22 @@ export function createRuntime(
           })),
         };
       case 'chats':
-        return store.chats(command.limit, command.offset, command);
+        return store.chats(
+          command.limit,
+          command.offset,
+          command,
+          command.include,
+        );
       case 'chat':
         return store.chatView(command.jid);
       case 'contact':
         return store.contactView(command.jid);
+      case 'contacts':
+        return store.contactSearch(
+          command.query,
+          command.limit,
+          command.offset,
+        );
       case 'resolve': {
         const phone = internationalPhone(command.phone);
         const current = connected();
